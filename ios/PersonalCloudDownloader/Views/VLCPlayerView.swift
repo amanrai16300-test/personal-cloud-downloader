@@ -26,20 +26,31 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private var currentURL: URL?
 
     /// Fullscreen video scaling mode. Fit (default) preserves aspect with
-    /// letterboxing; Fill crops to cover the frame; Stretch distorts to fill.
+    /// Professional two-mode scaling, both aspect-preserving (no distortion):
+    ///   - Fit: show the whole video, letterboxing as needed.
+    ///   - Fill: zoom to cover the screen, cropping edges (Aspect Fill).
+    /// Stretch was dropped — forcing the video aspect distorted the picture,
+    /// which never looks right in a real player.
     enum AspectMode: CaseIterable {
-        case fit, fill, stretch
+        case fit, fill
 
         /// Short label for the toggle button.
         var label: String {
             switch self {
             case .fit: return "Fit"
             case .fill: return "Fill"
-            case .stretch: return "Stretch"
             }
         }
 
-        /// Next mode in the Fit → Fill → Stretch → Fit cycle.
+        /// SF Symbol that hints at the mode.
+        var icon: String {
+            switch self {
+            case .fit: return "rectangle.arrowtriangle.2.inward"
+            case .fill: return "rectangle.arrowtriangle.2.outward"
+            }
+        }
+
+        /// Next mode in the Fit → Fill → Fit cycle.
         var next: AspectMode {
             let all = Self.allCases
             let i = all.firstIndex(of: self)!
@@ -145,52 +156,58 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     // MARK: Aspect / scaling
 
-    /// Cycle to the next aspect mode and apply it. `drawableSize` is the current
-    /// fullscreen surface size, needed to express crop/aspect ratios for Fill
-    /// and Stretch. Called from the fullscreen ratio button.
+    /// The fullscreen surface size, retained so the Fill zoom can be recomputed
+    /// once the video's real dimensions arrive (they aren't known until frames
+    /// render). Set on every `cycleAspect` / `applyAspect` call.
+    private var aspectDrawableSize: CGSize = .zero
+
+    /// Cycle Fit → Fill → Fit and apply. `drawableSize` is the current
+    /// fullscreen surface, used to compute the Fill zoom. Called from the
+    /// fullscreen ratio button.
     func cycleAspect(drawableSize: CGSize) {
         aspectMode = aspectMode.next
         applyAspect(drawableSize: drawableSize)
     }
 
-    /// Apply `aspectMode` to the VLC player using its native scaling controls:
-    ///   - Fit: `scaleFactor = 0` (auto fit, preserves aspect, letterboxes).
-    ///   - Fill: crop the source to the drawable's aspect so it covers the frame.
-    ///   - Stretch: force the video's display aspect to the drawable's, distorting.
-    /// `videoCropGeometry` / `videoAspectRatio` take a C string "W:H"; only one is
-    /// set at a time and both are cleared otherwise so modes don't stack.
+    /// Apply `aspectMode` with VLC's `scaleFactor`, which zooms WITHOUT
+    /// distortion (unlike crop-geometry / aspect-ratio strings, which looked
+    /// wrong):
+    ///   - Fit:  `scaleFactor = 0` → auto fit, whole video, letterboxed.
+    ///   - Fill: `scaleFactor = coverZoom` → Aspect Fill, edges cropped.
+    /// The Fill zoom is `max(viewAR/videoAR, videoAR/viewAR)` — the factor that
+    /// grows the letterboxed fit until the short side covers the frame. Needs the
+    /// video size; if it isn't known yet, fall back to fit and re-apply later
+    /// from the state/time delegate once frames arrive.
     func applyAspect(drawableSize: CGSize) {
-        // Always start from a clean slate so switching modes is not additive.
-        player.scaleFactor = 0
-        player.videoCropGeometry = nil
-        player.videoAspectRatio = nil
+        aspectDrawableSize = drawableSize
 
-        let w = Int(drawableSize.width.rounded())
-        let h = Int(drawableSize.height.rounded())
-        guard w > 0, h > 0 else { return }
-
-        switch aspectMode {
-        case .fit:
-            // Defaults above already give aspect-preserving fit.
-            break
-        case .fill:
-            setCString(Self.ratioString(w, h)) { player.videoCropGeometry = $0 }
-        case .stretch:
-            setCString(Self.ratioString(w, h)) { player.videoAspectRatio = $0 }
+        guard aspectMode == .fill else {
+            player.scaleFactor = 0   // Fit
+            return
         }
+
+        let videoSize = player.videoSize
+        guard drawableSize.width > 0, drawableSize.height > 0,
+              videoSize.width > 0, videoSize.height > 0 else {
+            // Dimensions not ready — stay fit; `reapplyAspectIfNeeded` retries.
+            player.scaleFactor = 0
+            return
+        }
+
+        let viewAR = Double(drawableSize.width / drawableSize.height)
+        let videoAR = Double(videoSize.width / videoSize.height)
+        let zoom = max(viewAR / videoAR, videoAR / viewAR)
+        player.scaleFactor = Float(zoom)
     }
 
-    /// Format a "W:H" ratio string for the VLC geometry/aspect setters.
-    private static func ratioString(_ w: Int, _ h: Int) -> String { "\(w):\(h)" }
-
-    /// Hand a freshly-duplicated C string to a VLC setter. VLC copies the value,
-    /// so the duplicate is freed immediately after the setter returns.
-    private func setCString(_ value: String, _ setter: (UnsafeMutablePointer<CChar>?) -> Void) {
-        value.withCString { src in
-            let dup = strdup(src)
-            setter(dup)
-            free(dup)
-        }
+    /// Re-apply the current mode once playback is underway. Called from the
+    /// delegate: `player.videoSize` is 0 until frames render, so a Fill chosen
+    /// (or restored) before then needs a second pass to compute the real zoom.
+    private func reapplyAspectIfNeeded() {
+        guard aspectMode == .fill, aspectDrawableSize != .zero else { return }
+        let v = player.videoSize
+        guard v.width > 0, v.height > 0 else { return }
+        applyAspect(drawableSize: aspectDrawableSize)
     }
 
     func togglePlayPause() {
@@ -321,6 +338,9 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         // Belt-and-braces alongside the state-changed hook: whichever fires
         // first while seekable wins, and the flag clears so it runs once.
         applyPendingResumeIfReady()
+
+        // Video size is known now; recompute Fill zoom if it was deferred.
+        reapplyAspectIfNeeded()
 
         // Time advancing means real playback is underway: clear any stale
         // loading overlay even if no `.playing` state notification arrived.

@@ -133,7 +133,7 @@ struct PlayerView: View {
                 GeometryReader { geo in
                     // The rotated player occupies a landscape-shaped frame:
                     // width/height are the screen's swapped. Pass that as the
-                    // drawable size so VLC's Fill/Stretch ratios match the surface.
+                    // drawable size so VLC's Fill zoom matches the surface.
                     VLCFullscreenView(
                         streamURL: streamURL,
                         drawableSize: CGSize(width: geo.size.height, height: geo.size.width),
@@ -535,8 +535,8 @@ struct PlayerView: View {
 /// to its own controller — it does not touch `PlayerView`'s inline `vlc`.
 private struct VLCFullscreenView: View {
     let streamURL: URL
-    /// Size of the (rotated) fullscreen surface, used to express Fill/Stretch
-    /// aspect ratios to VLC so they match what's on screen.
+    /// Size of the (rotated) fullscreen surface, used to compute the Fill zoom
+    /// so it matches what's on screen.
     let drawableSize: CGSize
     /// Dismiss the fullscreen cover. Owned by `PlayerView`; the close button
     /// lives here so it fades in/out with the rest of the controls.
@@ -700,13 +700,13 @@ private struct VLCFullscreenView: View {
             HStack {
                 Text(fsVlc.currentTimeText)
                 Spacer()
-                ratioButton
-                Spacer()
                 Text(fsVlc.durationText)
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.white.opacity(0.85))
 
+            // Transport stays centered; the ratio button sits in the bottom-
+            // right corner near the controls without crowding the time row.
             HStack(spacing: 40) {
                 transportButton(systemName: "gobackward.10", font: .title2) {
                     fsVlc.skipBackward()
@@ -723,18 +723,20 @@ private struct VLCFullscreenView: View {
             }
             .foregroundStyle(.white)
             .padding(.top, 6)
+            .frame(maxWidth: .infinity)
+            .overlay(alignment: .trailing) { ratioButton }
         }
     }
 
-    /// Cycles Fit → Fill → Stretch and shows the current mode. Re-arms the
-    /// auto-hide timer so adjusting the ratio doesn't immediately hide controls.
+    /// Cycles Fit → Fill and shows the current mode. Re-arms the auto-hide timer
+    /// so adjusting the ratio doesn't immediately hide controls.
     private var ratioButton: some View {
         Button {
             fsVlc.cycleAspect(drawableSize: drawableSize)
             if controlsVisible { scheduleAutoHide() }
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: "aspectratio")
+                Image(systemName: fsVlc.aspectMode.icon)
                 Text(fsVlc.aspectMode.label)
             }
             .font(.caption.weight(.semibold))
@@ -745,6 +747,7 @@ private struct VLCFullscreenView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .padding(.trailing, 4)
     }
 
     private func transportButton(
