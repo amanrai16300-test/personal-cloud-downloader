@@ -8,7 +8,9 @@ import MobileVLCKit
 /// (renders the play/pause button + interactive seek slider). Step 6C scope
 /// adds a scrub slider and ±10s skip — no full custom player UI.
 final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDelegate {
-    let player = VLCMediaPlayer()
+    /// Every player is built from this ONE styled library so subtitle styling is
+    /// applied — see `subtitleStyledLibrary` for why per-media options didn't work.
+    let player = VLCMediaPlayer(library: VLCPlayerController.subtitleStyledLibrary)
 
     /// Seconds the skip-back / skip-forward buttons jump.
     static let skipInterval: Int32 = 10
@@ -157,42 +159,42 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// is seekable, so the seek is deferred rather than done inline in `start`.
     private var pendingResume: Float?
 
-    /// libvlc FreeType subtitle-renderer options, set on the `VLCMedia` before
-    /// playback so both the inline and fullscreen surfaces (same controller
-    /// class) render subtitles the same clean, cinema style.
+    /// ONE shared, subtitle-styled `VLCLibrary`, built lazily on first use and
+    /// reused by every `VLCMediaPlayer` this class creates (inline + fullscreen).
     ///
-    /// SIZING — why the absolute `freetype-fontsize` was ignored: libvlc has a
-    /// SECOND size knob, `freetype-rel-fontsize`, that scales text as
-    /// `video-height / value` and, when set (its default is 16), OVERRIDES the
-    /// absolute pixel size. So a modest absolute fontsize did nothing — the
-    /// relative default (height/16 = huge) won. The fix is to drive size through
-    /// the relative knob with a LARGER divisor (bigger number = smaller text):
-    ///   - `freetype-rel-fontsize`       32 → video-height / 32, small cinema
-    ///     text that scales correctly on any device resolution. (Absolute
-    ///     `freetype-fontsize` is intentionally NOT set, so it can't fight this.)
+    /// WHY A LIBRARY, NOT PER-MEDIA OPTIONS: the FreeType subtitle renderer reads
+    /// its `freetype-*` options when the libVLC instance (the `VLCLibrary`)
+    /// initializes — they are module/output options, not demux/input options.
+    /// `VLCMedia.addOptions(...)` only attaches INPUT options to that one media,
+    /// so the renderer never saw the `freetype-*` keys and silently used its
+    /// defaults (rel-fontsize ≈ 16 → height/16 → huge text). That is why every
+    /// previous size/outline change "did nothing" on device. Passing them as
+    /// libVLC init arguments here is the place the renderer actually reads.
     ///
-    /// STYLE:
-    ///   - `freetype-color`              16777215 = white text.
-    ///   - `freetype-opacity`            255 = fully opaque text.
-    ///   - `freetype-outline-thickness`  1 = THIN black outline (was 2, too heavy).
-    ///   - `freetype-outline-color`      0 = black outline.
-    ///   - `freetype-outline-opacity`    255 = solid outline.
-    ///   - `freetype-shadow-opacity`     0 = no drop shadow (outline does the job).
-    ///   - `freetype-background-opacity` 0 = NO solid black rectangle behind text.
-    ///   - `sub-margin`                  24px lifted off the bottom so subtitles
-    ///     clear the controls/scrim without sitting too high.
-    /// Center-bottom placement is libvlc's default, so it is not forced here.
-    private static let subtitleStyleOptions: [String: Any] = [
-        "freetype-rel-fontsize": 32,
-        "freetype-color": 16777215,
-        "freetype-opacity": 255,
-        "freetype-outline-thickness": 1,
-        "freetype-outline-color": 0,
-        "freetype-outline-opacity": 255,
-        "freetype-shadow-opacity": 0,
-        "freetype-background-opacity": 0,
-        "sub-margin": 24,
-    ]
+    /// Options use the real CLI form (`--name=value`), which `VLCLibrary(options:)`
+    /// expects (NOT the bare keys the per-media dict API took):
+    ///   - `--freetype-rel-fontsize=32`    size = video-height / 32 → small,
+    ///     resolution-independent cinema text (bigger divisor = smaller text).
+    ///   - `--freetype-color=16777215`     white text.
+    ///   - `--freetype-opacity=255`        opaque text.
+    ///   - `--freetype-outline-thickness=1` thin black outline (nPlayer-like).
+    ///   - `--freetype-outline-color=0`    black outline.
+    ///   - `--freetype-outline-opacity=255` solid outline.
+    ///   - `--freetype-shadow-opacity=0`   no drop shadow (outline carries it).
+    ///   - `--freetype-background-opacity=0` NO black box behind text.
+    /// Center-bottom placement and the small bottom gap are libVLC defaults, so
+    /// they are not forced. `sub-margin` is an INPUT option, so it stays per-media
+    /// (see `start`) — it is the one subtitle option that DOES belong on the media.
+    static let subtitleStyledLibrary: VLCLibrary = VLCLibrary(options: [
+        "--freetype-rel-fontsize=32",
+        "--freetype-color=16777215",
+        "--freetype-opacity=255",
+        "--freetype-outline-thickness=1",
+        "--freetype-outline-color=0",
+        "--freetype-outline-opacity=255",
+        "--freetype-shadow-opacity=0",
+        "--freetype-background-opacity=0",
+    ])
 
     /// Load + auto-play the stream once a drawable is attached. If this URL was
     /// watched earlier in the session, resume from the saved position.
@@ -200,7 +202,10 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         guard player.media == nil else { return }
         currentURL = url
         let media = VLCMedia(url: url)
-        media.addOptions(Self.subtitleStyleOptions)
+        // `sub-margin` is an INPUT option (lifts subtitles off the very bottom so
+        // they clear the controls/scrim), so it belongs on the media — unlike the
+        // renderer `freetype-*` options, which live on the styled library above.
+        media.addOptions(["sub-margin": 24])
         player.media = media
 
         if let saved = Self.savedPositions[url], saved > 0, saved < 1 {
