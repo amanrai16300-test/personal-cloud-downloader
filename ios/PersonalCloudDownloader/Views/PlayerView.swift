@@ -383,13 +383,7 @@ struct PlayerView: View {
         framedSurface(
             Group {
                 if liveVideo {
-                    // Zoom (Aspect Fill) scales the whole surface at the SwiftUI
-                    // layer instead of cropping inside VLC, so VLC stays in Fit
-                    // and the subtitle anchor never moves. `.clipped()` hides the
-                    // overflow so neighbouring UI isn't covered. Other modes keep
-                    // zoomScale == 1.0 (no-op).
                     VLCPlayerView(url: streamURL, controller: vlc)
-                        .scaleEffect(vlc.zoomScale)
                 } else {
                     // Dormant surface: black fill, no VLCPlayerView competing
                     // for the shared drawable.
@@ -399,7 +393,6 @@ struct PlayerView: View {
                 .frame(maxWidth: .infinity)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(.black)
-                .clipped()
                 .overlay { vlcStateOverlay }
                 .overlay(alignment: .topTrailing) {
                     if !isFullscreen { fullscreenButton }
@@ -571,15 +564,9 @@ private struct VLCFullscreenView: View {
             Color.black
 
             // Video fills the frame; VLC preserves aspect internally and
-            // letterboxes against the black backdrop. Zoom (Aspect Fill) scales
-            // the whole surface here at the SwiftUI layer rather than cropping
-            // inside VLC, so VLC stays in Fit and subtitles never re-anchor /
-            // drop. `.clipped()` keeps the scaled overflow inside the frame.
-            // Non-Zoom modes keep zoomScale == 1.0 (no-op).
+            // letterboxes against the black backdrop.
             VLCPlayerView(url: streamURL, controller: fsVlc)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scaleEffect(fsVlc.zoomScale)
-                .clipped()
 
             // Full-area tap target to toggle controls. Must sit above the video
             // but below the controls so buttons still receive their own taps.

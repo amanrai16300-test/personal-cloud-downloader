@@ -33,9 +33,12 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     ///   - `r16x9` / `r4x3` / `r1x1` / `stretch`: VLC `videoAspectRatio` string,
     ///     forcing a chosen display aspect (intentional, selectable ratios).
     /// `fit` is the safe default and must never make the picture look worse.
+    /// NOTE: Aspect Fill ("Zoom") was removed. Native VLC subtitles cannot stay
+    /// screen-stable with VLC crop Zoom or SwiftUI drawable scaling — both move
+    /// the subtitle with the picture. A true nPlayer-style Aspect Fill with
+    /// stable subtitles needs a separate subtitle overlay solution later.
     enum AspectMode: String, CaseIterable {
         case fit        // Whole video, letterboxed. Default.
-        case zoom       // Aspect-fill: cover screen, crop edges, no distortion.
         case r16x9      // Force 16:9 display aspect.
         case r4x3       // Force 4:3 display aspect.
         case r1x1       // Force 1:1 display aspect.
@@ -45,7 +48,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         var label: String {
             switch self {
             case .fit: return "Fit"
-            case .zoom: return "Zoom"
             case .r16x9: return "16:9"
             case .r4x3: return "4:3"
             case .r1x1: return "1:1"
@@ -57,7 +59,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         var icon: String {
             switch self {
             case .fit: return "rectangle.arrowtriangle.2.inward"
-            case .zoom: return "rectangle.arrowtriangle.2.outward"
             case .stretch: return "arrow.up.left.and.arrow.down.right"
             default: return "aspectratio"
             }
@@ -273,31 +274,20 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         applyAspect(drawableSize: drawableSize)
     }
 
-    /// SwiftUI scale factor for the WHOLE VLC surface, driving Zoom (Aspect
-    /// Fill). `1.0` = no scaling (every mode except Zoom). For Zoom it is the
-    /// "cover" factor that grows the letterboxed Fit picture until it fills the
-    /// surface, cropping the overflow via `.clipped()` in `PlayerView`.
-    ///
-    /// WHY NOT VLC's `videoCropGeometry`: cropping inside VLC changes the video
-    /// OUTPUT rectangle, and `sub-margin` is measured from the bottom of THAT
-    /// rectangle — so crop-based Zoom made subtitles drop to the screen bottom.
-    /// Scaling at the SwiftUI layer instead keeps VLC permanently in Fit (its
-    /// SPU anchor never moves), and the burned subtitle layer is part of the
-    /// surface, so it scales and stays bottom-centered with the picture. No drop
-    /// in ANY mode. Published so the surface re-renders when it changes.
-    @Published var zoomScale: CGFloat = 1.0
-
     /// Apply `aspectMode`. Distinct families, never stacked — every call first
-    /// resets scaleFactor, videoAspectRatio, videoCropGeometry AND zoomScale:
+    /// resets scaleFactor, videoAspectRatio AND videoCropGeometry:
     ///   - `fit`:    everything cleared → whole video, letterboxed (default).
-    ///   - `zoom`:   VLC stays in Fit; `zoomScale` is set to the SwiftUI cover
-    ///               factor (see `zoomScale`). No VLC crop → subtitle anchor is
-    ///               unchanged, so subtitles never drop.
     ///   - `r16x9` / `r4x3` / `r1x1`: videoAspectRatio = fixed "W:H" string.
     ///   - `stretch`: videoAspectRatio = the surface's ratio → full stretch.
     /// The aspect-ratio strings can be ignored if set before the video track is
-    /// parsed, and the Zoom cover factor needs `videoSize`, so
-    /// `reapplyAspectIfNeeded` re-applies once playback is underway.
+    /// parsed, so `reapplyAspectIfNeeded` re-applies once playback is underway.
+    ///
+    /// NO ZOOM / ASPECT FILL: neither VLC `videoCropGeometry` nor a SwiftUI
+    /// `scaleEffect` on the drawable can fill the screen while keeping native
+    /// subtitles screen-stable — both move the subtitle with the picture. Zoom
+    /// was removed; only aspect-preserving / fixed-ratio modes remain, which do
+    /// not disturb the subtitle anchor. A real nPlayer-style Aspect Fill with
+    /// stable subtitles needs a separate subtitle overlay solution later.
     func applyAspect(drawableSize: CGSize) {
         aspectDrawableSize = drawableSize
 
@@ -306,18 +296,10 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         player.scaleFactor = 0
         player.videoAspectRatio = nil
         player.videoCropGeometry = nil
-        zoomScale = 1.0
 
         switch aspectMode {
         case .fit:
             break // defaults above
-
-        case .zoom:
-            // Aspect Fill WITHOUT touching VLC: scale the Fit picture at the
-            // SwiftUI layer by the cover factor. The Fit picture is letterboxed
-            // (matches the video aspect inside the surface); the cover factor is
-            // how much bigger it must be to fill the surface's other dimension.
-            zoomScale = coverScale(drawableSize: drawableSize)
 
         case .r16x9, .r4x3, .r1x1:
             if let r = aspectMode.fixedAspect {
@@ -332,25 +314,10 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         }
     }
 
-    /// Factor that grows the aspect-FIT picture until it COVERS the surface
-    /// (Aspect Fill), preserving the video's own ratio. Fit leaves letterbox
-    /// bars on one axis; cover = surface-extent ÷ fitted-extent on that axis.
-    /// Reduces to `max(surfaceAR/videoAR, videoAR/surfaceAR)`. Falls back to the
-    /// surface aspect when `videoSize` isn't known yet (refined on reapply).
-    private func coverScale(drawableSize: CGSize) -> CGFloat {
-        guard drawableSize.width > 0, drawableSize.height > 0 else { return 1.0 }
-        let v = player.videoSize
-        guard v.width > 0, v.height > 0 else { return 1.0 }
-        let surfaceAR = drawableSize.width / drawableSize.height
-        let videoAR = v.width / v.height
-        return max(surfaceAR / videoAR, videoAR / surfaceAR)
-    }
-
     /// Re-apply the current mode once playback is underway. Aspect strings set
-    /// before the video track is parsed can be dropped by VLC, and the Zoom
-    /// cover factor needs `videoSize`; re-applying after the first frames (when
-    /// `videoSize` is known) makes both reliable. Harmless for fixed-ratio /
-    /// stretch modes.
+    /// before the video track is parsed can be dropped by VLC; re-applying after
+    /// the first frames (when `videoSize` is known) makes them reliable.
+    /// Harmless for fixed-ratio / stretch modes.
     private func reapplyAspectIfNeeded() {
         guard !aspectApplied, aspectDrawableSize != .zero, aspectMode != .fit else { return }
         // videoSize becoming non-zero signals the track is parsed.
