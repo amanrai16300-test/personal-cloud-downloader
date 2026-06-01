@@ -682,3 +682,108 @@ Full docs:
 - No backend, frontend web app, Oracle, Nginx, qBittorrent, Tailscale, or API behavior was changed.
 - No Delete, Download, or Copy Link controls were added to Videos.
 - Build was not verified yet because the current environment is Windows without Xcode.
+
+## iOS App GitHub Actions Build Verification Status (after Player Polish UI)
+
+- GitHub Actions iOS build check workflow was added: `.github/workflows/ios-build.yml`.
+- The workflow runs on a macOS runner and performs `xcodegen generate`, `pod install`, and an `xcodebuild` compile check.
+- The iOS app can now be build-checked without owning a Mac by using a GitHub Actions macOS runner.
+- First CI failure was caused by `ContentUnavailableView` requiring iOS 17.
+- `VideosView` empty state was changed to an iOS 16-compatible SwiftUI view.
+- Deployment target remains iOS 16.0.
+- Latest GitHub Actions run passed successfully.
+- XcodeGen generation passed.
+- CocoaPods install passed.
+- MobileVLCKit 3.6.0 installed and linked successfully.
+- `xcodebuild` compile check passed for iOS Simulator.
+- This confirms compile/link success only.
+- Real device testing, runtime playback testing, Tailscale runtime access, AVPlayer playback, VLC playback, fullscreen behavior, and actual iPhone testing are still pending.
+
+## iOS App Device Runtime Testing Checklist Status (after GitHub Actions build verification)
+
+- New doc was created: `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
+- Purpose: a real iPhone runtime verification checklist for the current iOS app status.
+- It covers Tailscale pre-flight.
+- It covers WKWebView tabs: Downloader, qBittorrent, Files.
+- It covers native Videos fetch of `/api/completed-files`.
+- It covers AVPlayer playback.
+- It covers VLC playback.
+- It covers fullscreen and manual landscape.
+- It covers Settings / Open Tailscale.
+- It includes pass/fail definitions.
+- It includes failure evidence to collect.
+- It includes must-not-change rules during testing.
+- It includes a triage rule: if Safari cannot reach Oracle over Tailscale, fix network first before blaming the app.
+- This is a test plan only; runtime / device testing is still NOT complete.
+- CI compile success remains compile/link only.
+- Real iPhone playback, Tailscale runtime access, AVPlayer playback, VLC playback, fullscreen behavior, and device testing remain pending.
+- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+- No Delete, Download, or Copy Link controls were added to Videos.
+
+## iOS App Personal iPhone Install Plan Status (after device runtime testing checklist)
+
+- New doc was created: `docs/IOS_PERSONAL_INSTALL_PLAN.md`.
+- Purpose: explains how the user can install and use the iOS app on their own iPhone without owning a Mac.
+- Current constraint: the user does not own a Mac.
+- Key fact: the GitHub Actions macOS runner can build the app, but signing and installation are still needed.
+- The plan compares four paths:
+  - Apple Developer Program + GitHub Actions signed IPA
+  - TestFlight
+  - Remote Mac
+  - Free Apple ID + Sideloadly/AltStore
+- Recommended path: try Free Apple ID + Sideloadly first for personal use; upgrade to the Apple Developer Program only if 7-day re-signing becomes annoying.
+- Runtime/device testing is still required using `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
+- No signing workflow has been created yet.
+- No `project.yml` bundle ID change has been made yet.
+- Real iPhone runtime testing is still NOT complete.
+- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+- No new iOS feature was added.
+
+## iOS App Unsigned Device IPA Plan Status (after personal iPhone install plan)
+
+- New doc was created: `docs/IOS_UNSIGNED_DEVICE_IPA_PLAN.md`.
+- Purpose: a plan for creating an unsigned real-device iPhone IPA artifact using GitHub Actions for Sideloadly/AltStore.
+- Key idea:
+  - the current simulator build cannot install on iPhone
+  - a separate device build is needed using a generic iOS device destination
+  - signing stays disabled in CI
+  - manually package `Payload/*.app` into an unsigned `.ipa`
+- The existing `iOS Build Check` workflow remains unchanged and should stay as the compile/link gate.
+- The future workflow should be separate and `workflow_dispatch`-only.
+- MobileVLCKit arm64 device-link is still unverified and is the main unknown.
+- Recommended order:
+  1. Add a separate unsigned device IPA workflow later.
+  2. Run it manually.
+  3. Confirm device arm64 / MobileVLCKit link.
+  4. Download the artifact.
+  5. Install with Sideloadly/AltStore.
+  6. Run `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
+- No unsigned IPA workflow has been created yet.
+- No `project.yml` bundle ID change has been made yet.
+- Real iPhone install/runtime testing is still NOT complete.
+- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+- No new iOS feature was added.
+
+## iOS App Unsigned Device IPA Workflow Status (after unsigned device IPA plan)
+
+- New workflow was created: `.github/workflows/ios-unsigned-ipa.yml`.
+- Purpose: a manual GitHub Actions workflow to build a real-device unsigned iPhone IPA artifact for Sideloadly/AltStore.
+- Workflow trigger is `workflow_dispatch` only.
+- The existing `iOS Build Check` workflow remains unchanged.
+- Workflow uses:
+  - macos-15
+  - `xcodegen generate`
+  - `pod install`
+  - `xcodebuild archive` for generic iOS device
+  - Release configuration
+  - signing disabled
+  - manual `Payload/*.app` to `.ipa` packaging
+  - artifact upload
+- It does NOT use `xcodebuild -exportArchive`.
+- It does NOT sign the app.
+- It does NOT install the app on iPhone.
+- It does NOT verify runtime playback or device behavior.
+- MobileVLCKit arm64 device-link is still unverified until the workflow is manually run.
+- Real iPhone install/runtime testing is still NOT complete.
+- No iOS Swift code, `project.yml`, `Podfile`, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+- No new iOS feature was added.
