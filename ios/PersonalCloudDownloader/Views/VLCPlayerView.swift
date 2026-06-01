@@ -91,6 +91,31 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         pendingResume = nil
     }
 
+    // MARK: Drawable ownership
+
+    /// The view currently wired as the player's video output. Tracked so a
+    /// dismantled (dormant) surface only detaches if it still owns the drawable,
+    /// never clearing one a newly-mounted surface has already claimed.
+    private weak var attachedDrawable: UIView?
+
+    /// Make `view` the player's video output. Called from `makeUIView` when a
+    /// surface mounts. Only ONE VLC surface is mounted at a time (inline OR
+    /// fullscreen, never both — see `PlayerView`), so this is an unconditional
+    /// hand-off: the freshly mounted view always becomes the drawable.
+    func attachDrawable(_ view: UIView) {
+        player.drawable = view
+        attachedDrawable = view
+    }
+
+    /// Release `view` as the drawable when its surface is dismantled. Guarded so
+    /// a stale teardown cannot clear a drawable that a later surface already
+    /// owns. Leaves the player (and audio) alive — only the video output detaches.
+    func detachDrawable(_ view: UIView) {
+        guard attachedDrawable === view else { return }
+        player.drawable = nil
+        attachedDrawable = nil
+    }
+
     func togglePlayPause() {
         if player.isPlaying {
             player.pause()
@@ -243,34 +268,42 @@ struct VLCPlayerView: UIViewRepresentable {
     let url: URL
     let controller: VLCPlayerController
 
-    /// True when this instance is the fullscreen surface. The inline surface and
-    /// the `fullScreenCover` surface are mounted at the same time, both sharing
-    /// one `controller` / `VLCMediaPlayer`, which can render into only ONE
-    /// drawable. This flag decides ownership: when fullscreen is presented the
-    /// fullscreen instance owns the drawable; otherwise the inline instance does.
-    /// Without it, the inline view's `updateUIView` (fired on the cover's present
-    /// relayout) would steal the drawable back and blank the fullscreen video.
-    var isActiveSurface: Bool = true
+    /// Exactly one `VLCPlayerView` is mounted at a time — the inline surface OR
+    /// the fullscreen surface, never both (`PlayerView` swaps the inline view for
+    /// a black placeholder while the cover is up). So mounting always claims the
+    /// drawable and dismantling releases it, giving a clean hand-off on
+    /// fullscreen open/close instead of two live views fighting over one player.
+    /// Holds the controller reference so the static `dismantleUIView` can detach
+    /// the drawable when this surface unmounts.
+    final class Coordinator {
+        let controller: VLCPlayerController
+        init(_ controller: VLCPlayerController) { self.controller = controller }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(controller) }
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
         container.backgroundColor = .black
 
-        if isActiveSurface {
-            controller.player.drawable = container
-        }
+        controller.attachDrawable(container)
         controller.start(url: url)
 
         return container
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
-        // Only the active surface may own the drawable. This keeps the inline
-        // instance from re-claiming it while the fullScreenCover is presented
-        // (and vice versa). Idempotent: no-op when ownership already matches.
-        guard isActiveSurface else { return }
+        // Re-assert ownership in case a relayout left the drawable detached.
+        // No-op when this view already owns it.
         if controller.player.drawable as? UIView !== uiView {
-            controller.player.drawable = uiView
+            controller.attachDrawable(uiView)
         }
+    }
+
+    /// Release the drawable when this surface unmounts (switching to/from the
+    /// fullscreen surface). The player keeps running; only the video output
+    /// detaches, so the next-mounted surface can claim it cleanly.
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.controller.detachDrawable(uiView)
     }
 }

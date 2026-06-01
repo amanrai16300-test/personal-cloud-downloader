@@ -84,7 +84,7 @@ struct PlayerView: View {
                     avSurface
                 } else {
                     VStack(spacing: 12) {
-                        vlcSurface(streamURL, inFullscreen: true)
+                        vlcSurface(streamURL, liveVideo: true)
                         vlcControls(streamURL)
                     }
                 }
@@ -315,22 +315,27 @@ struct PlayerView: View {
 
     // MARK: VLC
 
-    /// Shared VLC rendering surface (16:9) with state overlay and the
-    /// enter-fullscreen button. Reused by inline and fullscreen presentations.
-    ///
-    /// `inFullscreen` marks which call site this surface belongs to (the inline
-    /// view or the `fullScreenCover`). It drives drawable ownership: the inline
-    /// surface is the active renderer only while NOT fullscreen, the fullscreen
-    /// surface only while fullscreen. Both instances are mounted simultaneously
-    /// and share one `VLCMediaPlayer`, which can render into one drawable at a
-    /// time, so exactly one must hold it or the fullscreen video goes blank.
-    private func vlcSurface(_ streamURL: URL, inFullscreen: Bool) -> some View {
+    /// VLC rendering surface (16:9) with state overlay and the enter-fullscreen
+    /// button. Only ONE live `VLCPlayerView` may exist at a time because the
+    /// inline and fullscreen presentations share a single `VLCMediaPlayer` (one
+    /// drawable). `liveVideo` says whether THIS call site should mount the real
+    /// player view or a black placeholder:
+    ///   - inline: live only while NOT fullscreen
+    ///   - fullscreen: always live (only built while the cover is presented)
+    /// Swapping the dormant surface to a placeholder unmounts its VLCPlayerView,
+    /// which detaches the drawable, so the active surface claims it cleanly on
+    /// every open/close.
+    private func vlcSurface(_ streamURL: URL, liveVideo: Bool) -> some View {
         framedSurface(
-            VLCPlayerView(
-                url: streamURL,
-                controller: vlc,
-                isActiveSurface: inFullscreen == isFullscreen
-            )
+            Group {
+                if liveVideo {
+                    VLCPlayerView(url: streamURL, controller: vlc)
+                } else {
+                    // Dormant surface: black fill, no VLCPlayerView competing
+                    // for the shared drawable.
+                    Color.black
+                }
+            }
                 .frame(maxWidth: .infinity)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(.black)
@@ -404,7 +409,7 @@ struct PlayerView: View {
 
     private func vlcPlayback(_ streamURL: URL) -> some View {
         VStack(spacing: Layout.sectionSpacing) {
-            vlcSurface(streamURL, inFullscreen: false)
+            vlcSurface(streamURL, liveVideo: !isFullscreen)
 
             vlcControls(streamURL)
 
