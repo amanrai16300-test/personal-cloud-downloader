@@ -173,7 +173,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     ///
     /// Options use the real CLI form (`--name=value`), which `VLCLibrary(options:)`
     /// expects (NOT the bare keys the per-media dict API took):
-    ///   - `--freetype-rel-fontsize=28`    size = video-height / 28 → compact
+    ///   - `--freetype-rel-fontsize=26`    size = video-height / 26 → compact
     ///     cinema text, resolution-independent (bigger divisor = smaller text).
     ///   - `--freetype-color=16777215`     white text.
     ///   - `--freetype-opacity=255`        opaque text.
@@ -186,7 +186,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// they are not forced. `sub-margin` is an INPUT option, so it stays per-media
     /// (see `start`) — it is the one subtitle option that DOES belong on the media.
     static let subtitleStyledLibrary: VLCLibrary = VLCLibrary(options: [
-        "--freetype-rel-fontsize=28",
+        "--freetype-rel-fontsize=26",
         "--freetype-color=16777215",
         "--freetype-opacity=255",
         "--freetype-outline-thickness=1",
@@ -285,6 +285,15 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     ///   - `stretch`: videoAspectRatio = the surface's ratio → full stretch.
     /// The crop/ratio strings can be ignored if set before the video track is
     /// parsed, so `reapplyAspectIfNeeded` re-applies once playback is underway.
+    ///
+    /// SUBTITLE POSITION CAVEAT: `sub-margin` (set per-media in `start`) is
+    /// measured from the bottom of the VIDEO OUTPUT rectangle, not the screen.
+    /// Crop-based Zoom changes that rectangle, so subtitles can appear to drop
+    /// toward the bottom in Zoom. MobileVLCKit exposes no public LIVE setter for
+    /// the SPU margin (`sub-margin` is an input-time option), so it cannot be
+    /// re-pinned here without reloading the media — which would interrupt
+    /// playback. Left as-is intentionally: subtitles sit correctly in Fit (the
+    /// default) and the fixed-ratio modes; only crop Zoom shifts them. Not faked.
     func applyAspect(drawableSize: CGSize) {
         aspectDrawableSize = drawableSize
 
