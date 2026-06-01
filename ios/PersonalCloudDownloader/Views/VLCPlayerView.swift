@@ -178,77 +178,88 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     // MARK: Aspect / scaling
 
-    /// The fullscreen surface size, retained so the Fill zoom can be recomputed
-    /// once the video's real dimensions arrive (they aren't known until frames
-    /// render). Set on every `cycleAspect` / `applyAspect` call.
+    /// The fullscreen surface size, retained so Zoom can be re-applied once the
+    /// video track is parsed (crop/aspect set too early can be dropped by VLC).
+    /// Set on every `cycleAspect` / `applyAspect` call.
     private var aspectDrawableSize: CGSize = .zero
+
+    /// Whether the current mode has been applied with the video track parsed.
+    /// Cleared whenever the mode changes; set by `reapplyAspectIfNeeded` so the
+    /// per-frame retry runs only until it succeeds once.
+    private var aspectApplied = false
 
     /// Advance to the next mode and apply it. `drawableSize` is the current
     /// fullscreen surface, used for the Zoom and Stretch math. Called from the
     /// fullscreen ratio button.
     func cycleAspect(drawableSize: CGSize) {
         aspectMode = aspectMode.next
+        aspectApplied = false
         applyAspect(drawableSize: drawableSize)
     }
 
-    /// Apply `aspectMode`. Two families, never stacked — every call first resets
-    /// both `scaleFactor` and `videoAspectRatio`:
-    ///   - `fit`:    scaleFactor 0 → whole video, letterboxed (safe default).
-    ///   - `zoom`:   scaleFactor = cover zoom → Aspect Fill, no distortion.
+    /// Apply `aspectMode`. Distinct families, never stacked — every call first
+    /// resets scaleFactor, videoAspectRatio AND videoCropGeometry:
+    ///   - `fit`:    everything cleared → whole video, letterboxed (default).
+    ///   - `zoom`:   videoCropGeometry = the surface's "W:H" → true Aspect Fill.
+    ///               VLC crops the SOURCE to the surface aspect, then fits the
+    ///               crop to the drawable: fills the screen, preserves the
+    ///               video's own ratio, crops edges. No stretch, no per-frame
+    ///               scaleFactor math, and it does not depend on `videoSize`.
     ///   - `r16x9` / `r4x3` / `r1x1`: videoAspectRatio = fixed "W:H" string.
-    ///   - `stretch`: videoAspectRatio = the surface's own ratio → full stretch.
-    /// Zoom needs `player.videoSize`, which is 0 until frames render; when it's
-    /// not ready we stay fit and `reapplyAspectIfNeeded` retries from the
-    /// delegate once playback is underway.
+    ///   - `stretch`: videoAspectRatio = the surface's ratio → full stretch.
+    /// The crop/ratio strings can be ignored if set before the video track is
+    /// parsed, so `reapplyAspectIfNeeded` re-applies once playback is underway.
     func applyAspect(drawableSize: CGSize) {
         aspectDrawableSize = drawableSize
 
         // Clean slate so modes don't combine.
         player.scaleFactor = 0
         player.videoAspectRatio = nil
+        player.videoCropGeometry = nil
 
         switch aspectMode {
         case .fit:
             break // defaults above
 
         case .zoom:
-            let videoSize = player.videoSize
-            guard drawableSize.width > 0, drawableSize.height > 0,
-                  videoSize.width > 0, videoSize.height > 0 else { return }
-            let viewAR = Double(drawableSize.width / drawableSize.height)
-            let videoAR = Double(videoSize.width / videoSize.height)
-            let zoom = max(viewAR / videoAR, videoAR / viewAR)
-            player.scaleFactor = Float(zoom)
+            // Crop the source to the on-screen surface aspect → Aspect Fill.
+            let w = Int(drawableSize.width.rounded())
+            let h = Int(drawableSize.height.rounded())
+            guard w > 0, h > 0 else { return }
+            setCString("\(w):\(h)") { player.videoCropGeometry = $0 }
 
         case .r16x9, .r4x3, .r1x1:
             if let r = aspectMode.fixedAspect {
-                setVideoAspect("\(r.w):\(r.h)")
+                setCString("\(r.w):\(r.h)") { player.videoAspectRatio = $0 }
             }
 
         case .stretch:
             let w = Int(drawableSize.width.rounded())
             let h = Int(drawableSize.height.rounded())
             guard w > 0, h > 0 else { return }
-            setVideoAspect("\(w):\(h)")
+            setCString("\(w):\(h)") { player.videoAspectRatio = $0 }
         }
     }
 
-    /// Re-apply the current mode once playback is underway. `player.videoSize`
-    /// is 0 until frames render, so a Zoom chosen before then needs a second
-    /// pass; the ratio/stretch modes are stable but re-applying is harmless.
+    /// Re-apply the current mode once playback is underway. Crop/aspect strings
+    /// set before the video track is parsed can be dropped by VLC; re-applying
+    /// after the first frames (when `videoSize` is known) makes Zoom reliable.
+    /// Harmless for the fixed-ratio / stretch modes.
     private func reapplyAspectIfNeeded() {
-        guard aspectMode == .zoom, aspectDrawableSize != .zero else { return }
+        guard !aspectApplied, aspectDrawableSize != .zero, aspectMode != .fit else { return }
+        // videoSize becoming non-zero signals the track is parsed.
         let v = player.videoSize
         guard v.width > 0, v.height > 0 else { return }
         applyAspect(drawableSize: aspectDrawableSize)
+        aspectApplied = true
     }
 
-    /// Set `videoAspectRatio` from a "W:H" string. VLC copies the C string, so
-    /// the duplicate is freed right after the setter returns.
-    private func setVideoAspect(_ value: String) {
+    /// Hand a freshly-duplicated C string to a VLC setter. VLC copies the value,
+    /// so the duplicate is freed immediately after the setter returns.
+    private func setCString(_ value: String, _ setter: (UnsafeMutablePointer<CChar>?) -> Void) {
         value.withCString { src in
             let dup = strdup(src)
-            player.videoAspectRatio = dup
+            setter(dup)
             free(dup)
         }
     }
