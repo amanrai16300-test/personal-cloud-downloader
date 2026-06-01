@@ -46,3 +46,11 @@ completed/
 # Local config
 local_config.json
 config.local.json
+
+# iOS (XcodeGen-generated project)
+ios/PersonalCloudDownloader.xcodeproj/
+ios/PersonalCloudDownloader/Info.plist
+
+# iOS CocoaPods (generated; Podfile + Podfile.lock are committed)
+ios/Pods/
+ios/PersonalCloudDownloader.xcworkspace/

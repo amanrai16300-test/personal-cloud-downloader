@@ -304,3 +304,54 @@ Do not add auth unless access ever goes beyond Tailscale.
 Do not log sensitive magnet links in UI.
 Legal files only.
 ```
+
+---
+
+## 14. Phase 2 Videos library status (native milestone)
+
+```text
+Phase 2 native Videos library was added.
+Videos tab fetches from http://100.92.146.101:8000/api/completed-files
+CompletedFile model matches real backend keys: name, path, url, modified_at.
+backend/main.py was read-only only to confirm JSON field names.
+backend/main.py was not modified.
+Videos filters video files client-side by extension: mp4, mov, m4v, mkv, avi, webm.
+Videos screen has loading, error with retry, empty state, list state, and pull-to-refresh.
+Video rows show title and modified date when available.
+Size is not shown because /api/completed-files currently does not return size.
+Tapping a video currently shows "Video player will be added later."
+No playback was added yet.
+No AVPlayer, MobileVLCKit, /api/videos, delete, download, copy link, torrent logic, backend change, frontend web app change, Oracle change, Nginx change, qBittorrent change, or Tailscale change was made.
+Videos remains a clean video library, not a file manager.
+code-review-graph is only development tooling, not app runtime.
+```
+
+---
+
+## 15. Phase 3 player core status (player milestone)
+
+```text
+Phase 3 player core is complete.
+PlayerView was added as the dedicated video player route.
+VideosView now navigates to PlayerView using NavigationLink / navigationDestination.
+CompletedFile now supports Hashable and streamURL resolution.
+backend/main.py was read-only only to confirm CompletedFile.url is generated as a stream link; not modified.
+Deployed CompletedFile.url is an absolute, percent-encoded Nginx /files/ URL: http://100.92.146.101:8090/files/...
+The iOS player sources playback from CompletedFile.url (the Nginx /files/ stream link), not magnet, qBittorrent path, or local path.
+AVPlayer / AVKit playback was added for mp4, mov, m4v.
+MobileVLCKit dependency setup was added with CocoaPods: ios/Podfile, pod 'MobileVLCKit', '~> 3.6.0'.
+CocoaPods generated files are ignored: ios/Pods/ and ios/PersonalCloudDownloader.xcworkspace/.
+Podfile.lock should be committed after pod install creates it.
+VLCPlayerView was added for VLC playback.
+VLC engine is used for mkv, avi, webm.
+VLCPlayerController owns VLCMediaPlayer and manages playback state.
+VLC playback supports auto-play on open, stop on leave, play/pause, progress/time display, seek slider, and forward/back 10 second skip.
+AVPlayer branch remains intact.
+Videos remains a clean video library/player, not a file manager.
+No Delete, Download, or Copy Link controls were added to Videos.
+No backend endpoint changes were made.
+No /api/videos endpoint was created.
+No frontend web app, Oracle, Nginx, qBittorrent, or Tailscale behavior was changed.
+Existing web downloader remains unchanged and usable.
+Fullscreen, rotation, and error-state polish are not complete yet.
+```

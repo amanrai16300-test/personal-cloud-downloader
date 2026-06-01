@@ -1,0 +1,25 @@
+# CocoaPods dependencies for the PersonalCloudDownloader iOS app.
+#
+# This project uses XcodeGen as the source of truth for the Xcode project.
+# CocoaPods is layered on AFTER generation. Workflow:
+#
+#   cd ios
+#   xcodegen generate      # (re)creates PersonalCloudDownloader.xcodeproj
+#   pod install            # creates PersonalCloudDownloader.xcworkspace
+#
+# After `pod install`, always open the generated .xcworkspace (NOT the
+# .xcodeproj). Re-run both commands after editing project.yml.
+#
+# Step 4 scope: dependency setup only. MobileVLCKit is declared here but is
+# intentionally NOT imported or used in any Swift file yet.
+
+platform :ios, '16.0'
+
+# Match the deployment target in project.yml.
+target 'PersonalCloudDownloader' do
+  use_frameworks!
+
+  # VLC playback engine for formats AVPlayer cannot handle (mkv, avi, webm).
+  # Pinned to the 3.6.x line for reproducible builds.
+  pod 'MobileVLCKit', '~> 3.6.0'
+end

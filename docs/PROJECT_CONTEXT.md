@@ -527,3 +527,158 @@ Full docs:
 - `docs/IOS_APP_AI_PROMPTS.md`
 - `docs/IOS_APP_CHECKLISTS.md`
 ```
+
+## iOS App Phase 1 Status (web panel milestone)
+
+- iOS companion app work is on branch `feature/ios-companion-app`.
+- iOS source was created under `ios/PersonalCloudDownloader/`.
+- XcodeGen setup was added with `project.yml`.
+- Generated files are ignored:
+  - `ios/PersonalCloudDownloader.xcodeproj/`
+  - `ios/PersonalCloudDownloader/Info.plist`
+- SwiftUI app shell exists with a TabView.
+- Tabs exist for Home, Downloader, Videos, qBittorrent, Files, and Settings.
+- Reusable WKWebView support was added using `WebView` and `WebScreen`.
+- ATS HTTP loading support was added for private Tailscale URLs.
+- Downloader tab loads `http://100.92.146.101:8090/app/`.
+- qBittorrent tab loads `http://100.92.146.101:8080`.
+- Files tab loads `http://100.92.146.101:8090/files/`.
+- Home, Videos, and Settings are still placeholders.
+- No backend, frontend web app, Oracle server, Nginx, qBittorrent, or Tailscale behavior was changed.
+- Existing browser web downloader remains the main working app.
+
+## iOS App Home and Settings Status (native milestone)
+
+- Home tab is now a native SwiftUI dashboard.
+- Home shows app title, private cloud downloader subtitle, Tailscale connection reminder, Oracle server IP, screen guide, and safety note.
+- Settings tab is now a native SwiftUI Settings / Tailscale Helper screen.
+- Settings shows server URLs, Tailscale-only privacy note, and an Open Tailscale helper button using `tailscale://`.
+- Downloader, qBittorrent, and Files remain WKWebView tabs.
+- Videos is still only a placeholder.
+- No video player, API integration, torrent logic, backend change, frontend web app change, Oracle change, Nginx change, qBittorrent change, or Tailscale change was made.
+- Existing browser web downloader remains unchanged and usable.
+
+## Development Tooling: code-review-graph
+
+- code-review-graph is being used as a code context/review helper for this project.
+- Purpose: help AI coding tools understand the relevant files and affected code paths without reading the whole repo.
+- It is a development workflow tool only.
+- It is not part of the Personal Cloud Downloader app runtime.
+- It should not change backend, frontend, iOS app behavior, Oracle, Nginx, qBittorrent, or Tailscale.
+- It should be used when reviewing changes, finding affected files, or preparing safer coding prompts.
+
+## iOS App Phase 2 Videos Library Status (native milestone)
+
+- Phase 2 native Videos library was added.
+- Videos tab fetches from `http://100.92.146.101:8000/api/completed-files`.
+- A `CompletedFile` model matches the real backend JSON keys:
+  - `name`
+  - `path`
+  - `url`
+  - `modified_at`
+- `backend/main.py` was read-only only to confirm JSON field names.
+- `backend/main.py` was not modified.
+- Videos filters video files client-side by extension: `mp4`, `mov`, `m4v`, `mkv`, `avi`, `webm`.
+- Videos screen has loading, error with retry, empty state, list state, and pull-to-refresh.
+- Video rows show title and modified date when available.
+- Size is not shown because `/api/completed-files` currently does not return size.
+- Tapping a video currently shows "Video player will be added later."
+- No playback was added yet.
+- No AVPlayer, MobileVLCKit, `/api/videos`, delete, download, copy link, torrent logic, backend change, frontend web app change, Oracle change, Nginx change, qBittorrent change, or Tailscale change was made.
+- Videos remains a clean video library, not a file manager.
+- code-review-graph is only development tooling, not app runtime.
+
+## iOS App Phase 3 Player Core Status (player milestone)
+
+- Phase 3 player core is complete.
+- `PlayerView` was added as the dedicated video player route.
+- `VideosView` now navigates to `PlayerView` using `NavigationLink` / `navigationDestination`.
+- `CompletedFile` now supports `Hashable` and `streamURL` resolution.
+- `backend/main.py` was read-only only to confirm `CompletedFile.url` is generated as a stream link; not modified.
+- Deployed `CompletedFile.url` is an absolute, percent-encoded Nginx `/files/` URL: `http://100.92.146.101:8090/files/...`.
+- AVPlayer / AVKit playback was added for `mp4`, `mov`, `m4v`.
+- MobileVLCKit dependency setup was added with CocoaPods:
+  - `ios/Podfile`
+  - `pod 'MobileVLCKit', '~> 3.6.0'`
+- CocoaPods generated files are ignored:
+  - `ios/Pods/`
+  - `ios/PersonalCloudDownloader.xcworkspace/`
+- `Podfile.lock` should be committed after `pod install` creates it.
+- `VLCPlayerView` was added for VLC playback.
+- VLC engine is used for `mkv`, `avi`, `webm`.
+- `VLCPlayerController` owns `VLCMediaPlayer` and manages playback state.
+- VLC playback supports auto-play on open, stop on leave, play/pause, progress/time display, seek slider, and forward/back 10 second skip.
+- AVPlayer branch remains intact.
+- Videos remains a clean video library/player, not a file manager.
+- No Delete, Download, or Copy Link controls were added to Videos.
+- No backend endpoint changes were made.
+- No `/api/videos` endpoint was created.
+- No frontend web app, Oracle, Nginx, qBittorrent, or Tailscale behavior was changed.
+- Existing web downloader remains unchanged and usable.
+- Fullscreen, rotation, and error-state polish are not complete yet.
+
+## iOS App Player Polish State-Handling Status (after Phase 3 player core)
+
+- Player Polish state handling was added after the Phase 3 player core.
+- VLC branch now has user-friendly playback states: loading/buffering, ready, failed, and ended.
+- VLC branch UI:
+  - buffering spinner while loading
+  - playback-failed overlay with a Retry button
+  - ended overlay with a Replay button
+- VLC play/pause, seek slider, forward/back 10 second skip, auto-play on open, and stop-on-leave remain intact.
+- AVPlayer branch now has basic state handling too: loading, ready, failed, and ended.
+- AVPlayer branch keeps the system `VideoPlayer` controls.
+- AVPlayer ended state shows Replay and auto-dismisses if playback resumes from the system controls.
+- AVPlayer failed state shows Retry.
+- VLC branch was not changed during the AVPlayer state work.
+- Videos list was not changed.
+- No backend, frontend web app, Oracle, Nginx, qBittorrent, Tailscale, or API endpoint behavior was changed.
+- No Delete, Download, or Copy Link controls were added to Videos.
+- Fullscreen and rotation are still not complete.
+
+## iOS App Player Polish Fullscreen and Orientation Decision Status (after state-handling)
+
+- Player Polish fullscreen mode was added.
+- `PlayerView` now has fullscreen support using `fullScreenCover`.
+- Fullscreen works for both the AVPlayer branch and the VLC branch.
+- Inline and fullscreen player UI share extracted reusable player subviews.
+- AVPlayer branch keeps `mp4`, `mov`, `m4v` behavior.
+- VLC branch keeps `mkv`, `avi`, `webm` behavior.
+- VLC play/pause, seek slider, forward/back 10 second skip, and loading/error/ended overlays remain intact.
+- VLC drawable handling was improved so the player can reclaim the drawable when switching between inline and fullscreen.
+- Orientation setup was inspected.
+- `ios/project.yml` has no explicit orientation keys.
+- The app already supports landscape by default.
+- No forced rotation code was added.
+- No app-wide orientation settings were changed.
+- Decision: use zero-config orientation for now. The user can rotate the device manually in fullscreen.
+- Forced auto-landscape rotation is intentionally deferred because it requires UIKit/app-wide orientation handling and has SwiftUI risk.
+- No backend, frontend web app, Videos list, Oracle, Nginx, qBittorrent, Tailscale, or API behavior was changed.
+- No Delete, Download, or Copy Link controls were added to Videos.
+
+## iOS App Player Polish UI Status (after fullscreen and orientation decision)
+
+- Player Polish UI step was completed.
+- Only `PlayerView` layout/modifiers were changed.
+- Player screen spacing was cleaned up with shared layout constants.
+- Title area was improved with clearer hierarchy and tighter grouping.
+- Inline player surface now has rounded corners and a subtle hairline border.
+- Fullscreen player remains full-bleed and square.
+- Fullscreen button placement and tap target were improved.
+- VLC controls were visually reorganized:
+  - slider/time group above
+  - transport controls below
+  - larger play/pause button
+  - consistent skip button tap targets
+- Time/progress spacing was aligned.
+- AV and VLC overlay UI was deduplicated for consistent loading, failed, and ended states.
+- Error and ended overlays were visually clarified.
+- URL caption was made less distracting.
+- AVPlayer logic was not changed.
+- VLC logic was not changed.
+- Fullscreen behavior was not changed.
+- Zero-config orientation decision was not changed.
+- Videos list was not changed.
+- No backend, frontend web app, Oracle, Nginx, qBittorrent, Tailscale, or API behavior was changed.
+- No Delete, Download, or Copy Link controls were added to Videos.
+- Build was not verified yet because the current environment is Windows without Xcode.

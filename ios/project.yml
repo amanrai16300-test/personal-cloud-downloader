@@ -1,0 +1,35 @@
+name: PersonalCloudDownloader
+
+options:
+  bundleIdPrefix: com.personalcloud
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  PersonalCloudDownloader:
+    type: application
+    platform: iOS
+    sources:
+      - path: PersonalCloudDownloader
+    info:
+      path: PersonalCloudDownloader/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # Private services are reached over HTTP through Tailscale only.
+        # Allow arbitrary loads so WKWebView can load those private HTTP URLs.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.personalcloud.PersonalCloudDownloader
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
