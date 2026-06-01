@@ -157,12 +157,41 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// is seekable, so the seek is deferred rather than done inline in `start`.
     private var pendingResume: Float?
 
+    /// libvlc FreeType subtitle-renderer options, set on the `VLCMedia` before
+    /// playback so both the inline and fullscreen surfaces (same controller
+    /// class) render subtitles the same clean, cinema style:
+    ///   - `freetype-fontsize`           absolute px — modest, not VLC's huge default.
+    ///   - `freetype-color`              16777215 = white text.
+    ///   - `freetype-opacity`            255 = fully opaque text.
+    ///   - `freetype-outline-thickness`  thin black outline for legibility over
+    ///     any background, instead of a solid box.
+    ///   - `freetype-outline-color`      0 = black outline.
+    ///   - `freetype-outline-opacity`    255 = solid outline.
+    ///   - `freetype-shadow-opacity`     0 = no drop shadow (outline does the job).
+    ///   - `freetype-background-opacity` 0 = NO solid black rectangle behind text.
+    ///   - `sub-margin`                  px lifted off the very bottom so subtitles
+    ///     clear the bottom controls/scrim.
+    /// Center-bottom placement is libvlc's default, so it is not forced here.
+    private static let subtitleStyleOptions: [String: Any] = [
+        "freetype-fontsize": 22,
+        "freetype-color": 16777215,
+        "freetype-opacity": 255,
+        "freetype-outline-thickness": 2,
+        "freetype-outline-color": 0,
+        "freetype-outline-opacity": 255,
+        "freetype-shadow-opacity": 0,
+        "freetype-background-opacity": 0,
+        "sub-margin": 40,
+    ]
+
     /// Load + auto-play the stream once a drawable is attached. If this URL was
     /// watched earlier in the session, resume from the saved position.
     func start(url: URL) {
         guard player.media == nil else { return }
         currentURL = url
-        player.media = VLCMedia(url: url)
+        let media = VLCMedia(url: url)
+        media.addOptions(Self.subtitleStyleOptions)
+        player.media = media
 
         if let saved = Self.savedPositions[url], saved > 0, saved < 1 {
             pendingResume = saved
