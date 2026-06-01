@@ -25,6 +25,33 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// position against the right key without the call site passing it back.
     private var currentURL: URL?
 
+    /// Fullscreen video scaling mode. Fit (default) preserves aspect with
+    /// letterboxing; Fill crops to cover the frame; Stretch distorts to fill.
+    enum AspectMode: CaseIterable {
+        case fit, fill, stretch
+
+        /// Short label for the toggle button.
+        var label: String {
+            switch self {
+            case .fit: return "Fit"
+            case .fill: return "Fill"
+            case .stretch: return "Stretch"
+            }
+        }
+
+        /// Next mode in the Fit → Fill → Stretch → Fit cycle.
+        var next: AspectMode {
+            let all = Self.allCases
+            let i = all.firstIndex(of: self)!
+            return all[(i + 1) % all.count]
+        }
+    }
+
+    /// Current scaling mode. Published so the fullscreen toggle reflects it.
+    /// Default `.fit`. Only the fullscreen surface drives this; inline always
+    /// renders default (Fit) because it never changes the mode.
+    @Published var aspectMode: AspectMode = .fit
+
     /// High-level playback lifecycle, derived from `VLCMediaPlayerState`.
     /// Drives which overlay (spinner / error / replay) `PlayerView` shows.
     enum PlaybackState {
@@ -114,6 +141,56 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         guard attachedDrawable === view else { return }
         player.drawable = nil
         attachedDrawable = nil
+    }
+
+    // MARK: Aspect / scaling
+
+    /// Cycle to the next aspect mode and apply it. `drawableSize` is the current
+    /// fullscreen surface size, needed to express crop/aspect ratios for Fill
+    /// and Stretch. Called from the fullscreen ratio button.
+    func cycleAspect(drawableSize: CGSize) {
+        aspectMode = aspectMode.next
+        applyAspect(drawableSize: drawableSize)
+    }
+
+    /// Apply `aspectMode` to the VLC player using its native scaling controls:
+    ///   - Fit: `scaleFactor = 0` (auto fit, preserves aspect, letterboxes).
+    ///   - Fill: crop the source to the drawable's aspect so it covers the frame.
+    ///   - Stretch: force the video's display aspect to the drawable's, distorting.
+    /// `videoCropGeometry` / `videoAspectRatio` take a C string "W:H"; only one is
+    /// set at a time and both are cleared otherwise so modes don't stack.
+    func applyAspect(drawableSize: CGSize) {
+        // Always start from a clean slate so switching modes is not additive.
+        player.scaleFactor = 0
+        player.videoCropGeometry = nil
+        player.videoAspectRatio = nil
+
+        let w = Int(drawableSize.width.rounded())
+        let h = Int(drawableSize.height.rounded())
+        guard w > 0, h > 0 else { return }
+
+        switch aspectMode {
+        case .fit:
+            // Defaults above already give aspect-preserving fit.
+            break
+        case .fill:
+            setCString(Self.ratioString(w, h)) { player.videoCropGeometry = $0 }
+        case .stretch:
+            setCString(Self.ratioString(w, h)) { player.videoAspectRatio = $0 }
+        }
+    }
+
+    /// Format a "W:H" ratio string for the VLC geometry/aspect setters.
+    private static func ratioString(_ w: Int, _ h: Int) -> String { "\(w):\(h)" }
+
+    /// Hand a freshly-duplicated C string to a VLC setter. VLC copies the value,
+    /// so the duplicate is freed immediately after the setter returns.
+    private func setCString(_ value: String, _ setter: (UnsafeMutablePointer<CChar>?) -> Void) {
+        value.withCString { src in
+            let dup = strdup(src)
+            setter(dup)
+            free(dup)
+        }
     }
 
     func togglePlayPause() {
