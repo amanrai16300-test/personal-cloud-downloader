@@ -1,0 +1,482 @@
+:root {
+  color-scheme: light;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: oklch(96% 0.012 205);
+  color: oklch(20% 0.026 220);
+  --page: oklch(96% 0.012 205);
+  --ink: oklch(20% 0.026 220);
+  --surface: oklch(99% 0.007 205);
+  --surface-strong: oklch(93.8% 0.018 205);
+  --panel: oklch(26% 0.038 225);
+  --panel-soft: oklch(32% 0.045 220);
+  --panel-ink: oklch(96% 0.009 205);
+  --line: oklch(85% 0.022 205);
+  --muted: oklch(48% 0.025 220);
+  --accent: oklch(56% 0.13 169);
+  --accent-strong: oklch(43% 0.11 169);
+  --accent-soft: oklch(92% 0.055 169);
+  --danger: oklch(50% 0.14 28);
+  --danger-soft: oklch(95% 0.03 28);
+  --ok-soft: oklch(93% 0.055 150);
+  --wait-soft: oklch(93% 0.02 235);
+  --radius: 22px;
+  --shadow: 0 24px 60px oklch(45% 0.035 220 / 0.16);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    linear-gradient(135deg, oklch(89% 0.035 185) 0 22%, transparent 22%),
+    radial-gradient(circle at 85% 8%, oklch(88% 0.045 155), transparent 24rem),
+    linear-gradient(180deg, oklch(98% 0.009 205), var(--page));
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.shell {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 16px 14px 34px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 2px 16px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--panel-ink);
+  font-size: 0.83rem;
+  font-weight: 900;
+  box-shadow: 0 12px 28px oklch(35% 0.04 220 / 0.22);
+}
+
+.brand-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.eyebrow,
+.section-heading p,
+.meta,
+.empty,
+.status-line,
+.last-updated,
+.panel-kicker {
+  color: var(--muted);
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: clamp(1.45rem, 8vw, 3.2rem);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+h2 {
+  margin-bottom: 4px;
+  font-size: 1.16rem;
+}
+
+h3 {
+  margin-bottom: 8px;
+  font-size: 1rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.command-panel,
+.content-section {
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.dashboard-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.command-panel {
+  position: sticky;
+  top: 8px;
+  z-index: 2;
+  padding: 18px;
+  background:
+    linear-gradient(140deg, color-mix(in oklch, var(--panel) 96%, transparent), var(--panel-soft));
+  color: var(--panel-ink);
+  border-color: oklch(58% 0.045 215 / 0.38);
+}
+
+.content-section {
+  padding: 16px;
+}
+
+.section-heading {
+  margin-bottom: 14px;
+}
+
+.section-heading p {
+  margin-bottom: 0;
+  line-height: 1.45;
+}
+
+.command-panel .section-heading p,
+.command-panel .panel-kicker,
+.command-panel .status-line {
+  color: oklch(82% 0.018 210);
+}
+
+.command-panel .section-heading h2 {
+  color: var(--panel-ink);
+}
+
+.panel-kicker {
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.row-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.last-updated {
+  flex: 0 0 auto;
+  padding-top: 3px;
+  font-size: 0.78rem;
+}
+
+.magnet-field {
+  display: grid;
+  gap: 8px;
+  font-weight: 750;
+}
+
+.magnet-field span {
+  font-size: 0.92rem;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 116px;
+  border: 1px solid oklch(70% 0.03 210 / 0.55);
+  border-radius: 16px;
+  padding: 14px;
+  background: oklch(98% 0.006 205);
+  color: inherit;
+  line-height: 1.45;
+  outline: none;
+}
+
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px oklch(75% 0.07 178 / 0.28);
+}
+
+.primary-button,
+.ghost-button,
+.action-button {
+  min-height: 44px;
+  border-radius: 999px;
+  font-weight: 850;
+}
+
+.primary-button {
+  width: 100%;
+  margin-top: 12px;
+  background: var(--accent);
+  color: oklch(98% 0.006 190);
+  box-shadow: 0 16px 26px oklch(42% 0.12 169 / 0.28);
+}
+
+.primary-button:hover {
+  background: var(--accent-strong);
+}
+
+.ghost-button {
+  width: auto;
+  margin-left: auto;
+  padding: 0 14px;
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.status-line {
+  min-height: 22px;
+  margin: 12px 0 0;
+  font-size: 0.92rem;
+}
+
+.status-line.error {
+  color: oklch(76% 0.13 28);
+}
+
+.stack {
+  display: grid;
+  gap: 10px;
+}
+
+.download-card,
+.file-card,
+.empty-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: oklch(99.3% 0.005 190);
+}
+
+.download-card,
+.file-card {
+  padding: 15px;
+}
+
+.empty-card {
+  display: grid;
+  gap: 8px;
+  min-height: 124px;
+  place-content: center;
+  padding: 20px;
+  text-align: center;
+  background:
+    linear-gradient(135deg, oklch(98% 0.01 205), oklch(95% 0.018 195));
+}
+
+.empty-card h3 {
+  margin-bottom: 4px;
+}
+
+.empty-card p,
+.meta {
+  margin-bottom: 0;
+}
+
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.download-title,
+.file-title {
+  min-width: 0;
+}
+
+.pill {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: var(--wait-soft);
+  color: oklch(36% 0.05 220);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.pill.downloading {
+  background: oklch(93% 0.045 185);
+  color: var(--accent-strong);
+}
+
+.pill.completed {
+  background: var(--ok-soft);
+  color: oklch(35% 0.08 150);
+}
+
+.pill.failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.progress-track {
+  position: relative;
+  flex: 1;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-strong);
+}
+
+.progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--progress, 0%);
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
+}
+
+.progress-value {
+  min-width: 44px;
+  text-align: right;
+  color: oklch(34% 0.035 210);
+  font-size: 0.88rem;
+  font-weight: 850;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  text-decoration: none;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.action-button.danger {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  background: transparent;
+  border: 1px solid oklch(82% 0.055 28);
+}
+
+.file-card .actions {
+  margin-top: 10px;
+}
+
+.file-name {
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+  .command-panel {
+    margin-inline: -2px;
+  }
+
+  .file-card .actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 760px) {
+  .shell {
+    padding-top: 32px;
+  }
+
+  .topbar {
+    padding-bottom: 24px;
+  }
+
+  .brand-mark {
+    width: 54px;
+    height: 54px;
+    flex-basis: 54px;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: minmax(300px, 0.8fr) minmax(360px, 1.2fr);
+    align-items: start;
+    gap: 18px;
+  }
+
+  .command-panel {
+    top: 22px;
+    padding: 22px;
+  }
+
+  .queue-panel {
+    grid-column: 2;
+  }
+
+  .files-panel {
+    grid-column: 1 / -1;
+  }
+
+  .content-section {
+    padding: 20px;
+  }
+
+  .download-card,
+  .file-card {
+    padding: 16px;
+  }
+
+  .action-button.danger {
+    grid-column: auto;
+  }
+}
+
+@media (min-width: 1040px) {
+  .dashboard-grid {
+    grid-template-columns: 0.85fr 1fr 1fr;
+  }
+
+  .command-panel {
+    min-height: 430px;
+  }
+
+  .queue-panel,
+  .files-panel {
+    grid-column: auto;
+  }
+
+  .files-panel {
+    min-height: 430px;
+  }
+}

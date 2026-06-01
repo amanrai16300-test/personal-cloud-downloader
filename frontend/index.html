@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Personal Cloud Downloader</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand-mark" aria-hidden="true">PC</div>
+        <div class="brand-copy">
+          <p class="eyebrow">Tailscale private cloud</p>
+          <h1>Personal downloader</h1>
+        </div>
+        <button id="refreshButton" class="ghost-button" type="button" aria-label="Refresh downloads">Refresh</button>
+      </header>
+
+      <div class="dashboard-grid">
+        <section class="command-panel" aria-labelledby="addTitle">
+          <div class="section-heading">
+            <p class="panel-kicker">New job</p>
+            <h2 id="addTitle">Send a magnet to the cloud</h2>
+            <p>One private queue for legal files. Stream, save, then clean up.</p>
+          </div>
+          <label class="magnet-field">
+            <span>Magnet link</span>
+            <textarea id="magnetLink" rows="4" placeholder="magnet:?xt=urn:btih:..."></textarea>
+          </label>
+          <button id="addMagnetButton" class="primary-button" type="button">Start download</button>
+          <p id="status" class="status-line" role="status" aria-live="polite">Connecting to private backend...</p>
+        </section>
+
+        <section class="content-section queue-panel" aria-labelledby="torrentsTitle">
+          <div class="section-heading row-heading">
+            <div>
+              <p class="panel-kicker">Queue</p>
+              <h2 id="torrentsTitle">Downloads</h2>
+            </div>
+            <span id="lastUpdated" class="last-updated"></span>
+          </div>
+          <div id="torrentList" class="stack"></div>
+        </section>
+
+        <section class="content-section files-panel" aria-labelledby="completedTitle">
+          <div class="section-heading">
+            <p class="panel-kicker">Library</p>
+            <h2 id="completedTitle">Completed files</h2>
+            <p>Tap for browser playback, local save, or a VLC-ready link.</p>
+          </div>
+          <div id="completedFiles" class="stack"></div>
+        </section>
+      </div>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

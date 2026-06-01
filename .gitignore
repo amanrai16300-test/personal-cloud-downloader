@@ -1,0 +1,48 @@
+# Secrets / keys
+*.pem
+*.key
+*.pub
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Node / frontend if added later
+node_modules/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+logs/
+
+# Downloads / media / torrent files
+downloads/
+completed/
+*.torrent
+*.part
+*.mkv
+*.mp4
+*.avi
+*.mov
+*.webm
+*.iso
+*.zip
+*.rar
+*.7z
+
+# Local config
+local_config.json
+config.local.json
