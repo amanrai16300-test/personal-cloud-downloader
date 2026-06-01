@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import Combine
+import UIKit
 
 /// Phase 3, step 5: dual-engine playback.
 ///
@@ -31,6 +32,10 @@ struct PlayerView: View {
     /// `player` / `vlc` instances are reused, so playback continues seamlessly
     /// across the inline ⇄ fullscreen transition (no reload, no seek reset).
     @State private var isFullscreen = false
+
+    /// Interface orientation captured the moment fullscreen is entered, so it can
+    /// be restored on exit (usually portrait). Default portrait until set.
+    @State private var orientationBeforeFullscreen: UIInterfaceOrientation = .portrait
 
     /// Layout scale shared across the player screen so spacing stays consistent
     /// instead of scattering magic numbers. Pure presentation — no behavior.
@@ -63,9 +68,14 @@ struct PlayerView: View {
             player?.pause()
             vlc.stop()
         }
-        .fullScreenCover(isPresented: $isFullscreen) {
+        .fullScreenCover(isPresented: $isFullscreen, onDismiss: {
+            // Back to where the user was before fullscreen (usually portrait).
+            OrientationHelper.restore(orientationBeforeFullscreen)
+        }) {
             if let streamURL = video.streamURL {
                 fullscreenContent(streamURL)
+                    // Rotate to landscape once the fullscreen player is up.
+                    .onAppear { OrientationHelper.lockLandscape() }
             }
         }
     }
@@ -111,6 +121,8 @@ struct PlayerView: View {
     /// controller — starts clean with no second player still holding audio.
     private var fullscreenButton: some View {
         Button {
+            // Capture orientation before rotating so exit can restore it.
+            orientationBeforeFullscreen = OrientationHelper.currentOrientation()
             if !video.isAVPlayerSupported {
                 vlc.teardown()
             }
