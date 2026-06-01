@@ -728,8 +728,9 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// Cycles Fit → Fill and shows the current mode. Re-arms the auto-hide timer
-    /// so adjusting the ratio doesn't immediately hide controls.
+    /// Cycles Fit → Zoom → 16:9 → 4:3 → 1:1 → Stretch and shows the current
+    /// mode. Re-arms the auto-hide timer so adjusting the ratio doesn't
+    /// immediately hide controls.
     private var ratioButton: some View {
         Button {
             fsVlc.cycleAspect(drawableSize: drawableSize)
@@ -738,6 +739,7 @@ private struct VLCFullscreenView: View {
             HStack(spacing: 5) {
                 Image(systemName: fsVlc.aspectMode.icon)
                 Text(fsVlc.aspectMode.label)
+                    .frame(minWidth: 46, alignment: .leading)
             }
             .font(.caption.weight(.semibold))
             .foregroundStyle(.white)

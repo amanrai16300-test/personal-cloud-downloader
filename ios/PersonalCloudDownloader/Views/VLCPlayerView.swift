@@ -25,32 +25,54 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// position against the right key without the call site passing it back.
     private var currentURL: URL?
 
-    /// Fullscreen video scaling mode. Fit (default) preserves aspect with
-    /// Professional two-mode scaling, both aspect-preserving (no distortion):
-    ///   - Fit: show the whole video, letterboxing as needed.
-    ///   - Fill: zoom to cover the screen, cropping edges (Aspect Fill).
-    /// Stretch was dropped — forcing the video aspect distorted the picture,
-    /// which never looks right in a real player.
-    enum AspectMode: CaseIterable {
-        case fit, fill
+    /// Professional, nPlayer-style fullscreen aspect modes. The cycle button
+    /// steps through them in order. Implementation splits two families:
+    ///   - `fit` / `zoom`: VLC `scaleFactor` (aspect-preserving, no distortion).
+    ///   - `r16x9` / `r4x3` / `r1x1` / `stretch`: VLC `videoAspectRatio` string,
+    ///     forcing a chosen display aspect (intentional, selectable ratios).
+    /// `fit` is the safe default and must never make the picture look worse.
+    enum AspectMode: String, CaseIterable {
+        case fit        // Whole video, letterboxed. Default.
+        case zoom       // Aspect-fill: cover screen, crop edges, no distortion.
+        case r16x9      // Force 16:9 display aspect.
+        case r4x3       // Force 4:3 display aspect.
+        case r1x1       // Force 1:1 display aspect.
+        case stretch    // Force the surface's aspect — intentional full-stretch.
 
-        /// Short label for the toggle button.
+        /// Short label shown on the cycle button.
         var label: String {
             switch self {
             case .fit: return "Fit"
-            case .fill: return "Fill"
+            case .zoom: return "Zoom"
+            case .r16x9: return "16:9"
+            case .r4x3: return "4:3"
+            case .r1x1: return "1:1"
+            case .stretch: return "Stretch"
             }
         }
 
-        /// SF Symbol that hints at the mode.
+        /// SF Symbol hint for the button.
         var icon: String {
             switch self {
             case .fit: return "rectangle.arrowtriangle.2.inward"
-            case .fill: return "rectangle.arrowtriangle.2.outward"
+            case .zoom: return "rectangle.arrowtriangle.2.outward"
+            case .stretch: return "arrow.up.left.and.arrow.down.right"
+            default: return "aspectratio"
             }
         }
 
-        /// Next mode in the Fit → Fill → Fit cycle.
+        /// Fixed "W:H" display aspect for the ratio modes; nil for fit/zoom
+        /// (handled via scaleFactor) and for stretch (uses the surface ratio).
+        var fixedAspect: (w: Int, h: Int)? {
+            switch self {
+            case .r16x9: return (16, 9)
+            case .r4x3: return (4, 3)
+            case .r1x1: return (1, 1)
+            default: return nil
+            }
+        }
+
+        /// Next mode in the cycle.
         var next: AspectMode {
             let all = Self.allCases
             let i = all.firstIndex(of: self)!
@@ -161,53 +183,74 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// render). Set on every `cycleAspect` / `applyAspect` call.
     private var aspectDrawableSize: CGSize = .zero
 
-    /// Cycle Fit → Fill → Fit and apply. `drawableSize` is the current
-    /// fullscreen surface, used to compute the Fill zoom. Called from the
+    /// Advance to the next mode and apply it. `drawableSize` is the current
+    /// fullscreen surface, used for the Zoom and Stretch math. Called from the
     /// fullscreen ratio button.
     func cycleAspect(drawableSize: CGSize) {
         aspectMode = aspectMode.next
         applyAspect(drawableSize: drawableSize)
     }
 
-    /// Apply `aspectMode` with VLC's `scaleFactor`, which zooms WITHOUT
-    /// distortion (unlike crop-geometry / aspect-ratio strings, which looked
-    /// wrong):
-    ///   - Fit:  `scaleFactor = 0` → auto fit, whole video, letterboxed.
-    ///   - Fill: `scaleFactor = coverZoom` → Aspect Fill, edges cropped.
-    /// The Fill zoom is `max(viewAR/videoAR, videoAR/viewAR)` — the factor that
-    /// grows the letterboxed fit until the short side covers the frame. Needs the
-    /// video size; if it isn't known yet, fall back to fit and re-apply later
-    /// from the state/time delegate once frames arrive.
+    /// Apply `aspectMode`. Two families, never stacked — every call first resets
+    /// both `scaleFactor` and `videoAspectRatio`:
+    ///   - `fit`:    scaleFactor 0 → whole video, letterboxed (safe default).
+    ///   - `zoom`:   scaleFactor = cover zoom → Aspect Fill, no distortion.
+    ///   - `r16x9` / `r4x3` / `r1x1`: videoAspectRatio = fixed "W:H" string.
+    ///   - `stretch`: videoAspectRatio = the surface's own ratio → full stretch.
+    /// Zoom needs `player.videoSize`, which is 0 until frames render; when it's
+    /// not ready we stay fit and `reapplyAspectIfNeeded` retries from the
+    /// delegate once playback is underway.
     func applyAspect(drawableSize: CGSize) {
         aspectDrawableSize = drawableSize
 
-        guard aspectMode == .fill else {
-            player.scaleFactor = 0   // Fit
-            return
-        }
+        // Clean slate so modes don't combine.
+        player.scaleFactor = 0
+        player.videoAspectRatio = nil
 
-        let videoSize = player.videoSize
-        guard drawableSize.width > 0, drawableSize.height > 0,
-              videoSize.width > 0, videoSize.height > 0 else {
-            // Dimensions not ready — stay fit; `reapplyAspectIfNeeded` retries.
-            player.scaleFactor = 0
-            return
-        }
+        switch aspectMode {
+        case .fit:
+            break // defaults above
 
-        let viewAR = Double(drawableSize.width / drawableSize.height)
-        let videoAR = Double(videoSize.width / videoSize.height)
-        let zoom = max(viewAR / videoAR, videoAR / viewAR)
-        player.scaleFactor = Float(zoom)
+        case .zoom:
+            let videoSize = player.videoSize
+            guard drawableSize.width > 0, drawableSize.height > 0,
+                  videoSize.width > 0, videoSize.height > 0 else { return }
+            let viewAR = Double(drawableSize.width / drawableSize.height)
+            let videoAR = Double(videoSize.width / videoSize.height)
+            let zoom = max(viewAR / videoAR, videoAR / viewAR)
+            player.scaleFactor = Float(zoom)
+
+        case .r16x9, .r4x3, .r1x1:
+            if let r = aspectMode.fixedAspect {
+                setVideoAspect("\(r.w):\(r.h)")
+            }
+
+        case .stretch:
+            let w = Int(drawableSize.width.rounded())
+            let h = Int(drawableSize.height.rounded())
+            guard w > 0, h > 0 else { return }
+            setVideoAspect("\(w):\(h)")
+        }
     }
 
-    /// Re-apply the current mode once playback is underway. Called from the
-    /// delegate: `player.videoSize` is 0 until frames render, so a Fill chosen
-    /// (or restored) before then needs a second pass to compute the real zoom.
+    /// Re-apply the current mode once playback is underway. `player.videoSize`
+    /// is 0 until frames render, so a Zoom chosen before then needs a second
+    /// pass; the ratio/stretch modes are stable but re-applying is harmless.
     private func reapplyAspectIfNeeded() {
-        guard aspectMode == .fill, aspectDrawableSize != .zero else { return }
+        guard aspectMode == .zoom, aspectDrawableSize != .zero else { return }
         let v = player.videoSize
         guard v.width > 0, v.height > 0 else { return }
         applyAspect(drawableSize: aspectDrawableSize)
+    }
+
+    /// Set `videoAspectRatio` from a "W:H" string. VLC copies the C string, so
+    /// the duplicate is freed right after the setter returns.
+    private func setVideoAspect(_ value: String) {
+        value.withCString { src in
+            let dup = strdup(src)
+            player.videoAspectRatio = dup
+            free(dup)
+        }
     }
 
     func togglePlayPause() {
