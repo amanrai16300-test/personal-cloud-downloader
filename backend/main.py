@@ -1,4 +1,7 @@
 import asyncio
+import json
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,10 @@ class AddMagnetRequest(BaseModel):
 
 class SelectFileRequest(BaseModel):
     file_id: int
+
+
+class ExtractSubtitleRequest(BaseModel):
+    path: str
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -137,6 +144,154 @@ def completed_files() -> list[dict[str, Any]]:
             )
 
     return results
+
+
+# Subtitle codecs ffmpeg can convert to SubRip (.srt). Image-based codecs
+# (PGS/VobSub/DVD/DVB) carry bitmaps, not text, so they cannot become .srt
+# without OCR — they are detected and skipped.
+TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "webvtt"}
+IMAGE_SUBTITLE_CODECS = {
+    "hdmv_pgs_subtitle",
+    "dvd_subtitle",
+    "dvbsub",
+    "dvb_subtitle",
+    "xsub",
+}
+# Hard limits so a stuck/huge probe or extract can't wedge the request.
+FFPROBE_TIMEOUT_S = 30
+FFMPEG_TIMEOUT_S = 120
+
+
+@app.post("/api/subtitles/extract")
+def extract_subtitle(payload: ExtractSubtitleRequest) -> dict[str, Any]:
+    """Extract the first (English-preferred) embedded TEXT subtitle track of a
+    completed video into a sidecar `<stem>.srt` beside it, which Nginx already
+    serves at `/files/...`. On-demand only — does not run in the background.
+
+    Statuses: extracted | exists | no_text_subtitles | image_subtitles_only |
+    ffmpeg_unavailable | extraction_failed. The `.srt` stream URL is included
+    whenever the file exists or was created.
+    """
+    video_path = resolve_completed_path(payload.path)
+    srt_path = video_path.with_suffix(".srt")
+
+    # Never overwrite an existing sidecar (could be user-provided).
+    if srt_path.exists():
+        return {"status": "exists", "url": srt_stream_url(srt_path)}
+
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        return {"status": "ffmpeg_unavailable"}
+
+    streams = probe_subtitle_streams(video_path)
+    if streams is None:
+        return {"status": "extraction_failed"}
+
+    text_streams = [s for s in streams if s["codec"] in TEXT_SUBTITLE_CODECS]
+    if not text_streams:
+        # Distinguish "had only image subs" from "no subtitles at all" so the
+        # caller can explain why no sidecar appeared.
+        has_image = any(s["codec"] in IMAGE_SUBTITLE_CODECS for s in streams)
+        return {"status": "image_subtitles_only" if has_image else "no_text_subtitles"}
+
+    chosen = pick_subtitle_stream(text_streams)
+    if not extract_to_srt(video_path, chosen["sub_index"], srt_path):
+        return {"status": "extraction_failed"}
+
+    return {"status": "extracted", "url": srt_stream_url(srt_path)}
+
+
+def resolve_completed_path(relative_path: str) -> Path:
+    """Resolve a client-supplied relative path to an existing file UNDER the
+    completed-downloads dir. Rejects traversal/escape and non-files with 400/404
+    so a caller can never read outside the served tree."""
+    download_dir = settings.download_complete_dir.resolve()
+    candidate = (download_dir / relative_path).resolve()
+
+    if not candidate.is_relative_to(download_dir):
+        raise HTTPException(status_code=400, detail="Invalid path.")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+    return candidate
+
+
+def srt_stream_url(srt_path: Path) -> str:
+    """Build the Nginx stream URL for a sidecar `.srt`, matching the scheme the
+    completed-files listing uses for videos."""
+    relative = srt_path.relative_to(settings.download_complete_dir.resolve()).as_posix()
+    return f"{settings.stream_base_url}/{quote(relative)}"
+
+
+def probe_subtitle_streams(video_path: Path) -> list[dict[str, Any]] | None:
+    """Return the video's subtitle streams as `{sub_index, codec, language}`,
+    where `sub_index` is the subtitle-relative index ffmpeg's `0:s:N` map uses.
+    Returns None on probe failure (so the caller reports extraction_failed)."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "s",
+                "-show_entries", "stream=codec_name:stream_tags=language",
+                "-of", "json",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=FFPROBE_TIMEOUT_S,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout or "{}")
+    except (subprocess.SubprocessError, json.JSONDecodeError, OSError):
+        return None
+
+    streams: list[dict[str, Any]] = []
+    for sub_index, stream in enumerate(data.get("streams", [])):
+        streams.append(
+            {
+                "sub_index": sub_index,
+                "codec": (stream.get("codec_name") or "").lower(),
+                "language": (stream.get("tags", {}).get("language") or "").lower(),
+            }
+        )
+    return streams
+
+
+def pick_subtitle_stream(text_streams: list[dict[str, Any]]) -> dict[str, Any]:
+    """Prefer an English text track (`eng`/`en` language tag); otherwise the
+    first text track. `text_streams` is assumed non-empty."""
+    for stream in text_streams:
+        if stream["language"] in {"eng", "en"}:
+            return stream
+    return text_streams[0]
+
+
+def extract_to_srt(video_path: Path, sub_index: int, srt_path: Path) -> bool:
+    """Convert subtitle stream `0:s:<sub_index>` to a SubRip `.srt`. Returns
+    True on success. Removes a partial file if ffmpeg fails, so a later retry
+    isn't blocked by a half-written sidecar."""
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i", str(video_path),
+                "-map", f"0:s:{sub_index}",
+                "-c:s", "srt",
+                str(srt_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG_TIMEOUT_S,
+        )
+    except (subprocess.SubprocessError, OSError):
+        srt_path.unlink(missing_ok=True)
+        return False
+
+    if result.returncode != 0 or not srt_path.exists() or srt_path.stat().st_size == 0:
+        srt_path.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def is_visible_completed_file(file_path: Path, download_dir: Path) -> bool:

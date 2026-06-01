@@ -10,7 +10,7 @@ echo "   sudo apt update"
 echo "   sudo apt upgrade -y"
 echo
 echo "2. Install required packages:"
-echo "   sudo apt install -y python3 python3-venv python3-pip nginx qbittorrent-nox ufw curl"
+echo "   sudo apt install -y python3 python3-venv python3-pip nginx qbittorrent-nox ufw curl ffmpeg"
 echo
 echo "3. Create torrent folders:"
 echo "   sudo mkdir -p /srv/torrents/downloads /srv/torrents/incomplete"
