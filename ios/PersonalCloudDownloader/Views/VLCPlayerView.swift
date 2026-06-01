@@ -118,6 +118,15 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     /// Collapse the granular `VLCMediaPlayerState` into our 4-case lifecycle.
     private func updatePlaybackState() {
+        // If the player is actually playing, treat it as ready regardless of the
+        // reported state. On device VLC can keep reporting `.buffering` (or only
+        // `.esAdded`) while frames already render, which otherwise leaves the
+        // "Buffering..." overlay stuck on top of live playback.
+        if player.isPlaying {
+            playbackState = .ready
+            return
+        }
+
         switch player.state {
         case .opening, .buffering:
             playbackState = .loading
@@ -134,6 +143,12 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }
 
     func mediaPlayerTimeChanged(_ aNotification: Notification) {
+        // Time advancing means real playback is underway: clear any stale
+        // loading overlay even if no `.playing` state notification arrived.
+        if playbackState == .loading && player.isPlaying {
+            playbackState = .ready
+        }
+        isPlaying = player.isPlaying
         refreshTimes()
     }
 
