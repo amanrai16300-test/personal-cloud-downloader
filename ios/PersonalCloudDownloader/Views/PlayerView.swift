@@ -93,6 +93,17 @@ struct PlayerView: View {
                 // AVPlayer keeps its framed 16:9 surface, just centered + padded.
                 avSurface
                     .padding()
+
+                // AVPlayer fullscreen keeps its always-visible close button;
+                // VLC manages its own (auto-hiding with its controls).
+                Button {
+                    isFullscreen = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title)
+                        .foregroundStyle(.white, .black.opacity(0.4))
+                }
+                .padding()
             } else {
                 // Fullscreen VLC runs on its OWN controller (see
                 // `VLCFullscreenView`), not the inline `vlc`. The two never play
@@ -100,18 +111,12 @@ struct PlayerView: View {
                 // and this one tears down on dismiss, after which the inline
                 // player resumes. Position carries over via the shared per-URL
                 // `savedPositions` store. No padding — it fills the screen edge
-                // to edge as a real fullscreen video surface.
-                VLCFullscreenView(streamURL: streamURL)
+                // to edge as a real fullscreen video surface. The close button
+                // lives inside it so it auto-hides with the controls.
+                VLCFullscreenView(streamURL: streamURL) {
+                    isFullscreen = false
+                }
             }
-
-            Button {
-                isFullscreen = false
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title)
-                    .foregroundStyle(.white, .black.opacity(0.4))
-            }
-            .padding()
         }
     }
 
@@ -502,8 +507,22 @@ struct PlayerView: View {
 /// to its own controller — it does not touch `PlayerView`'s inline `vlc`.
 private struct VLCFullscreenView: View {
     let streamURL: URL
+    /// Dismiss the fullscreen cover. Owned by `PlayerView`; the close button
+    /// lives here so it fades in/out with the rest of the controls.
+    let onClose: () -> Void
 
     @StateObject private var fsVlc = VLCPlayerController()
+
+    /// Whether the controls (transport + close) are currently shown. Tapping the
+    /// video toggles this; an auto-hide timer clears it while playing.
+    @State private var controlsVisible = true
+
+    /// Pending auto-hide work, cancelled/rescheduled on every show or tap so the
+    /// controls stay up for the full delay after the latest interaction.
+    @State private var autoHideTask: DispatchWorkItem?
+
+    /// Seconds the controls stay visible before auto-hiding during playback.
+    private let autoHideDelay: TimeInterval = 3
 
     var body: some View {
         ZStack {
@@ -515,30 +534,84 @@ private struct VLCFullscreenView: View {
             VLCPlayerView(url: streamURL, controller: fsVlc)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Full-area tap target to toggle controls. Must sit above the video
+            // but below the controls so buttons still receive their own taps.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { toggleControls() }
+
             // State overlay (spinner / replay) centered over the video.
             overlay
 
-            // Transport controls float over the bottom of the video on a scrim
-            // so they don't shrink the picture.
-            VStack {
-                Spacer()
-                controls
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 8)
-                    .background(
-                        LinearGradient(
-                            colors: [.clear, .black.opacity(0.55)],
-                            startPoint: .top,
-                            endPoint: .bottom
+            if controlsVisible {
+                // Close button, top-leading. Fades with the controls.
+                VStack {
+                    HStack {
+                        Button(action: onClose) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title)
+                                .foregroundStyle(.white, .black.opacity(0.4))
+                        }
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding()
+                .transition(.opacity)
+
+                // Transport controls float over the bottom of the video on a
+                // scrim so they don't shrink the picture.
+                VStack {
+                    Spacer()
+                    controls
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 8)
+                        .background(
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.55)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .ignoresSafeArea(edges: .bottom)
                         )
-                        .ignoresSafeArea(edges: .bottom)
-                    )
+                }
+                .transition(.opacity)
             }
         }
         .ignoresSafeArea()
+        .animation(.easeInOut(duration: 0.2), value: controlsVisible)
+        .onAppear { scheduleAutoHide() }
         // The controller's media frees with the view; `teardown` also persists
         // position and stops audio so inline can resume cleanly.
-        .onDisappear { fsVlc.teardown() }
+        .onDisappear {
+            autoHideTask?.cancel()
+            fsVlc.teardown()
+        }
+    }
+
+    /// Toggle control visibility on a video tap. Showing (re)arms the auto-hide
+    /// timer; hiding cancels it.
+    private func toggleControls() {
+        controlsVisible.toggle()
+        if controlsVisible {
+            scheduleAutoHide()
+        } else {
+            autoHideTask?.cancel()
+        }
+    }
+
+    /// Hide the controls after `autoHideDelay`, but only while playing — paused
+    /// playback keeps them up so the user isn't left with a frozen, bare frame.
+    /// Re-arming cancels any previously scheduled hide.
+    private func scheduleAutoHide() {
+        autoHideTask?.cancel()
+        let task = DispatchWorkItem {
+            if fsVlc.isPlaying {
+                controlsVisible = false
+            }
+        }
+        autoHideTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + autoHideDelay, execute: task)
     }
 
     @ViewBuilder
