@@ -69,13 +69,24 @@ struct PlayerView: View {
             vlc.stop()
         }
         .fullScreenCover(isPresented: $isFullscreen, onDismiss: {
-            // Back to where the user was before fullscreen (usually portrait).
-            OrientationHelper.restore(orientationBeforeFullscreen)
+            // AVPlayer asked the system to rotate, so restore on the way out.
+            // VLC uses a fake-landscape layout and never rotated the device, so
+            // it has nothing to restore.
+            if video.isAVPlayerSupported {
+                OrientationHelper.restore(orientationBeforeFullscreen)
+            }
         }) {
             if let streamURL = video.streamURL {
                 fullscreenContent(streamURL)
-                    // Rotate to landscape once the fullscreen player is up.
-                    .onAppear { OrientationHelper.lockLandscape() }
+                    // AVPlayer fullscreen still requests a real device rotation.
+                    // VLC instead presents a rotated (fake-landscape) layout that
+                    // works even with the iPhone rotation lock on, so it does NOT
+                    // request a device rotation here.
+                    .onAppear {
+                        if video.isAVPlayerSupported {
+                            OrientationHelper.lockLandscape()
+                        }
+                    }
             }
         }
     }
@@ -110,12 +121,24 @@ struct PlayerView: View {
                 // at once: the inline player was torn down before this appeared,
                 // and this one tears down on dismiss, after which the inline
                 // player resumes. Position carries over via the shared per-URL
-                // `savedPositions` store. No padding — it fills the screen edge
-                // to edge as a real fullscreen video surface. The close button
-                // lives inside it so it auto-hides with the controls.
-                VLCFullscreenView(streamURL: streamURL) {
-                    isFullscreen = false
+                // `savedPositions` store. The close button lives inside it so it
+                // auto-hides with the controls.
+                //
+                // Fake-landscape: the device stays portrait (works even with the
+                // rotation lock on). We lay the player out at landscape
+                // dimensions — swapping the portrait width/height — then rotate
+                // it 90° and center it so it fills the screen looking like a real
+                // landscape fullscreen video. Controls and close button rotate
+                // with it, so they stay correctly oriented and tappable.
+                GeometryReader { geo in
+                    VLCFullscreenView(streamURL: streamURL) {
+                        isFullscreen = false
+                    }
+                    .frame(width: geo.size.height, height: geo.size.width)
+                    .rotationEffect(.degrees(90))
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
                 }
+                .ignoresSafeArea()
             }
         }
     }
@@ -525,23 +548,23 @@ private struct VLCFullscreenView: View {
     private let autoHideDelay: TimeInterval = 3
 
     var body: some View {
+        // Sized + rotated by the fake-landscape wrapper in `fullscreenContent`,
+        // so this view just fills the frame it's given. Safe-area handling lives
+        // on that wrapper; no `.ignoresSafeArea()` here or it would expand past
+        // the rotated frame in pre-rotation screen coordinates.
         ZStack {
             Color.black
-                .ignoresSafeArea()
 
-            // Video fills the whole screen; VLC preserves aspect internally and
-            // letterboxes against the black backdrop. No 16:9 box, no padding —
-            // this is the actual fullscreen surface.
+            // Video fills the frame; VLC preserves aspect internally and
+            // letterboxes against the black backdrop.
             VLCPlayerView(url: streamURL, controller: fsVlc)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea()
 
             // Full-area tap target to toggle controls. Must sit above the video
             // but below the controls so buttons still receive their own taps.
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture { toggleControls() }
-                .ignoresSafeArea()
 
             // State overlay (spinner / replay) centered over the video.
             overlay
@@ -565,8 +588,10 @@ private struct VLCFullscreenView: View {
                     }
                     Spacer()
                 }
-                .padding(.top, 12)
-                .padding(.leading, 16)
+                // Generous inset so the button clears the (now landscape) edge
+                // — notch side or home indicator depending on physical rotation.
+                .padding(.top, 16)
+                .padding(.leading, 24)
                 .transition(.opacity)
 
                 // Transport controls float over the bottom of the video on a
@@ -574,22 +599,19 @@ private struct VLCFullscreenView: View {
                 VStack {
                     Spacer()
                     controls
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 8)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 16)
                         .background(
                             LinearGradient(
                                 colors: [.clear, .black.opacity(0.55)],
                                 startPoint: .top,
                                 endPoint: .bottom
                             )
-                            .ignoresSafeArea(edges: .bottom)
                         )
                 }
                 .transition(.opacity)
             }
         }
-        // Only the black backdrop and video ignore the safe area; the close
-        // button and controls respect it so they clear the notch / home bar.
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .onAppear { scheduleAutoHide() }
         // The controller's media frees with the view; `teardown` also persists
