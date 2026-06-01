@@ -724,7 +724,47 @@ private struct VLCFullscreenView: View {
             .foregroundStyle(.white)
             .padding(.top, 6)
             .frame(maxWidth: .infinity)
+            .overlay(alignment: .leading) { subtitleButton }
             .overlay(alignment: .trailing) { ratioButton }
+        }
+    }
+
+    /// Subtitle track picker. Shown ONLY when the media actually has subtitle
+    /// tracks, so a video without subtitles never shows a dead control. Lists
+    /// "Off" plus each embedded track; the active choice gets a checkmark.
+    /// Re-arms the auto-hide timer so changing tracks doesn't hide the controls.
+    @ViewBuilder
+    private var subtitleButton: some View {
+        if fsVlc.hasSubtitles {
+            Menu {
+                Button {
+                    fsVlc.selectSubtitle(index: -1)
+                    if controlsVisible { scheduleAutoHide() }
+                } label: {
+                    Label("Off", systemImage: fsVlc.currentSubtitleIndex == -1 ? "checkmark" : "")
+                }
+                ForEach(fsVlc.subtitleTracks) { track in
+                    Button {
+                        fsVlc.selectSubtitle(index: track.index)
+                        if controlsVisible { scheduleAutoHide() }
+                    } label: {
+                        Label(
+                            track.name,
+                            systemImage: fsVlc.currentSubtitleIndex == track.index ? "checkmark" : ""
+                        )
+                    }
+                }
+            } label: {
+                Image(systemName: fsVlc.currentSubtitleIndex == -1
+                      ? "captions.bubble"
+                      : "captions.bubble.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(.black.opacity(0.45), in: Circle())
+                    .contentShape(Circle())
+            }
+            .padding(.leading, 4)
         }
     }
 

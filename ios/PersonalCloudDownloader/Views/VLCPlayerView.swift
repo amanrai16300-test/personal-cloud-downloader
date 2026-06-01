@@ -118,6 +118,34 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// so the thumb doesn't fight the playhead mid-drag.
     @Published var isScrubbing = false
 
+    // MARK: Subtitles
+
+    /// One selectable subtitle track: VLC's internal SPU index and its label.
+    /// Excludes VLC's synthetic "Disable" entry — that case is the dedicated
+    /// "Off" choice in the picker, represented by `currentSubtitleIndex == -1`.
+    struct SubtitleTrack: Identifiable {
+        let index: Int32
+        let name: String
+        var id: Int32 { index }
+    }
+
+    /// Real (non-Disable) embedded subtitle tracks discovered after the media
+    /// parses. Empty until tracks are known; drives whether the subtitle button
+    /// is shown at all, so no broken UI appears when a video has no subtitles.
+    @Published var subtitleTracks: [SubtitleTrack] = []
+
+    /// Currently selected SPU index. `-1` means subtitles off. Mirrors
+    /// `player.currentVideoSubTitleIndex` so the picker reflects reality.
+    @Published var currentSubtitleIndex: Int32 = -1
+
+    /// Convenience for the UI: only show the subtitle control when tracks exist.
+    var hasSubtitles: Bool { !subtitleTracks.isEmpty }
+
+    /// Guards the one-time auto-select: the first time real tracks are detected
+    /// we turn the first track on, but only once, so a later manual "Off" sticks.
+    /// Cleared on `start` / `replay` so a fresh load auto-selects again.
+    private var didAutoSelectSubtitle = false
+
     override init() {
         super.init()
         player.delegate = self
@@ -139,6 +167,10 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         if let saved = Self.savedPositions[url], saved > 0, saved < 1 {
             pendingResume = saved
         }
+
+        didAutoSelectSubtitle = false
+        subtitleTracks = []
+        currentSubtitleIndex = -1
 
         player.play()
     }
@@ -310,9 +342,50 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     func replay() {
         if let url = currentURL { Self.savedPositions[url] = nil }
         pendingResume = nil
+        didAutoSelectSubtitle = false
         playbackState = .loading
         player.stop()
         player.play()
+    }
+
+    // MARK: Subtitles
+
+    /// Read the player's current SPU track list and refresh `subtitleTracks`.
+    /// VLC exposes parallel arrays — `videoSubTitlesIndexes` (NSNumber SPU ids)
+    /// and `videoSubTitlesNames` (labels) — and includes a synthetic "Disable"
+    /// entry at index `-1`, which we drop (it's the dedicated "Off" choice).
+    /// Tracks only become known after the media parses, so this is called from
+    /// the time-changed delegate; it's idempotent and cheap to re-run.
+    ///
+    /// The first time real tracks appear, auto-select the first so embedded
+    /// subtitles show without the user hunting for a control (done once, guarded
+    /// by `didAutoSelectSubtitle`, so a later manual "Off" is respected).
+    private func refreshSubtitleTracks() {
+        let indexes = player.videoSubTitlesIndexes.compactMap { ($0 as? NSNumber)?.int32Value }
+        let names = player.videoSubTitlesNames.compactMap { $0 as? String }
+        guard indexes.count == names.count else { return }
+
+        let tracks = zip(indexes, names)
+            .filter { $0.0 >= 0 } // drop the synthetic "Disable" (-1) entry
+            .map { SubtitleTrack(index: $0.0, name: $0.1) }
+
+        if tracks.map(\.index) != subtitleTracks.map(\.index) {
+            subtitleTracks = tracks
+        }
+
+        if !didAutoSelectSubtitle, let first = tracks.first {
+            didAutoSelectSubtitle = true
+            selectSubtitle(index: first.index)
+        }
+
+        currentSubtitleIndex = player.currentVideoSubTitleIndex
+    }
+
+    /// Select an SPU track by VLC index, or pass `-1` to turn subtitles off.
+    /// Called by the picker and by the one-time auto-select.
+    func selectSubtitle(index: Int32) {
+        player.currentVideoSubTitleIndex = index
+        currentSubtitleIndex = index
     }
 
     // MARK: Seeking
@@ -395,6 +468,9 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
         // Video size is known now; recompute Fill zoom if it was deferred.
         reapplyAspectIfNeeded()
+
+        // SPU tracks are parsed by now; pick them up and auto-select once.
+        refreshSubtitleTracks()
 
         // Time advancing means real playback is underway: clear any stale
         // loading overlay even if no `.playing` state notification arrived.
