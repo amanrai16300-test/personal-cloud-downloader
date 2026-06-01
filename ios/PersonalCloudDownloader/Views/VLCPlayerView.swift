@@ -235,31 +235,119 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Try to fetch and parse a sidecar `.srt` beside the video — e.g.
     /// `…/Movie.mkv` → `…/Movie.srt`. Served by Nginx `/files/` with no backend
     /// change. On success the cues feed the SwiftUI overlay and native VLC SPU
-    /// is turned off (overlay is the sole source). On any failure (no file,
-    /// network, parse) the app silently keeps native embedded-subtitle behavior.
+    /// is turned off (overlay is the sole source).
+    ///
+    /// If the sidecar is missing (404), ask the backend to extract an embedded
+    /// text subtitle track into that `.srt` (see `requestSubtitleExtraction`),
+    /// then retry the fetch ONCE. On any failure (no file, no text track, no
+    /// ffmpeg, network, parse) the app silently keeps native embedded-subtitle
+    /// behavior — no error UI.
     private func fetchSidecarSubtitle(for videoURL: URL) {
         let srtURL = videoURL.deletingPathExtension().appendingPathExtension("srt")
         sidecarFetchURL = srtURL
+        fetchSidecarData(srtURL: srtURL, videoURL: videoURL, allowExtraction: true)
+    }
 
+    /// GET the `.srt`. 200 → activate overlay. 404 with `allowExtraction` →
+    /// trigger a backend extract then retry once (extraction disabled on the
+    /// retry so it can't loop). Anything else → silent native fallback.
+    private func fetchSidecarData(srtURL: URL, videoURL: URL, allowExtraction: Bool) {
         let task = URLSession.shared.dataTask(with: srtURL) { [weak self] data, response, _ in
             guard let self else { return }
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                  let data, let raw = String(data: data, encoding: .utf8) else { return }
-            let cues = SRTSubtitleParser.parse(raw)
-            guard !cues.isEmpty else { return }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
 
-            DispatchQueue.main.async {
-                // Ignore a response that arrived after the player moved on.
-                guard self.sidecarFetchURL == srtURL else { return }
-                self.sidecarCues = cues
-                self.hasSidecarSubtitle = true
-                // Overlay is the sole subtitle source: keep native VLC SPU off.
-                self.player.currentVideoSubTitleIndex = -1
-                self.currentSubtitleIndex = -1
-                self.updateCurrentCue()
+            if status == 200, let data, let raw = String(data: data, encoding: .utf8) {
+                self.activateSidecar(raw: raw, srtURL: srtURL)
+                return
+            }
+
+            // Missing sidecar: try a one-shot server-side extraction, then retry.
+            if status == 404, allowExtraction {
+                self.requestSubtitleExtraction(for: videoURL) { created in
+                    guard created else { return } // no_text_subtitles / failed → native
+                    // Only retry if the player hasn't moved on to another video.
+                    DispatchQueue.main.async {
+                        guard self.sidecarFetchURL == srtURL else { return }
+                        self.fetchSidecarData(srtURL: srtURL, videoURL: videoURL, allowExtraction: false)
+                    }
+                }
             }
         }
         task.resume()
+    }
+
+    /// Parse + activate sidecar cues on the main actor. Guarded so a response
+    /// for a previous video is ignored.
+    private func activateSidecar(raw: String, srtURL: URL) {
+        let cues = SRTSubtitleParser.parse(raw)
+        guard !cues.isEmpty else { return }
+        DispatchQueue.main.async {
+            guard self.sidecarFetchURL == srtURL else { return }
+            self.sidecarCues = cues
+            self.hasSidecarSubtitle = true
+            // Overlay is the sole subtitle source: keep native VLC SPU off.
+            self.player.currentVideoSubTitleIndex = -1
+            self.currentSubtitleIndex = -1
+            self.updateCurrentCue()
+        }
+    }
+
+    /// Ask the backend to extract an embedded text subtitle track into the
+    /// sidecar `.srt`. Derives the backend URL from the video URL: same scheme +
+    /// host, the FastAPI port (8000), endpoint `/api/subtitles/extract`. The
+    /// request body's `path` is the video path relative to the Nginx `/files/`
+    /// root (the components after the `files` segment). `completion(true)` only
+    /// when the server reports the `.srt` now exists (`extracted` / `exists`);
+    /// every other status or any failure → `completion(false)` → native
+    /// fallback. Nothing is hardcoded to a specific file or host.
+    private func requestSubtitleExtraction(for videoURL: URL, completion: @escaping (Bool) -> Void) {
+        guard let endpoint = backendExtractURL(for: videoURL),
+              let relativePath = filesRelativePath(of: videoURL) else {
+            completion(false)
+            return
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["path": relativePath])
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, _ in
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let status = obj["status"] as? String else {
+                completion(false)
+                return
+            }
+            completion(status == "extracted" || status == "exists")
+        }
+        task.resume()
+    }
+
+    /// Backend extract endpoint URL: the video URL's scheme + host with the
+    /// FastAPI port (8000) and the fixed path. Returns nil if the host is
+    /// unknown.
+    private func backendExtractURL(for videoURL: URL) -> URL? {
+        guard var components = URLComponents(url: videoURL, resolvingAgainstBaseURL: false),
+              components.host != nil else { return nil }
+        components.port = 8000
+        components.path = "/api/subtitles/extract"
+        components.query = nil
+        components.fragment = nil
+        return components.url
+    }
+
+    /// The video path relative to the Nginx `/files/` root — the path the
+    /// backend expects in the extract request. Takes the path components after
+    /// the first `files` segment, e.g. `/files/Show/Ep.mkv` → `Show/Ep.mkv`.
+    /// Returns nil if there is no `files` segment.
+    private func filesRelativePath(of videoURL: URL) -> String? {
+        let parts = videoURL.pathComponents.filter { $0 != "/" }
+        guard let filesIdx = parts.firstIndex(of: "files"), filesIdx + 1 < parts.count else {
+            return nil
+        }
+        return parts[(filesIdx + 1)...].joined(separator: "/")
     }
 
     /// Recompute the active sidecar cue from the player's current time. Cheap;
