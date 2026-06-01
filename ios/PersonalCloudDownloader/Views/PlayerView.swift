@@ -89,20 +89,20 @@ struct PlayerView: View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
 
-            Group {
-                if video.isAVPlayerSupported {
-                    avSurface
-                } else {
-                    // Fullscreen VLC runs on its OWN controller (see
-                    // `VLCFullscreenView`), not the inline `vlc`. The two never
-                    // play at once: the inline player was torn down before this
-                    // appeared, and this one tears down on dismiss, after which
-                    // the inline player resumes. Position carries over via the
-                    // shared per-URL `savedPositions` store.
-                    VLCFullscreenView(streamURL: streamURL)
-                }
+            if video.isAVPlayerSupported {
+                // AVPlayer keeps its framed 16:9 surface, just centered + padded.
+                avSurface
+                    .padding()
+            } else {
+                // Fullscreen VLC runs on its OWN controller (see
+                // `VLCFullscreenView`), not the inline `vlc`. The two never play
+                // at once: the inline player was torn down before this appeared,
+                // and this one tears down on dismiss, after which the inline
+                // player resumes. Position carries over via the shared per-URL
+                // `savedPositions` store. No padding — it fills the screen edge
+                // to edge as a real fullscreen video surface.
+                VLCFullscreenView(streamURL: streamURL)
             }
-            .padding()
 
             Button {
                 isFullscreen = false
@@ -506,15 +506,36 @@ private struct VLCFullscreenView: View {
     @StateObject private var fsVlc = VLCPlayerController()
 
     var body: some View {
-        VStack(spacing: 12) {
-            VLCPlayerView(url: streamURL, controller: fsVlc)
-                .frame(maxWidth: .infinity)
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .background(.black)
-                .overlay { overlay }
+        ZStack {
+            Color.black
 
-            controls
+            // Video fills the whole screen; VLC preserves aspect internally and
+            // letterboxes against the black backdrop. No 16:9 box, no padding —
+            // this is the actual fullscreen surface.
+            VLCPlayerView(url: streamURL, controller: fsVlc)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // State overlay (spinner / replay) centered over the video.
+            overlay
+
+            // Transport controls float over the bottom of the video on a scrim
+            // so they don't shrink the picture.
+            VStack {
+                Spacer()
+                controls
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 8)
+                    .background(
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.55)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .ignoresSafeArea(edges: .bottom)
+                    )
+            }
         }
+        .ignoresSafeArea()
         // The controller's media frees with the view; `teardown` also persists
         // position and stops audio so inline can resume cleanly.
         .onDisappear { fsVlc.teardown() }
@@ -568,7 +589,7 @@ private struct VLCFullscreenView: View {
                 Text(fsVlc.durationText)
             }
             .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.white.opacity(0.85))
 
             HStack(spacing: 40) {
                 transportButton(systemName: "gobackward.10", font: .title2) {
@@ -584,7 +605,7 @@ private struct VLCFullscreenView: View {
                     fsVlc.skipForward()
                 }
             }
-            .foregroundStyle(.tint)
+            .foregroundStyle(.white)
             .padding(.top, 6)
         }
     }
