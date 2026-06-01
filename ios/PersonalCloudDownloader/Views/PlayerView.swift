@@ -527,36 +527,46 @@ private struct VLCFullscreenView: View {
     var body: some View {
         ZStack {
             Color.black
+                .ignoresSafeArea()
 
             // Video fills the whole screen; VLC preserves aspect internally and
             // letterboxes against the black backdrop. No 16:9 box, no padding —
             // this is the actual fullscreen surface.
             VLCPlayerView(url: streamURL, controller: fsVlc)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
 
             // Full-area tap target to toggle controls. Must sit above the video
             // but below the controls so buttons still receive their own taps.
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture { toggleControls() }
+                .ignoresSafeArea()
 
             // State overlay (spinner / replay) centered over the video.
             overlay
 
             if controlsVisible {
-                // Close button, top-leading. Fades with the controls.
+                // Close button, top-leading. Fades with the controls. Large
+                // (≥44pt) tap target on a dark circle, inset from the top/leading
+                // safe area so it clears the notch/Dynamic Island and is easy to
+                // reach and hit.
                 VStack {
                     HStack {
                         Button(action: onClose) {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title)
-                                .foregroundStyle(.white, .black.opacity(0.4))
+                            Image(systemName: "xmark")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(.black.opacity(0.55), in: Circle())
+                                .contentShape(Circle())
                         }
                         Spacer()
                     }
                     Spacer()
                 }
-                .padding()
+                .padding(.top, 12)
+                .padding(.leading, 16)
                 .transition(.opacity)
 
                 // Transport controls float over the bottom of the video on a
@@ -578,7 +588,8 @@ private struct VLCFullscreenView: View {
                 .transition(.opacity)
             }
         }
-        .ignoresSafeArea()
+        // Only the black backdrop and video ignore the safe area; the close
+        // button and controls respect it so they clear the notch / home bar.
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .onAppear { scheduleAutoHide() }
         // The controller's media frees with the view; `teardown` also persists
