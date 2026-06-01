@@ -1,0 +1,45 @@
+name: iOS Build Check
+
+# Compile/link check only. No signing, no TestFlight, no App Store,
+# no deployment, no simulator UI test, no real device test.
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - feature/ios-companion-app
+
+jobs:
+  build:
+    name: Build iOS app (compile check)
+    runs-on: macos-15
+
+    defaults:
+      run:
+        working-directory: ios
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen if missing
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Install CocoaPods dependencies
+        run: pod install
+
+      - name: Build (no signing, simulator destination)
+        run: |
+          xcodebuild build \
+            -workspace PersonalCloudDownloader.xcworkspace \
+            -scheme PersonalCloudDownloader \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
