@@ -173,8 +173,8 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     ///
     /// Options use the real CLI form (`--name=value`), which `VLCLibrary(options:)`
     /// expects (NOT the bare keys the per-media dict API took):
-    ///   - `--freetype-rel-fontsize=32`    size = video-height / 32 → small,
-    ///     resolution-independent cinema text (bigger divisor = smaller text).
+    ///   - `--freetype-rel-fontsize=28`    size = video-height / 28 → compact
+    ///     cinema text, resolution-independent (bigger divisor = smaller text).
     ///   - `--freetype-color=16777215`     white text.
     ///   - `--freetype-opacity=255`        opaque text.
     ///   - `--freetype-outline-thickness=1` thin black outline (nPlayer-like).
@@ -186,7 +186,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// they are not forced. `sub-margin` is an INPUT option, so it stays per-media
     /// (see `start`) — it is the one subtitle option that DOES belong on the media.
     static let subtitleStyledLibrary: VLCLibrary = VLCLibrary(options: [
-        "--freetype-rel-fontsize=32",
+        "--freetype-rel-fontsize=28",
         "--freetype-color=16777215",
         "--freetype-opacity=255",
         "--freetype-outline-thickness=1",
@@ -205,7 +205,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         // `sub-margin` is an INPUT option (lifts subtitles off the very bottom so
         // they clear the controls/scrim), so it belongs on the media — unlike the
         // renderer `freetype-*` options, which live on the styled library above.
-        media.addOptions(["sub-margin": 24])
+        media.addOptions(["sub-margin": 48])
         player.media = media
 
         if let saved = Self.savedPositions[url], saved > 0, saved < 1 {
