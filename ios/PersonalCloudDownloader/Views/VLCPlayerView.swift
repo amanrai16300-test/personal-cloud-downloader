@@ -159,29 +159,39 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     /// libvlc FreeType subtitle-renderer options, set on the `VLCMedia` before
     /// playback so both the inline and fullscreen surfaces (same controller
-    /// class) render subtitles the same clean, cinema style:
-    ///   - `freetype-fontsize`           absolute px — modest, not VLC's huge default.
+    /// class) render subtitles the same clean, cinema style.
+    ///
+    /// SIZING — why the absolute `freetype-fontsize` was ignored: libvlc has a
+    /// SECOND size knob, `freetype-rel-fontsize`, that scales text as
+    /// `video-height / value` and, when set (its default is 16), OVERRIDES the
+    /// absolute pixel size. So a modest absolute fontsize did nothing — the
+    /// relative default (height/16 = huge) won. The fix is to drive size through
+    /// the relative knob with a LARGER divisor (bigger number = smaller text):
+    ///   - `freetype-rel-fontsize`       32 → video-height / 32, small cinema
+    ///     text that scales correctly on any device resolution. (Absolute
+    ///     `freetype-fontsize` is intentionally NOT set, so it can't fight this.)
+    ///
+    /// STYLE:
     ///   - `freetype-color`              16777215 = white text.
     ///   - `freetype-opacity`            255 = fully opaque text.
-    ///   - `freetype-outline-thickness`  thin black outline for legibility over
-    ///     any background, instead of a solid box.
+    ///   - `freetype-outline-thickness`  1 = THIN black outline (was 2, too heavy).
     ///   - `freetype-outline-color`      0 = black outline.
     ///   - `freetype-outline-opacity`    255 = solid outline.
     ///   - `freetype-shadow-opacity`     0 = no drop shadow (outline does the job).
     ///   - `freetype-background-opacity` 0 = NO solid black rectangle behind text.
-    ///   - `sub-margin`                  px lifted off the very bottom so subtitles
-    ///     clear the bottom controls/scrim.
+    ///   - `sub-margin`                  24px lifted off the bottom so subtitles
+    ///     clear the controls/scrim without sitting too high.
     /// Center-bottom placement is libvlc's default, so it is not forced here.
     private static let subtitleStyleOptions: [String: Any] = [
-        "freetype-fontsize": 22,
+        "freetype-rel-fontsize": 32,
         "freetype-color": 16777215,
         "freetype-opacity": 255,
-        "freetype-outline-thickness": 2,
+        "freetype-outline-thickness": 1,
         "freetype-outline-color": 0,
         "freetype-outline-opacity": 255,
         "freetype-shadow-opacity": 0,
         "freetype-background-opacity": 0,
-        "sub-margin": 40,
+        "sub-margin": 24,
     ]
 
     /// Load + auto-play the stream once a drawable is attached. If this URL was
