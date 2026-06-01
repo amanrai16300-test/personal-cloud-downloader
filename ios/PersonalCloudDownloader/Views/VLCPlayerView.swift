@@ -27,31 +27,25 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// position against the right key without the call site passing it back.
     private var currentURL: URL?
 
-    /// Professional, nPlayer-style fullscreen aspect modes. The cycle button
-    /// steps through them in order. Implementation splits two families:
-    ///   - `fit` / `zoom`: VLC `scaleFactor` (aspect-preserving, no distortion).
-    ///   - `r16x9` / `r4x3` / `r1x1` / `stretch`: VLC `videoAspectRatio` string,
-    ///     forcing a chosen display aspect (intentional, selectable ratios).
-    /// `fit` is the safe default and must never make the picture look worse.
-    /// NOTE: Aspect Fill ("Zoom") was removed. Native VLC subtitles cannot stay
-    /// screen-stable with VLC crop Zoom or SwiftUI drawable scaling — both move
-    /// the subtitle with the picture. A true nPlayer-style Aspect Fill with
-    /// stable subtitles needs a separate subtitle overlay solution later.
+    /// The two fullscreen scaling modes the ratio button toggles between.
+    /// Deliberately minimal — no 16:9 / 4:3 / 1:1 / Stretch — for a clean,
+    /// professional Fit ⇄ Cover behavior like nPlayer.
+    ///   - `fit`:   whole video, original ratio, letterboxed (black bars OK).
+    ///   - `cover`: Aspect Fill — fill the fullscreen area, keep the original
+    ///     ratio (no stretch), crop the overflowing edges. Implemented with VLC
+    ///     `videoCropGeometry` set to the surface aspect, which is the cleanest
+    ///     true cover. NOTE: cropping moves VLC's subtitle anchor, so subtitles
+    ///     can shift in Cover — accepted for now (Cover correctness prioritized);
+    ///     a stable-subtitle Aspect Fill needs a separate overlay later.
     enum AspectMode: String, CaseIterable {
-        case fit        // Whole video, letterboxed. Default.
-        case r16x9      // Force 16:9 display aspect.
-        case r4x3       // Force 4:3 display aspect.
-        case r1x1       // Force 1:1 display aspect.
-        case stretch    // Force the surface's aspect — intentional full-stretch.
+        case fit
+        case cover
 
-        /// Short label shown on the cycle button.
+        /// Short label shown on the toggle button.
         var label: String {
             switch self {
             case .fit: return "Fit"
-            case .r16x9: return "16:9"
-            case .r4x3: return "4:3"
-            case .r1x1: return "1:1"
-            case .stretch: return "Stretch"
+            case .cover: return "Cover"
             }
         }
 
@@ -59,27 +53,13 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         var icon: String {
             switch self {
             case .fit: return "rectangle.arrowtriangle.2.inward"
-            case .stretch: return "arrow.up.left.and.arrow.down.right"
-            default: return "aspectratio"
+            case .cover: return "rectangle.arrowtriangle.2.outward"
             }
         }
 
-        /// Fixed "W:H" display aspect for the ratio modes; nil for fit/zoom
-        /// (handled via scaleFactor) and for stretch (uses the surface ratio).
-        var fixedAspect: (w: Int, h: Int)? {
-            switch self {
-            case .r16x9: return (16, 9)
-            case .r4x3: return (4, 3)
-            case .r1x1: return (1, 1)
-            default: return nil
-            }
-        }
-
-        /// Next mode in the cycle.
+        /// Next mode in the toggle (Fit ⇄ Cover).
         var next: AspectMode {
-            let all = Self.allCases
-            let i = all.firstIndex(of: self)!
-            return all[(i + 1) % all.count]
+            self == .fit ? .cover : .fit
         }
     }
 
@@ -265,34 +245,32 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// per-frame retry runs only until it succeeds once.
     private var aspectApplied = false
 
-    /// Advance to the next mode and apply it. `drawableSize` is the current
-    /// fullscreen surface, used for the Zoom and Stretch math. Called from the
-    /// fullscreen ratio button.
+    /// Toggle Fit ⇄ Cover and apply. `drawableSize` is the current fake-landscape
+    /// fullscreen surface (width/height already swapped by the caller), used as
+    /// the crop aspect for Cover. Called from the fullscreen ratio button.
     func cycleAspect(drawableSize: CGSize) {
         aspectMode = aspectMode.next
         aspectApplied = false
         applyAspect(drawableSize: drawableSize)
     }
 
-    /// Apply `aspectMode`. Distinct families, never stacked — every call first
-    /// resets scaleFactor, videoAspectRatio AND videoCropGeometry:
-    ///   - `fit`:    everything cleared → whole video, letterboxed (default).
-    ///   - `r16x9` / `r4x3` / `r1x1`: videoAspectRatio = fixed "W:H" string.
-    ///   - `stretch`: videoAspectRatio = the surface's ratio → full stretch.
-    /// The aspect-ratio strings can be ignored if set before the video track is
-    /// parsed, so `reapplyAspectIfNeeded` re-applies once playback is underway.
+    /// Apply `aspectMode`. Every call first resets to a clean slate so modes
+    /// never stack:
+    ///   - `fit`:   everything cleared → whole video, original ratio, letterboxed.
+    ///   - `cover`: `videoCropGeometry` = the surface's "W:H" → true Aspect Fill.
+    ///     VLC crops the SOURCE to the surface aspect, then fits the crop to the
+    ///     drawable: fills the screen, preserves the video's own ratio (no
+    ///     stretch), crops the overflowing edges. Independent of `videoSize`.
+    /// The crop string can be ignored if set before the video track is parsed,
+    /// so `reapplyAspectIfNeeded` re-applies it once playback is underway.
     ///
-    /// NO ZOOM / ASPECT FILL: neither VLC `videoCropGeometry` nor a SwiftUI
-    /// `scaleEffect` on the drawable can fill the screen while keeping native
-    /// subtitles screen-stable — both move the subtitle with the picture. Zoom
-    /// was removed; only aspect-preserving / fixed-ratio modes remain, which do
-    /// not disturb the subtitle anchor. A real nPlayer-style Aspect Fill with
-    /// stable subtitles needs a separate subtitle overlay solution later.
+    /// SUBTITLE NOTE: VLC crop moves the subtitle anchor, so native subtitles
+    /// may shift in Cover. Accepted for now — Cover correctness is prioritized.
+    /// A stable-subtitle Aspect Fill needs a separate subtitle overlay later.
     func applyAspect(drawableSize: CGSize) {
         aspectDrawableSize = drawableSize
 
-        // Clean slate so modes don't combine. Crop is never used now, but clear
-        // it defensively in case an older media set it.
+        // Clean slate so Fit and Cover never combine.
         player.scaleFactor = 0
         player.videoAspectRatio = nil
         player.videoCropGeometry = nil
@@ -301,23 +279,18 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         case .fit:
             break // defaults above
 
-        case .r16x9, .r4x3, .r1x1:
-            if let r = aspectMode.fixedAspect {
-                setCString("\(r.w):\(r.h)") { player.videoAspectRatio = $0 }
-            }
-
-        case .stretch:
+        case .cover:
+            // Crop the source to the on-screen surface aspect → Aspect Fill.
             let w = Int(drawableSize.width.rounded())
             let h = Int(drawableSize.height.rounded())
             guard w > 0, h > 0 else { return }
-            setCString("\(w):\(h)") { player.videoAspectRatio = $0 }
+            setCString("\(w):\(h)") { player.videoCropGeometry = $0 }
         }
     }
 
-    /// Re-apply the current mode once playback is underway. Aspect strings set
+    /// Re-apply the current mode once playback is underway. The crop string set
     /// before the video track is parsed can be dropped by VLC; re-applying after
-    /// the first frames (when `videoSize` is known) makes them reliable.
-    /// Harmless for fixed-ratio / stretch modes.
+    /// the first frames (when `videoSize` is non-zero) makes Cover reliable.
     private func reapplyAspectIfNeeded() {
         guard !aspectApplied, aspectDrawableSize != .zero, aspectMode != .fit else { return }
         // videoSize becoming non-zero signals the track is parsed.
