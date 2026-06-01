@@ -478,3 +478,52 @@ STREAM_BASE_URL=http://100.92.146.101:8090/files
 - Optional: polish the UI after more real phone testing.
 - Optional: reduce polling delay later if needed.
 - Optional: add authentication only if access ever goes beyond Tailscale.
+
+# PROJECT_CONTEXT.md iOS App Update Snippet
+
+Created: 2026-06-01  
+Project: Personal Cloud Downloader
+
+---
+
+Copy this section into:
+
+```text
+docs/PROJECT_CONTEXT.md
+```
+
+Do not replace the whole file.
+
+---
+
+```md
+## iOS App Direction
+
+A future private iOS companion app is planned for the Personal Cloud Downloader.
+
+Direction:
+- Existing web downloader at `/app/` must remain unchanged and usable from laptop/PC.
+- The iOS app is an extra mobile layer, not a replacement.
+- App sections: Home, Downloader, Videos, qBittorrent, Files, Settings/Tailscale helper.
+- Downloader keeps full file/download management controls: add magnet, progress, completed files, date/time, size, stream/download, copy VLC link, delete.
+- Videos is only a clean nPlayer/VLC-style video library and player.
+- Videos should play from the existing Nginx `/files/` streaming links.
+- qBittorrent and Files open inside the app through web views.
+- Tailscale remains separate, with app helper/shortcut only.
+- Oracle remains the downloader/storage/streaming server.
+- iPhone must not run torrent downloading locally.
+- Use SwiftUI, WKWebView, URLSession/Codable, and later MobileVLCKit/VLC-style player.
+- Use Taste Skill for design creation/redesign guidance.
+- Use Impeccable for design critique/polish/harden.
+- Keep everything private through Tailscale and legal-files-only.
+
+Full docs:
+- `docs/IOS_APP_DIRECTION_LOCK.md`
+- `docs/IOS_APP_PLAN.md`
+- `docs/IOS_APP_ARCHITECTURE.md`
+- `docs/IOS_APP_DESIGN_SYSTEM.md`
+- `docs/IOS_APP_DEVELOPMENT_PHASES.md`
+- `docs/IOS_APP_API_CONTRACT.md`
+- `docs/IOS_APP_AI_PROMPTS.md`
+- `docs/IOS_APP_CHECKLISTS.md`
+```
