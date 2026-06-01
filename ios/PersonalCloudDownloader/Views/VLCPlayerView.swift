@@ -13,6 +13,18 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Seconds the skip-back / skip-forward buttons jump.
     static let skipInterval: Int32 = 10
 
+    /// Last-watched fractional position (0.0–1.0) per video URL, kept for the
+    /// life of the app session. The controller is a `@StateObject` on
+    /// `PlayerView`, so it is destroyed and recreated each time the player
+    /// screen is opened — instance state cannot survive that. This static store
+    /// does, letting the same video resume where it left off. Cleared for a URL
+    /// only when its playback truly ends (see `replay`/end handling).
+    private static var savedPositions: [URL: Float] = [:]
+
+    /// The URL currently loaded, captured in `start` so `stop` can persist the
+    /// position against the right key without the call site passing it back.
+    private var currentURL: URL?
+
     /// High-level playback lifecycle, derived from `VLCMediaPlayerState`.
     /// Drives which overlay (spinner / error / replay) `PlayerView` shows.
     enum PlaybackState {
@@ -51,11 +63,32 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         player.delegate = self
     }
 
-    /// Load + auto-play the stream once a drawable is attached.
+    /// Fractional position to restore once the freshly-loaded media becomes
+    /// seekable. Set in `start` from `savedPositions`; applied and cleared in the
+    /// delegate callbacks. VLC ignores `player.position` writes before the stream
+    /// is seekable, so the seek is deferred rather than done inline in `start`.
+    private var pendingResume: Float?
+
+    /// Load + auto-play the stream once a drawable is attached. If this URL was
+    /// watched earlier in the session, resume from the saved position.
     func start(url: URL) {
         guard player.media == nil else { return }
+        currentURL = url
         player.media = VLCMedia(url: url)
+
+        if let saved = Self.savedPositions[url], saved > 0, saved < 1 {
+            pendingResume = saved
+        }
+
         player.play()
+    }
+
+    /// Apply a deferred resume seek once VLC reports the stream seekable. No-op
+    /// when nothing is pending. Cleared after a successful seek so it fires once.
+    private func applyPendingResumeIfReady() {
+        guard let target = pendingResume, player.isSeekable else { return }
+        player.position = target
+        pendingResume = nil
     }
 
     func togglePlayPause() {
@@ -67,12 +100,28 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }
 
     func stop() {
+        persistPosition()
         player.stop()
+    }
+
+    /// Save the current fractional position for this session so reopening the
+    /// same video resumes here. Skips meaningless values: not seekable, NaN/out
+    /// of range, at the very start, or essentially at the end (treated as done).
+    private func persistPosition() {
+        guard let url = currentURL, player.isSeekable else { return }
+        let pos = player.position
+        guard pos.isFinite, pos > 0.001, pos < 0.999 else {
+            Self.savedPositions[url] = nil
+            return
+        }
+        Self.savedPositions[url] = pos
     }
 
     /// Restart from the beginning after the media ended. Used by the
     /// end-of-playback replay button.
     func replay() {
+        if let url = currentURL { Self.savedPositions[url] = nil }
+        pendingResume = nil
         playbackState = .loading
         player.stop()
         player.play()
@@ -112,7 +161,15 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     func mediaPlayerStateChanged(_ aNotification: Notification) {
         isPlaying = player.isPlaying
+        applyPendingResumeIfReady()
         updatePlaybackState()
+
+        // Reaching the end clears any saved position so a later open of this
+        // video starts fresh rather than resuming at ~100%.
+        if player.state == .ended, let url = currentURL {
+            Self.savedPositions[url] = nil
+        }
+
         refreshTimes()
     }
 
@@ -143,6 +200,11 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }
 
     func mediaPlayerTimeChanged(_ aNotification: Notification) {
+        // Stream is seekable by now; apply a deferred resume if one is pending.
+        // Belt-and-braces alongside the state-changed hook: whichever fires
+        // first while seekable wins, and the flag clears so it runs once.
+        applyPendingResumeIfReady()
+
         // Time advancing means real playback is underway: clear any stale
         // loading overlay even if no `.playing` state notification arrived.
         if playbackState == .loading && player.isPlaying {
@@ -181,22 +243,32 @@ struct VLCPlayerView: UIViewRepresentable {
     let url: URL
     let controller: VLCPlayerController
 
+    /// True when this instance is the fullscreen surface. The inline surface and
+    /// the `fullScreenCover` surface are mounted at the same time, both sharing
+    /// one `controller` / `VLCMediaPlayer`, which can render into only ONE
+    /// drawable. This flag decides ownership: when fullscreen is presented the
+    /// fullscreen instance owns the drawable; otherwise the inline instance does.
+    /// Without it, the inline view's `updateUIView` (fired on the cover's present
+    /// relayout) would steal the drawable back and blank the fullscreen video.
+    var isActiveSurface: Bool = true
+
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
         container.backgroundColor = .black
 
-        controller.player.drawable = container
+        if isActiveSurface {
+            controller.player.drawable = container
+        }
         controller.start(url: url)
 
         return container
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
-        // Re-claim the drawable for whichever view is currently mounted.
-        // A single `VLCMediaPlayer` renders into one drawable at a time, so when
-        // the same controller is shared between the inline surface and the
-        // fullScreenCover, the most recently presented view must take it back.
-        // Idempotent: a no-op when this view already owns the drawable.
+        // Only the active surface may own the drawable. This keeps the inline
+        // instance from re-claiming it while the fullScreenCover is presented
+        // (and vice versa). Idempotent: no-op when ownership already matches.
+        guard isActiveSurface else { return }
         if controller.player.drawable as? UIView !== uiView {
             controller.player.drawable = uiView
         }

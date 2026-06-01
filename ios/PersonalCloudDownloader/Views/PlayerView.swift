@@ -84,7 +84,7 @@ struct PlayerView: View {
                     avSurface
                 } else {
                     VStack(spacing: 12) {
-                        vlcSurface(streamURL)
+                        vlcSurface(streamURL, inFullscreen: true)
                         vlcControls(streamURL)
                     }
                 }
@@ -317,9 +317,20 @@ struct PlayerView: View {
 
     /// Shared VLC rendering surface (16:9) with state overlay and the
     /// enter-fullscreen button. Reused by inline and fullscreen presentations.
-    private func vlcSurface(_ streamURL: URL) -> some View {
+    ///
+    /// `inFullscreen` marks which call site this surface belongs to (the inline
+    /// view or the `fullScreenCover`). It drives drawable ownership: the inline
+    /// surface is the active renderer only while NOT fullscreen, the fullscreen
+    /// surface only while fullscreen. Both instances are mounted simultaneously
+    /// and share one `VLCMediaPlayer`, which can render into one drawable at a
+    /// time, so exactly one must hold it or the fullscreen video goes blank.
+    private func vlcSurface(_ streamURL: URL, inFullscreen: Bool) -> some View {
         framedSurface(
-            VLCPlayerView(url: streamURL, controller: vlc)
+            VLCPlayerView(
+                url: streamURL,
+                controller: vlc,
+                isActiveSurface: inFullscreen == isFullscreen
+            )
                 .frame(maxWidth: .infinity)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(.black)
@@ -393,7 +404,7 @@ struct PlayerView: View {
 
     private func vlcPlayback(_ streamURL: URL) -> some View {
         VStack(spacing: Layout.sectionSpacing) {
-            vlcSurface(streamURL)
+            vlcSurface(streamURL, inFullscreen: false)
 
             vlcControls(streamURL)
 
