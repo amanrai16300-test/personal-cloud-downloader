@@ -83,10 +83,13 @@ struct PlayerView: View {
                 if video.isAVPlayerSupported {
                     avSurface
                 } else {
-                    VStack(spacing: 12) {
-                        vlcSurface(streamURL, liveVideo: true)
-                        vlcControls(streamURL)
-                    }
+                    // Fullscreen VLC runs on its OWN controller (see
+                    // `VLCFullscreenView`), not the inline `vlc`. The two never
+                    // play at once: the inline player was torn down before this
+                    // appeared, and this one tears down on dismiss, after which
+                    // the inline player resumes. Position carries over via the
+                    // shared per-URL `savedPositions` store.
+                    VLCFullscreenView(streamURL: streamURL)
                 }
             }
             .padding()
@@ -103,8 +106,14 @@ struct PlayerView: View {
     }
 
     /// Top-trailing button overlaid on a player surface to enter fullscreen.
+    /// For VLC, tear the inline player down first (persists position, stops
+    /// audio, frees the drawable) so the fullscreen surface — a SEPARATE VLC
+    /// controller — starts clean with no second player still holding audio.
     private var fullscreenButton: some View {
         Button {
+            if !video.isAVPlayerSupported {
+                vlc.teardown()
+            }
             isFullscreen = true
         } label: {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -467,6 +476,119 @@ struct PlayerView: View {
         }
         .padding(Layout.screenPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Standalone fullscreen VLC surface with its OWN `VLCPlayerController`,
+/// independent of the inline player. The inline player is torn down before this
+/// appears and resumes after it's gone, so only one VLC player ever holds audio.
+/// Playback position carries across via the shared per-URL `savedPositions`
+/// store: this view's controller resumes from where inline left off, and on
+/// dismiss it persists its own position for inline to pick back up.
+///
+/// Self-contained controls (scrub slider, time labels, ±10s, play/pause) bound
+/// to its own controller — it does not touch `PlayerView`'s inline `vlc`.
+private struct VLCFullscreenView: View {
+    let streamURL: URL
+
+    @StateObject private var fsVlc = VLCPlayerController()
+
+    var body: some View {
+        VStack(spacing: 12) {
+            VLCPlayerView(url: streamURL, controller: fsVlc)
+                .frame(maxWidth: .infinity)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .background(.black)
+                .overlay { overlay }
+
+            controls
+        }
+        // The controller's media frees with the view; `teardown` also persists
+        // position and stops audio so inline can resume cleanly.
+        .onDisappear { fsVlc.teardown() }
+    }
+
+    @ViewBuilder
+    private var overlay: some View {
+        switch fsVlc.playbackState {
+        case .loading:
+            ZStack {
+                Color.black.opacity(0.35)
+                ProgressView().tint(.white).scaleEffect(1.4)
+            }
+        case .failed, .ended:
+            ZStack {
+                Color.black.opacity(0.7)
+                Button {
+                    fsVlc.replay()
+                } label: {
+                    VStack(spacing: 10) {
+                        Image(systemName: "arrow.counterclockwise.circle.fill")
+                            .font(.system(size: 52))
+                        Text("Replay").font(.headline)
+                    }
+                    .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+            }
+        case .ready:
+            EmptyView()
+        }
+    }
+
+    private var controls: some View {
+        VStack(spacing: 6) {
+            Slider(
+                value: $fsVlc.progress,
+                in: 0...1,
+                onEditingChanged: { editing in
+                    if editing {
+                        fsVlc.beginScrubbing()
+                    } else {
+                        fsVlc.endScrubbing(to: fsVlc.progress)
+                    }
+                }
+            )
+
+            HStack {
+                Text(fsVlc.currentTimeText)
+                Spacer()
+                Text(fsVlc.durationText)
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+
+            HStack(spacing: 40) {
+                transportButton(systemName: "gobackward.10", font: .title2) {
+                    fsVlc.skipBackward()
+                }
+                transportButton(
+                    systemName: fsVlc.isPlaying ? "pause.fill" : "play.fill",
+                    font: .system(size: 44)
+                ) {
+                    fsVlc.togglePlayPause()
+                }
+                transportButton(systemName: "goforward.10", font: .title2) {
+                    fsVlc.skipForward()
+                }
+            }
+            .foregroundStyle(.tint)
+            .padding(.top, 6)
+        }
+    }
+
+    private func transportButton(
+        systemName: String,
+        font: Font,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(font)
+                .frame(width: 56, height: 56)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

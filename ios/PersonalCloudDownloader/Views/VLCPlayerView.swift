@@ -129,6 +129,21 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         player.stop()
     }
 
+    /// Fully release this controller's playback: persist position, stop audio,
+    /// detach the drawable, and drop the media so a later `start` reloads from
+    /// scratch. Used when handing playback OFF to a separate controller (inline
+    /// → fullscreen and back) so two VLC players never run audio at once, and so
+    /// the reclaiming controller can re-`start` cleanly. Position survives via
+    /// the shared `savedPositions` store, keyed by URL.
+    func teardown() {
+        persistPosition()
+        player.stop()
+        if let view = attachedDrawable {
+            detachDrawable(view)
+        }
+        player.media = nil
+    }
+
     /// Save the current fractional position for this session so reopening the
     /// same video resumes here. Skips meaningless values: not seekable, NaN/out
     /// of range, at the very start, or essentially at the end (treated as done).
