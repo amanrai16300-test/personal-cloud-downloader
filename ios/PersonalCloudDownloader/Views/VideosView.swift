@@ -70,12 +70,22 @@ struct VideosView: View {
         .contentShape(Rectangle())
     }
 
+    // iOS 16-compatible empty state. `ContentUnavailableView` is iOS 17+, and
+    // the deployment target is 16.0, so this is built from plain views instead.
     private var emptyView: some View {
-        ContentUnavailableView(
-            "No Videos",
-            systemImage: "play.slash",
-            description: Text("No completed video files were found.")
-        )
+        VStack(spacing: 12) {
+            Image(systemName: "play.slash")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("No Videos")
+                .font(.headline)
+            Text("No completed video files were found.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func errorView(_ message: String) -> some View {
