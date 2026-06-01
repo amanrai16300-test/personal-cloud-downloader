@@ -394,6 +394,10 @@ struct PlayerView: View {
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(.black)
                 .overlay { vlcStateOverlay }
+                // Sidecar `.srt` overlay: SwiftUI-drawn, so it stays
+                // bottom-centered regardless of VLC Fit/Cover (Cover crop would
+                // shift native VLC subtitles). Only shows when a sidecar exists.
+                .overlay(alignment: .bottom) { SubtitleOverlay(text: vlc.currentSubtitleText) }
                 .overlay(alignment: .topTrailing) {
                     if !isFullscreen { fullscreenButton }
                 }
@@ -577,6 +581,18 @@ private struct VLCFullscreenView: View {
             // State overlay (spinner / replay) centered over the video.
             overlay
 
+            // Sidecar `.srt` subtitle overlay — SwiftUI-drawn inside this ZStack,
+            // so it rotates with the fake-landscape layout, stays horizontal on
+            // screen, and holds its bottom-center position in BOTH Fit and Cover
+            // (unlike native VLC subtitles, which shift with the Cover crop).
+            // Lifts a little when controls are up so it clears the scrim/buttons.
+            VStack {
+                Spacer()
+                SubtitleOverlay(text: fsVlc.currentSubtitleText)
+                    .padding(.bottom, controlsVisible ? 96 : 28)
+            }
+            .animation(.easeInOut(duration: 0.2), value: controlsVisible)
+
             if controlsVisible {
                 // Close button, top-leading. Fades with the controls. Large
                 // (≥44pt) tap target on a dark circle, inset from the top/leading
@@ -729,13 +745,33 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// Subtitle track picker. Shown ONLY when the media actually has subtitle
-    /// tracks, so a video without subtitles never shows a dead control. Lists
-    /// "Off" plus each embedded track; the active choice gets a checkmark.
-    /// Re-arms the auto-hide timer so changing tracks doesn't hide the controls.
+    /// Subtitle picker. Shown ONLY when subtitles are available, so a video
+    /// without any never shows a dead control. Re-arms the auto-hide timer so
+    /// changing the choice doesn't hide the controls.
+    ///   - Sidecar `.srt` present → simple "Subtitles / Off" toggle for the
+    ///     stable SwiftUI overlay (native tracks are hidden — overlay is sole
+    ///     source).
+    ///   - Otherwise → "Off" plus each embedded native track, checkmark on the
+    ///     active one.
     @ViewBuilder
     private var subtitleButton: some View {
-        if fsVlc.hasSubtitles {
+        if fsVlc.hasSidecarSubtitle {
+            Menu {
+                Button {
+                    fsVlc.setSidecarEnabled(true)
+                    if controlsVisible { scheduleAutoHide() }
+                } label: {
+                    Label("Subtitles", systemImage: fsVlc.sidecarEnabled ? "checkmark" : "")
+                }
+                Button {
+                    fsVlc.setSidecarEnabled(false)
+                    if controlsVisible { scheduleAutoHide() }
+                } label: {
+                    Label("Off", systemImage: fsVlc.sidecarEnabled ? "" : "checkmark")
+                }
+            } label: { subtitleButtonLabel(on: fsVlc.sidecarEnabled) }
+            .padding(.leading, 4)
+        } else if fsVlc.hasSubtitles {
             Menu {
                 Button {
                     fsVlc.selectSubtitle(index: -1)
@@ -754,18 +790,20 @@ private struct VLCFullscreenView: View {
                         )
                     }
                 }
-            } label: {
-                Image(systemName: fsVlc.currentSubtitleIndex == -1
-                      ? "captions.bubble"
-                      : "captions.bubble.fill")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(.black.opacity(0.45), in: Circle())
-                    .contentShape(Circle())
-            }
+            } label: { subtitleButtonLabel(on: fsVlc.currentSubtitleIndex != -1) }
             .padding(.leading, 4)
         }
+    }
+
+    /// Shared captions-bubble icon for the subtitle picker; filled when subs are
+    /// currently on.
+    private func subtitleButtonLabel(on: Bool) -> some View {
+        Image(systemName: on ? "captions.bubble.fill" : "captions.bubble")
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(.black.opacity(0.45), in: Circle())
+            .contentShape(Circle())
     }
 
     /// Cycles Fit → Zoom → 16:9 → 4:3 → 1:1 → Stretch and shows the current
@@ -804,6 +842,36 @@ private struct VLCFullscreenView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// nPlayer/cinema-style subtitle line drawn in SwiftUI: white text, a thin black
+/// outline (four offset shadow copies), no background box, centered, compact
+/// 1–2 lines. Renders nothing when `text` is nil/empty so no broken UI shows.
+/// Used as an overlay on the VLC surface so subtitles stay screen-stable in
+/// Cover mode (native VLC subtitles shift with the crop).
+private struct SubtitleOverlay: View {
+    let text: String?
+
+    var body: some View {
+        if let text, !text.isEmpty {
+            Text(text)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                // Thin black outline via four 1pt offset shadows — legible over
+                // any background without a solid box.
+                .shadow(color: .black, radius: 0.5, x: 1, y: 0)
+                .shadow(color: .black, radius: 0.5, x: -1, y: 0)
+                .shadow(color: .black, radius: 0.5, x: 0, y: 1)
+                .shadow(color: .black, radius: 0.5, x: 0, y: -1)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
     }
 }
 

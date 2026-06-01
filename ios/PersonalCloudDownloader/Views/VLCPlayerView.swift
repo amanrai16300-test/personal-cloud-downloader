@@ -129,6 +129,31 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Cleared on `start` / `replay` so a fresh load auto-selects again.
     private var didAutoSelectSubtitle = false
 
+    // MARK: Sidecar (.srt) subtitle overlay — Phase A
+
+    /// Parsed cues from a sidecar `.srt` fetched beside the video, empty when no
+    /// sidecar was found. When present, these drive a SwiftUI overlay that stays
+    /// screen-stable in Cover mode (native VLC subtitles shift with the crop).
+    private var sidecarCues: [SRTCue] = []
+
+    /// True once a sidecar `.srt` was found and parsed for the current video.
+    /// When true the UI uses the overlay as the SOLE subtitle source and native
+    /// VLC SPU is kept off, so the picker is a simple Subtitles/Off toggle.
+    @Published var hasSidecarSubtitle = false
+
+    /// Whether the sidecar overlay is currently shown. The picker's "Off" sets
+    /// this false; selecting "Subtitles" sets it true. Only meaningful when
+    /// `hasSidecarSubtitle` is true. Defaults on so found subtitles auto-show.
+    @Published var sidecarEnabled = true
+
+    /// The cue text to render right now, or nil when no cue is active / overlay
+    /// off. Updated from the existing time-change delegate, so no extra timer.
+    @Published var currentSubtitleText: String?
+
+    /// Tracks the in-flight sidecar fetch so a teardown/reload can ignore a late
+    /// response for a previous URL.
+    private var sidecarFetchURL: URL?
+
     override init() {
         super.init()
         player.delegate = self
@@ -197,7 +222,63 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         subtitleTracks = []
         currentSubtitleIndex = -1
 
+        // Reset sidecar state and look for a `.srt` beside the video.
+        sidecarCues = []
+        hasSidecarSubtitle = false
+        sidecarEnabled = true
+        currentSubtitleText = nil
+        fetchSidecarSubtitle(for: url)
+
         player.play()
+    }
+
+    /// Try to fetch and parse a sidecar `.srt` beside the video — e.g.
+    /// `…/Movie.mkv` → `…/Movie.srt`. Served by Nginx `/files/` with no backend
+    /// change. On success the cues feed the SwiftUI overlay and native VLC SPU
+    /// is turned off (overlay is the sole source). On any failure (no file,
+    /// network, parse) the app silently keeps native embedded-subtitle behavior.
+    private func fetchSidecarSubtitle(for videoURL: URL) {
+        let srtURL = videoURL.deletingPathExtension().appendingPathExtension("srt")
+        sidecarFetchURL = srtURL
+
+        let task = URLSession.shared.dataTask(with: srtURL) { [weak self] data, response, _ in
+            guard let self else { return }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let data, let raw = String(data: data, encoding: .utf8) else { return }
+            let cues = SRTSubtitleParser.parse(raw)
+            guard !cues.isEmpty else { return }
+
+            DispatchQueue.main.async {
+                // Ignore a response that arrived after the player moved on.
+                guard self.sidecarFetchURL == srtURL else { return }
+                self.sidecarCues = cues
+                self.hasSidecarSubtitle = true
+                // Overlay is the sole subtitle source: keep native VLC SPU off.
+                self.player.currentVideoSubTitleIndex = -1
+                self.currentSubtitleIndex = -1
+                self.updateCurrentCue()
+            }
+        }
+        task.resume()
+    }
+
+    /// Recompute the active sidecar cue from the player's current time. Cheap;
+    /// driven by the existing time-change delegate, so no separate timer.
+    private func updateCurrentCue() {
+        guard hasSidecarSubtitle, sidecarEnabled else {
+            if currentSubtitleText != nil { currentSubtitleText = nil }
+            return
+        }
+        let timeMs = Int(player.time.intValue)
+        let text = SRTSubtitleParser.cue(at: timeMs, in: sidecarCues)?.text
+        if text != currentSubtitleText { currentSubtitleText = text }
+    }
+
+    /// Toggle the sidecar overlay on/off from the picker. Keeps native SPU off
+    /// either way (overlay is the only subtitle source when a sidecar exists).
+    func setSidecarEnabled(_ on: Bool) {
+        sidecarEnabled = on
+        updateCurrentCue()
     }
 
     /// Apply a deferred resume seek once VLC reports the stream seekable. No-op
@@ -375,6 +456,18 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// subtitles show without the user hunting for a control (done once, guarded
     /// by `didAutoSelectSubtitle`, so a later manual "Off" is respected).
     private func refreshSubtitleTracks() {
+        // A sidecar `.srt` overlay takes over entirely: don't expose native
+        // tracks and don't auto-select one, so there are no duplicate subtitles
+        // and the picker stays a simple Subtitles/Off toggle.
+        if hasSidecarSubtitle {
+            if !subtitleTracks.isEmpty { subtitleTracks = [] }
+            if player.currentVideoSubTitleIndex != -1 {
+                player.currentVideoSubTitleIndex = -1
+            }
+            currentSubtitleIndex = -1
+            return
+        }
+
         let indexes = player.videoSubTitlesIndexes.compactMap { ($0 as? NSNumber)?.int32Value }
         let names = player.videoSubTitlesNames.compactMap { $0 as? String }
         guard indexes.count == names.count else { return }
@@ -485,6 +578,9 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
         // SPU tracks are parsed by now; pick them up and auto-select once.
         refreshSubtitleTracks()
+
+        // Advance the sidecar overlay cue to match the current time, if any.
+        updateCurrentCue()
 
         // Time advancing means real playback is underway: clear any stale
         // loading overlay even if no `.playing` state notification arrived.
