@@ -2,6 +2,72 @@
 
 ## 2026-06-02
 
+- iOS VLC subtitle overlay + backend extraction milestone (branch `feature/ios-companion-app`), runtime-verified on a real iPhone.
+- VLC sidecar `.srt` SwiftUI subtitle overlay implemented (rendered by the app, not native VLC SPU).
+- Backend `POST /api/subtitles/extract` endpoint implemented: extracts the first text subtitle track (English-preferred) into `<video>.srt` beside the video; Nginx serves it.
+- ffmpeg/ffprobe extraction verified working on the Oracle server (`ffmpeg` added to the server install checklist).
+- iOS flow verified end-to-end: `.srt` 404 → POST `/api/subtitles/extract` → backend creates `.srt` → iOS retries `.srt` once → SwiftUI overlay activates.
+- Cover / Aspect Fill now keeps subtitles stable, because subtitles render as a SwiftUI overlay (screen-space) instead of native VLC SPU (which shifts with the crop).
+- Native VLC embedded subtitle fallback still exists when extraction is unavailable.
+- Image-based subtitles (PGS/VobSub/DVD/DVB) remain unsupported for extraction without OCR; those videos keep the native fallback.
+- The fullscreen ratio control is a Fit ⇄ Cover toggle (earlier 16:9 / 4:3 / 1:1 / Stretch / crop-Zoom modes were removed).
+- Remaining issues (NOT done):
+  - qBittorrent WebView error still remains.
+  - Full device runtime checklist (`docs/IOS_DEVICE_TEST_CHECKLIST.md`) not confirmed complete unless verified separately.
+
+## 2026-06-02
+
+- iOS VLC fullscreen/player runtime-verified milestone (branch `feature/ios-companion-app`).
+- Verified on a real iPhone:
+  - Inline VLC playback works.
+  - VLC resume position works (same video resumes during the session).
+  - VLC fullscreen video now renders correctly.
+  - The separate fullscreen VLC player approach fixed the blank fullscreen / drawable issue.
+  - Closing fullscreen returns to inline playback correctly.
+  - VLC fullscreen controls auto-hide works.
+  - VLC fullscreen close button accessibility was improved and verified.
+  - VLC fake-landscape fullscreen works, including with device rotation lock ON.
+  - VLC aspect/ratio selector exists (Fit, Zoom/Aspect Fill, 16:9, 4:3, 1:1, Stretch).
+  - Zoom / Aspect Fill was improved and is acceptable for now.
+- Remaining issues (NOT done):
+  - Subtitles still not working.
+  - qBittorrent WebView error still remains.
+  - Full device runtime checklist (`docs/IOS_DEVICE_TEST_CHECKLIST.md`) not completely finished.
+- No backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+
+## 2026-06-02
+
+- iOS personal iPhone install success milestone (branch `feature/ios-companion-app`).
+- The unsigned IPA artifact was downloaded from GitHub Actions.
+- The app was installed on the user's iPhone using Sideloadly on Windows.
+- Apple Devices app was needed so Windows/Sideloadly could detect the iPhone.
+- Developer Mode was required and enabled on the iPhone.
+- The app now opens on the iPhone.
+- This confirms personal iPhone install success.
+- This does NOT confirm runtime app behavior yet.
+- Tailscale runtime access, WKWebView tabs, Videos fetch, AVPlayer playback, VLC playback, fullscreen behavior, landscape behavior, and the full device checklist are still pending.
+- Runtime testing must continue using `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
+- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+- No new iOS feature was added.
+
+## 2026-06-02
+
+- iOS unsigned device IPA workflow verification milestone (branch `feature/ios-companion-app`).
+- The manual GitHub Actions workflow `.github/workflows/ios-unsigned-ipa.yml` passed.
+- The workflow successfully built a real-device iPhone archive.
+- The workflow successfully created an unsigned IPA artifact.
+- MobileVLCKit arm64 device link is now verified by CI.
+- This confirms device build/link success only.
+- The IPA is still unsigned.
+- The app is not installed on iPhone yet.
+- Sideloadly/AltStore install is still pending.
+- Real iPhone runtime testing is still NOT complete.
+- AVPlayer runtime playback, VLC runtime playback, fullscreen behavior, Tailscale runtime access, and the real device checklist are still pending.
+- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+- No new iOS feature was added.
+
+## 2026-06-02
+
 - iOS unsigned device IPA workflow creation milestone (branch `feature/ios-companion-app`).
 - New workflow created: `.github/workflows/ios-unsigned-ipa.yml`.
 - Purpose: manual GitHub Actions workflow to build a real-device unsigned iPhone IPA artifact for Sideloadly/AltStore.

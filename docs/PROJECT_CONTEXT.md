@@ -787,3 +787,71 @@ Full docs:
 - Real iPhone install/runtime testing is still NOT complete.
 - No iOS Swift code, `project.yml`, `Podfile`, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
 - No new iOS feature was added.
+
+## iOS App Unsigned Device IPA Workflow Verification Status (after unsigned device IPA workflow creation)
+
+- The manual GitHub Actions workflow `.github/workflows/ios-unsigned-ipa.yml` passed.
+- The workflow successfully built a real-device iPhone archive.
+- The workflow successfully created an unsigned IPA artifact.
+- MobileVLCKit arm64 device link is now verified by CI.
+- This confirms device build/link success only.
+- The IPA is still unsigned.
+- The app is not installed on iPhone yet.
+- Sideloadly/AltStore install is still pending.
+- Real iPhone runtime testing is still NOT complete.
+- AVPlayer runtime playback, VLC runtime playback, fullscreen behavior, Tailscale runtime access, and the real device checklist are still pending.
+- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+- No new iOS feature was added.
+
+## iOS App Personal iPhone Install Success Status (after unsigned device IPA workflow verification)
+
+- The unsigned IPA artifact was downloaded from GitHub Actions.
+- The app was installed on the user's iPhone using Sideloadly on Windows.
+- The Apple Devices app was needed so Windows/Sideloadly could detect the iPhone.
+- Developer Mode was required and enabled on the iPhone.
+- The app now opens on the iPhone.
+- This confirms personal iPhone install success.
+- This does NOT confirm runtime app behavior yet.
+- Tailscale runtime access, WKWebView tabs, Videos fetch, AVPlayer playback, VLC playback, fullscreen behavior, landscape behavior, and the full device checklist are still pending.
+- Runtime testing must continue using `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
+- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+- No new iOS feature was added.
+
+## iOS App VLC Fullscreen/Player Runtime-Verified Status (after personal iPhone install success)
+
+- Real iPhone runtime testing verified these VLC player fixes.
+- Inline VLC playback works.
+- VLC resume position works (same video resumes during the session).
+- VLC fullscreen video now renders correctly.
+- The separate fullscreen VLC player approach fixed the blank fullscreen / drawable issue.
+- Closing fullscreen returns to inline playback correctly.
+- VLC fullscreen controls auto-hide works.
+- VLC fullscreen close button accessibility was improved and verified.
+- VLC fake-landscape fullscreen works, including with device rotation lock ON.
+- VLC aspect/ratio selector exists (Fit, Zoom/Aspect Fill, 16:9, 4:3, 1:1, Stretch).
+- Zoom / Aspect Fill was improved and is acceptable for now.
+- Remaining issues (NOT done):
+  - Subtitles still not working.
+  - qBittorrent WebView error still remains.
+  - The full device runtime checklist (`docs/IOS_DEVICE_TEST_CHECKLIST.md`) is not completely finished yet.
+- No backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
+
+## iOS App VLC Subtitle Overlay + Backend Extraction Status (after VLC fullscreen/player runtime-verified)
+
+- VLC subtitles now work via an app-rendered sidecar `.srt` SwiftUI overlay, runtime-verified on a real iPhone.
+- The overlay is drawn by the app (screen-space), NOT native VLC SPU, so it stays bottom-centered and stable in Cover / Aspect Fill (native VLC subtitles shift with the crop).
+- The fullscreen ratio control is now a Fit ⇄ Cover toggle; the earlier 16:9 / 4:3 / 1:1 / Stretch / crop-Zoom modes were removed.
+- Backend change WAS made this milestone: new endpoint `POST /api/subtitles/extract`.
+  - It validates the path under the completed-downloads dir and rejects traversal.
+  - It uses `ffprobe` to detect subtitle streams and `ffmpeg` to convert the first text track (English-preferred) into `<video>.srt` beside the video.
+  - It returns statuses: `extracted`, `exists`, `no_text_subtitles`, `image_subtitles_only`, `ffmpeg_unavailable`, `extraction_failed`.
+  - It does not overwrite an existing `.srt`, and it does not run in the background or hook download completion.
+- `ffmpeg`/`ffprobe` extraction works on the Oracle server (`ffmpeg` was added to the server install checklist in `scripts/install-server.sh`).
+- iOS flow verified end-to-end: `.srt` 404 → `POST /api/subtitles/extract` → backend creates `.srt` → iOS retries `.srt` once → SwiftUI overlay activates.
+- Native VLC embedded subtitle fallback still exists when extraction is unavailable.
+- Image-based subtitles (PGS/VobSub/DVD/DVB) remain unsupported for extraction without OCR; those videos keep the native fallback.
+- New files: `ios/PersonalCloudDownloader/Services/SRTSubtitleParser.swift`. Changed: `VLCPlayerView.swift`, `PlayerView.swift`, `backend/main.py`, `scripts/install-server.sh`.
+- Remaining issues (NOT done):
+  - qBittorrent WebView error still remains.
+  - The full device runtime checklist (`docs/IOS_DEVICE_TEST_CHECKLIST.md`) is not confirmed complete unless verified separately.
+- No frontend web app, qBittorrent, or Tailscale behavior was changed.
