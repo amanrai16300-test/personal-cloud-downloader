@@ -16,6 +16,7 @@ on:
   push:
     branches:
       - feature/ios-companion-app
+      - feature/video-player-ui-polish
 
 jobs:
   unsigned-ipa:
