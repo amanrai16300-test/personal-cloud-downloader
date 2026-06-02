@@ -795,7 +795,7 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// nPlayer-style top bar: centered wall clock above close • elapsed • title • remaining, with timeline overlaid on the nav edge.
+    /// nPlayer-style top bar: centered wall clock above close + timeline-backed elapsed • title • remaining.
     /// Flat, with a light top-down scrim for legibility (no material) so it reads
     /// over any frame without heavy chrome. The native iOS status bar is hidden,
     /// and the wall clock/playback times live here.
@@ -806,32 +806,15 @@ private struct VLCFullscreenView: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            ZStack(alignment: .bottom) {
-                HStack(spacing: 12) {
-                    Button(action: closeFullscreen) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Text(fsVlc.currentTimeText)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.85))
-
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
+            HStack(spacing: 0) {
+                Button(action: closeFullscreen) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity)
-
-                    Text(fsVlc.remainingTimeText)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
 
                 TimelineSlider(
                     progress: $fsVlc.progress,
@@ -841,7 +824,27 @@ private struct VLCFullscreenView: View {
                         if controlsVisible { scheduleAutoHide() }
                     }
                 )
-                .frame(height: 28)
+                .overlay {
+                    HStack(spacing: 12) {
+                        Text(fsVlc.currentTimeText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.95))
+
+                        Text(title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity)
+
+                        Text(fsVlc.remainingTimeText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.95))
+                    }
+                    .padding(.horizontal, 12)
+                    .allowsHitTesting(false)
+                }
+                .frame(height: 44)
             }
         }
         .padding(.leading, 16 + safeInsets.leading)
@@ -1004,10 +1007,9 @@ private struct VLCFullscreenView: View {
     }
 }
 
-/// nPlayer-style scrub timeline: a thin dim full-width track with a yellow
-/// "watched" fill and a larger invisible drag target. Replaces the system
-/// `Slider` for full control over the filled/unfilled look. Seek behavior is
-/// unchanged — it drives the same controller scrub callbacks:
+/// nPlayer-style scrub timeline: a full-height dim area with a yellow "watched"
+/// fill. Replaces the system `Slider` for full control over the filled/unfilled
+/// look. Seek behavior is unchanged — it drives the same controller scrub callbacks:
 ///   - `onScrubBegan` once when a drag starts (freezes live progress updates),
 ///   - `onScrubEnded(fraction)` when the drag ends (performs the seek).
 /// While dragging it updates the bound `progress` so the fill tracks the
@@ -1021,8 +1023,6 @@ private struct TimelineSlider: View {
     /// once and maps subsequent moves to the live fill.
     @State private var dragging = false
 
-    private let trackHeight: CGFloat = 4
-
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
@@ -1031,14 +1031,13 @@ private struct TimelineSlider: View {
 
             ZStack(alignment: .leading) {
                 // Unfilled (remaining) track — dim.
-                Capsule()
-                    .fill(.white.opacity(0.28))
-                    .frame(height: trackHeight)
+                Rectangle()
+                    .fill(.black.opacity(0.42))
 
                 // Watched (filled) track — yellow.
-                Capsule()
+                Rectangle()
                     .fill(.yellow)
-                    .frame(width: fillWidth, height: trackHeight)
+                    .frame(width: fillWidth)
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle()) // full-height tap/drag target
