@@ -109,6 +109,11 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Total media length, e.g. "24:10". "--:--" until parsed.
     @Published var durationText = "--:--"
 
+    /// Time remaining, formatted like "-08:08" for the fullscreen top bar.
+    /// Read-only display value derived from the player clock — no effect on
+    /// playback. "--:--" until both current time and duration are known.
+    @Published var remainingTimeText = "--:--"
+
     /// Fractional progress 0.0–1.0. Bound to the scrub slider, so it is also
     /// the drag value while scrubbing.
     @Published var progress: Double = 0
@@ -723,8 +728,14 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
         if let length = player.media?.length, length.intValue > 0 {
             durationText = length.stringValue ?? "--:--"
+            // Remaining = duration - elapsed, formatted via VLCTime so it matches
+            // the elapsed/duration formatting (MM:SS or HH:MM:SS).
+            let remainingMs = max(0, length.intValue - player.time.intValue)
+            let remaining = VLCTime(int: remainingMs).stringValue ?? "--:--"
+            remainingTimeText = "-\(remaining)"
         } else {
             durationText = "--:--"
+            remainingTimeText = "--:--"
         }
 
         // Don't move the slider thumb while the user is dragging it.

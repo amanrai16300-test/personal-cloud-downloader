@@ -167,6 +167,7 @@ struct PlayerView: View {
                     // drawable size so VLC's Fill zoom matches the surface.
                     VLCFullscreenView(
                         streamURL: streamURL,
+                        title: video.displayName,
                         drawableSize: CGSize(width: geo.size.height, height: geo.size.width),
                         onClose: { isFullscreen = false }
                     )
@@ -593,6 +594,8 @@ struct PlayerView: View {
 /// to its own controller — it does not touch `PlayerView`'s inline `vlc`.
 private struct VLCFullscreenView: View {
     let streamURL: URL
+    /// Clean video title shown centered in the top bar (e.g. the filename).
+    let title: String
     /// Size of the (rotated) fullscreen surface, used to compute the Fill zoom
     /// so it matches what's on screen.
     let drawableSize: CGSize
@@ -643,49 +646,19 @@ private struct VLCFullscreenView: View {
             VStack {
                 Spacer()
                 SubtitleOverlay(text: fsVlc.currentSubtitleText)
-                    .padding(.bottom, controlsVisible ? 96 : 28)
+                    .padding(.bottom, controlsVisible ? 116 : 28)
             }
             .animation(.easeInOut(duration: 0.2), value: controlsVisible)
 
             if controlsVisible {
-                // Close button, top-leading. Fades with the controls. Large
-                // (≥44pt) tap target on a dark circle, inset from the top/leading
-                // safe area so it clears the notch/Dynamic Island and is easy to
-                // reach and hit.
-                VStack {
-                    HStack {
-                        Button(action: closeFullscreen) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .background(.black.opacity(0.55), in: Circle())
-                                .contentShape(Circle())
-                        }
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                // Generous inset so the button clears the (now landscape) edge
-                // — notch side or home indicator depending on physical rotation.
-                .padding(.top, 16)
-                .padding(.leading, 24)
-                .transition(.opacity)
-
-                // Transport controls float over the bottom of the video on a
-                // scrim so they don't shrink the picture.
-                VStack {
-                    Spacer()
-                    controls
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 16)
-                        .background(
-                            LinearGradient(
-                                colors: [.clear, .black.opacity(0.55)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
+                // nPlayer-style chrome: a translucent top bar (close, times,
+                // title, subtitle menu) and a translucent bottom bar (scrub +
+                // transport), each pinned to its edge, plus a floating Fit/Cover
+                // pill on the right. All fade together with the controls.
+                VStack(spacing: 0) {
+                    topBar
+                    Spacer(minLength: 0)
+                    bottomBar
                 }
                 .transition(.opacity)
             }
@@ -765,8 +738,62 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    private var controls: some View {
-        VStack(spacing: 6) {
+    /// Translucent top bar: close • elapsed • title • remaining • subtitle menu.
+    /// A thin material with a fading scrim keeps the text legible over any frame
+    /// while still letting the video read through.
+    private var topBar: some View {
+        HStack(spacing: 16) {
+            Button(action: closeFullscreen) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Text(fsVlc.currentTimeText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.9))
+
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity)
+
+            Text(fsVlc.remainingTimeText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.9))
+
+            // "More" area: the subtitle menu when subtitles exist, else a
+            // fixed-width spacer so the title stays optically centered.
+            Group {
+                if fsVlc.hasSidecarSubtitle || fsVlc.hasSubtitles {
+                    subtitleButton
+                } else {
+                    Color.clear.frame(width: 44, height: 44)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.6), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .background(.ultraThinMaterial.opacity(0.5))
+        )
+    }
+
+    /// Translucent bottom bar: full-width scrub slider with the transport row
+    /// centered beneath it, and the Fit/Cover pill floating at the trailing edge.
+    private var bottomBar: some View {
+        VStack(spacing: 10) {
             Slider(
                 value: $fsVlc.progress,
                 in: 0...1,
@@ -778,24 +805,15 @@ private struct VLCFullscreenView: View {
                     }
                 }
             )
+            .tint(.white)
 
-            HStack {
-                Text(fsVlc.currentTimeText)
-                Spacer()
-                Text(fsVlc.durationText)
-            }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.white.opacity(0.85))
-
-            // Transport stays centered; the ratio button sits in the bottom-
-            // right corner near the controls without crowding the time row.
-            HStack(spacing: 40) {
+            HStack(spacing: 44) {
                 transportButton(systemName: "gobackward.10", font: .title2) {
                     fsVlc.skipBackward()
                 }
                 transportButton(
                     systemName: fsVlc.isPlaying ? "pause.fill" : "play.fill",
-                    font: .system(size: 44)
+                    font: .system(size: 42)
                 ) {
                     fsVlc.togglePlayPause()
                 }
@@ -804,11 +822,20 @@ private struct VLCFullscreenView: View {
                 }
             }
             .foregroundStyle(.white)
-            .padding(.top, 6)
             .frame(maxWidth: .infinity)
-            .overlay(alignment: .leading) { subtitleButton }
             .overlay(alignment: .trailing) { ratioButton }
         }
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
+        .padding(.bottom, 14)
+        .background(
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.6)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .background(.ultraThinMaterial.opacity(0.5))
+        )
     }
 
     /// Subtitle picker. Shown ONLY when subtitles are available, so a video
