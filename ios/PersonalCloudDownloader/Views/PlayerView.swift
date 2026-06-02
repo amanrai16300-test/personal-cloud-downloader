@@ -656,11 +656,11 @@ private struct VLCFullscreenView: View {
             VLCPlayerView(url: streamURL, controller: fsVlc)
                 .frame(width: landscapeSize.width, height: landscapeSize.height)
 
-            // Full-area tap target to toggle controls. Above the video, below the
-            // bars/buttons so those still receive their own taps.
+            // Full-area tap/swipe target. Above the video, below the bars/buttons
+            // so direct drags on the top timeline still go to the timeline.
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture { toggleControls() }
+                .gesture(videoAreaGesture)
 
             // State overlay (spinner / replay) centered over the video.
             overlay
@@ -734,6 +734,25 @@ private struct VLCFullscreenView: View {
         }
     }
 
+    private var videoAreaGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                let isHorizontalSwipe = abs(horizontal) >= 44 && abs(horizontal) > abs(vertical) * 1.5
+
+                if isHorizontalSwipe {
+                    if horizontal > 0 {
+                        fsVlc.skipForward()
+                    } else {
+                        fsVlc.skipBackward()
+                    }
+                } else {
+                    toggleControls()
+                }
+            }
+    }
+
     /// Hide the controls after `autoHideDelay`, but only while playing — paused
     /// playback keeps them up so the user isn't left with a frozen, bare frame.
     /// Re-arming cancels any previously scheduled hide.
@@ -776,7 +795,7 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// nPlayer-style top bar: centered wall clock above close • elapsed • title • remaining • subtitle/menu • timeline.
+    /// nPlayer-style top bar: centered wall clock above timeline above close • elapsed • title • remaining.
     /// Flat, with a light top-down scrim for legibility (no material) so it reads
     /// over any frame without heavy chrome. The native iOS status bar is hidden,
     /// and the wall clock/playback times live here.
@@ -786,6 +805,16 @@ private struct VLCFullscreenView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(maxWidth: .infinity, alignment: .center)
+
+            TimelineSlider(
+                progress: $fsVlc.progress,
+                onScrubBegan: { fsVlc.beginScrubbing() },
+                onScrubEnded: { fraction in
+                    fsVlc.endScrubbing(to: fraction)
+                    if controlsVisible { scheduleAutoHide() }
+                }
+            )
+            .frame(height: 28)
 
             HStack(spacing: 12) {
                 Button(action: closeFullscreen) {
@@ -811,27 +840,7 @@ private struct VLCFullscreenView: View {
                 Text(fsVlc.remainingTimeText)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.85))
-
-                // "More" area: the subtitle menu when subtitles exist, else a
-                // fixed-width spacer so the title stays optically centered.
-                Group {
-                    if fsVlc.hasSidecarSubtitle || fsVlc.hasSubtitles {
-                        subtitleButton
-                    } else {
-                        Color.clear.frame(width: 44, height: 44)
-                    }
-                }
             }
-
-            TimelineSlider(
-                progress: $fsVlc.progress,
-                onScrubBegan: { fsVlc.beginScrubbing() },
-                onScrubEnded: { fraction in
-                    fsVlc.endScrubbing(to: fraction)
-                    if controlsVisible { scheduleAutoHide() }
-                }
-            )
-            .frame(height: 20)
         }
         .padding(.leading, 16 + safeInsets.leading)
         .padding(.trailing, 16 + safeInsets.trailing)
@@ -868,6 +877,15 @@ private struct VLCFullscreenView: View {
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
+        .overlay(alignment: .leading) {
+            Group {
+                if fsVlc.hasSidecarSubtitle || fsVlc.hasSubtitles {
+                    subtitleButton
+                } else {
+                    Color.clear.frame(width: 44, height: 44)
+                }
+            }
+        }
         .overlay(alignment: .trailing) { ratioButton }
         .padding(.leading, 16 + safeInsets.leading)
         .padding(.trailing, 16 + safeInsets.trailing)
@@ -1001,7 +1019,7 @@ private struct TimelineSlider: View {
     /// once and maps subsequent moves to the live fill.
     @State private var dragging = false
 
-    private let trackHeight: CGFloat = 2
+    private let trackHeight: CGFloat = 4
 
     var body: some View {
         GeometryReader { geo in
