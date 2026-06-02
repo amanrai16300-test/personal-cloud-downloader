@@ -795,7 +795,7 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// nPlayer-style top bar: centered wall clock above timeline above close • elapsed • title • remaining.
+    /// nPlayer-style top bar: centered wall clock above close • elapsed • title • remaining, with timeline overlaid on the nav edge.
     /// Flat, with a light top-down scrim for legibility (no material) so it reads
     /// over any frame without heavy chrome. The native iOS status bar is hidden,
     /// and the wall clock/playback times live here.
@@ -806,40 +806,42 @@ private struct VLCFullscreenView: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            TimelineSlider(
-                progress: $fsVlc.progress,
-                onScrubBegan: { fsVlc.beginScrubbing() },
-                onScrubEnded: { fraction in
-                    fsVlc.endScrubbing(to: fraction)
-                    if controlsVisible { scheduleAutoHide() }
-                }
-            )
-            .frame(height: 28)
+            ZStack(alignment: .bottom) {
+                HStack(spacing: 12) {
+                    Button(action: closeFullscreen) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
 
-            HStack(spacing: 12) {
-                Button(action: closeFullscreen) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 17, weight: .semibold))
+                    Text(fsVlc.currentTimeText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.85))
+
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity)
+
+                    Text(fsVlc.remainingTimeText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.85))
                 }
-                .buttonStyle(.plain)
 
-                Text(fsVlc.currentTimeText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.85))
-
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity)
-
-                Text(fsVlc.remainingTimeText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.85))
+                TimelineSlider(
+                    progress: $fsVlc.progress,
+                    onScrubBegan: { fsVlc.beginScrubbing() },
+                    onScrubEnded: { fraction in
+                        fsVlc.endScrubbing(to: fraction)
+                        if controlsVisible { scheduleAutoHide() }
+                    }
+                )
+                .frame(height: 28)
             }
         }
         .padding(.leading, 16 + safeInsets.leading)
