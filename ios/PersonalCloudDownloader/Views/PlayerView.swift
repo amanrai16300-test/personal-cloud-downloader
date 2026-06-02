@@ -776,12 +776,17 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// nPlayer-style top bar: close • wall clock • elapsed • title • remaining • subtitle/menu • timeline.
+    /// nPlayer-style top bar: centered wall clock above close • elapsed • title • remaining • subtitle/menu • timeline.
     /// Flat, with a light top-down scrim for legibility (no material) so it reads
     /// over any frame without heavy chrome. The native iOS status bar is hidden,
     /// and the wall clock/playback times live here.
     private var topBar: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 2) {
+            Text(wallClockText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .center)
+
             HStack(spacing: 12) {
                 Button(action: closeFullscreen) {
                     Image(systemName: "xmark")
@@ -791,10 +796,6 @@ private struct VLCFullscreenView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-
-                Text(wallClockText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.9))
 
                 Text(fsVlc.currentTimeText)
                     .font(.caption.monospacedDigit())
@@ -835,7 +836,7 @@ private struct VLCFullscreenView: View {
         .padding(.leading, 16 + safeInsets.leading)
         .padding(.trailing, 16 + safeInsets.trailing)
         .padding(.top, 6 + safeInsets.top)
-        .padding(.bottom, 8)
+        .padding(.bottom, 0)
         .background(
             LinearGradient(
                 colors: [.black.opacity(0.55), .clear],
@@ -983,13 +984,13 @@ private struct VLCFullscreenView: View {
     }
 }
 
-/// nPlayer-style scrub timeline: a dim full-width track with a tinted "watched"
-/// fill and a clean draggable thumb. Replaces the system `Slider` for full
-/// control over the filled/unfilled look. Seek behavior is unchanged — it drives
-/// the same controller scrub callbacks:
+/// nPlayer-style scrub timeline: a thin dim full-width track with a yellow
+/// "watched" fill and a larger invisible drag target. Replaces the system
+/// `Slider` for full control over the filled/unfilled look. Seek behavior is
+/// unchanged — it drives the same controller scrub callbacks:
 ///   - `onScrubBegan` once when a drag starts (freezes live progress updates),
 ///   - `onScrubEnded(fraction)` when the drag ends (performs the seek).
-/// While dragging it updates the bound `progress` so the fill/thumb track the
+/// While dragging it updates the bound `progress` so the fill tracks the
 /// finger; the controller suppresses its own progress writes during the drag.
 private struct TimelineSlider: View {
     @Binding var progress: Double
@@ -1000,8 +1001,7 @@ private struct TimelineSlider: View {
     /// once and maps subsequent moves to the live fill.
     @State private var dragging = false
 
-    private let trackHeight: CGFloat = 3
-    private let thumbSize: CGFloat = 12
+    private let trackHeight: CGFloat = 2
 
     var body: some View {
         GeometryReader { geo in
@@ -1015,18 +1015,10 @@ private struct TimelineSlider: View {
                     .fill(.white.opacity(0.28))
                     .frame(height: trackHeight)
 
-                // Watched (filled) track — tinted.
+                // Watched (filled) track — yellow.
                 Capsule()
-                    .fill(.tint)
+                    .fill(.yellow)
                     .frame(width: fillWidth, height: trackHeight)
-
-                // Thumb — clean white circle centered on the playhead, kept
-                // inside the track bounds at the extremes.
-                Circle()
-                    .fill(.white)
-                    .frame(width: thumbSize, height: thumbSize)
-                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-                    .offset(x: min(max(fillWidth - thumbSize / 2, 0), width - thumbSize))
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle()) // full-height tap/drag target
