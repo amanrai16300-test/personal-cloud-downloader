@@ -93,12 +93,10 @@ struct PlayerView: View {
             vlc.stop()
         }
         .fullScreenCover(isPresented: $isFullscreen, onDismiss: {
-            // AVPlayer asked the system to rotate, so restore on the way out.
-            // VLC uses a fake-landscape layout and never rotated the device, so
-            // it has nothing to restore.
-            if video.isAVPlayerSupported {
-                OrientationHelper.restore(orientationBeforeFullscreen)
-            }
+            // BOTH engines now use real landscape orientation (VLC dropped the
+            // old fake-landscape rotation so the iOS status bar rotates with it),
+            // so restore the captured orientation on the way out for both.
+            OrientationHelper.restore(orientationBeforeFullscreen)
             // Direct-open mode: the cover has finished dismissing and orientation
             // is restored, so now pop back to the Videos list. Popping here
             // (rather than at the close tap) avoids tearing the cover down
@@ -109,14 +107,12 @@ struct PlayerView: View {
         }) {
             if let streamURL = video.streamURL {
                 fullscreenContent(streamURL)
-                    // AVPlayer fullscreen still requests a real device rotation.
-                    // VLC instead presents a rotated (fake-landscape) layout that
-                    // works even with the iPhone rotation lock on, so it does NOT
-                    // request a device rotation here.
+                    // Both engines request a real landscape rotation on open via
+                    // `requestGeometryUpdate` (works even with the device rotation
+                    // lock on), so the status bar and layout are genuinely
+                    // landscape rather than a rotated portrait.
                     .onAppear {
-                        if video.isAVPlayerSupported {
-                            OrientationHelper.lockLandscape()
-                        }
+                        OrientationHelper.lockLandscape()
                     }
             }
         }
@@ -155,38 +151,21 @@ struct PlayerView: View {
                 // `savedPositions` store. The close button lives inside it so it
                 // auto-hides with the controls.
                 //
-                // Fake-landscape: the device stays portrait (works even with the
-                // rotation lock on), and the user TILTS the phone 90° to watch.
-                // So the ENTIRE player — video AND control chrome — is laid out in
-                // a landscape-shaped frame (the screen's width/height swapped), then
-                // the whole thing is rotated 90° and centered to fill the portrait
-                // screen. Because video + chrome share that one landscape frame and
-                // one rotation, everything reads horizontally to the tilted user:
-                // wide top/bottom bars, horizontal title/slider — true nPlayer-style
-                // landscape, not portrait chrome with a sideways video.
+                // REAL landscape: on open the cover requests a landscape rotation
+                // (`OrientationHelper.lockLandscape`), so the scene — and the iOS
+                // status bar — is genuinely landscape. The player therefore lays
+                // out in plain landscape coordinates: NO swapped frame, NO 90°
+                // rotation. `geo.size` is already landscape, and `geo.safeAreaInsets`
+                // are the real landscape insets (notch on a side, home indicator
+                // at the bottom), so the close button and bars sit in true corners.
                 GeometryReader { geo in
-                    // The landscape frame: portrait width/height swapped. This is
-                    // also the VLC drawable/Fill-zoom surface (`landscapeSize`).
-                    let landscapeSize = CGSize(width: geo.size.height, height: geo.size.width)
                     VLCFullscreenView(
                         streamURL: streamURL,
                         title: video.displayName,
-                        landscapeSize: landscapeSize,
-                        // Safe-area insets remapped from portrait into the rotated
-                        // landscape frame: a 90° rotation sends portrait-top → the
-                        // landscape leading edge, portrait-bottom → trailing,
-                        // portrait-leading → bottom, portrait-trailing → top.
-                        safeInsets: EdgeInsets(
-                            top: geo.safeAreaInsets.trailing,
-                            leading: geo.safeAreaInsets.top,
-                            bottom: geo.safeAreaInsets.leading,
-                            trailing: geo.safeAreaInsets.bottom
-                        ),
+                        landscapeSize: geo.size,
+                        safeInsets: geo.safeAreaInsets,
                         onClose: { isFullscreen = false }
                     )
-                    .frame(width: landscapeSize.width, height: landscapeSize.height)
-                    .rotationEffect(.degrees(90))
-                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
                 }
                 .ignoresSafeArea()
             }
@@ -609,14 +588,11 @@ private struct VLCFullscreenView: View {
     let streamURL: URL
     /// Clean video title shown centered in the top bar (e.g. the filename).
     let title: String
-    /// The landscape-shaped frame this whole view is laid out in (portrait
-    /// width/height swapped) BEFORE the wrapper rotates it 90°. Video + chrome
-    /// share this frame, so everything is genuinely landscape; it also doubles
-    /// as the VLC Fill/Cover drawable surface.
+    /// The real (already-landscape) screen size. Used for the VLC Fill/Cover
+    /// drawable surface and to size the custom timeline.
     let landscapeSize: CGSize
-    /// Safe-area insets already remapped into the landscape frame by the wrapper,
-    /// so the chrome bars keep the close button and transport clear of the notch
-    /// / Dynamic Island / home indicator after the 90° rotation.
+    /// Real landscape safe-area insets, so the chrome keeps the close button and
+    /// transport clear of the notch / Dynamic Island / home indicator.
     let safeInsets: EdgeInsets
     /// Dismiss the fullscreen cover. Owned by `PlayerView`; the close button
     /// lives here so it fades in/out with the rest of the controls.
@@ -637,15 +613,15 @@ private struct VLCFullscreenView: View {
 
 
     var body: some View {
-        // Laid out in the LANDSCAPE frame (`landscapeSize`); the wrapper rotates
-        // this whole view 90° to fill the tilted phone. So video + chrome live in
-        // one landscape coordinate space: bars span the long edge, title/slider
-        // are horizontal — true landscape, no per-element rotation.
+        // Real landscape: the scene is rotated to landscape on open, so this view
+        // lays out in plain landscape coordinates — video + horizontal chrome in
+        // one upright space, no rotation. The iOS status bar is genuinely
+        // landscape and tracks `controlsVisible` (see `.statusBarHidden` below).
         ZStack {
             // Video fills the landscape frame; VLC preserves aspect internally
             // and letterboxes against the black backdrop.
             VLCPlayerView(url: streamURL, controller: fsVlc)
-                .frame(width: landscapeSize.width, height: landscapeSize.height)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // Full-area tap target to toggle controls. Above the video, below the
             // bars/buttons so those still receive their own taps.
@@ -656,10 +632,9 @@ private struct VLCFullscreenView: View {
             // State overlay (spinner / replay) centered over the video.
             overlay
 
-            // Sidecar `.srt` subtitle overlay — bottom-centered in the landscape
-            // frame. Holds its position in BOTH Fit and Cover (native VLC subtitles
-            // shift with the Cover crop). Lifts when controls are up so it clears
-            // the bottom bar.
+            // Sidecar `.srt` subtitle overlay — bottom-centered. Holds its position
+            // in BOTH Fit and Cover (native VLC subtitles shift with the Cover
+            // crop). Lifts when controls are up so it clears the bottom bar.
             VStack {
                 Spacer()
                 SubtitleOverlay(text: fsVlc.currentSubtitleText)
@@ -669,9 +644,9 @@ private struct VLCFullscreenView: View {
 
             if controlsVisible {
                 // nPlayer-style chrome: a translucent top bar (close, times,
-                // title, subtitle menu) across the top long edge, and a translucent
-                // bottom bar (scrub + transport) across the bottom long edge, with
-                // a floating Fit/Cover pill. All fade together with the controls.
+                // title, subtitle menu) across the top, and a translucent bottom
+                // bar (timeline + transport) across the bottom, with a floating
+                // Fit/Cover pill. All fade together with the controls.
                 VStack(spacing: 0) {
                     topBar
                     Spacer(minLength: 0)
@@ -680,8 +655,11 @@ private struct VLCFullscreenView: View {
                 .transition(.opacity)
             }
         }
-        .frame(width: landscapeSize.width, height: landscapeSize.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
+        // Status bar shows only while the controls are up; it hides with them on
+        // auto-hide so it never overlaps the video or the close button.
+        .statusBarHidden(!controlsVisible)
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .onAppear { scheduleAutoHide() }
         // The controller's media frees with the view; `teardown` also persists
@@ -814,18 +792,15 @@ private struct VLCFullscreenView: View {
     /// centered beneath it, and the Fit/Cover pill floating at the trailing edge.
     private var bottomBar: some View {
         VStack(spacing: 10) {
-            Slider(
-                value: $fsVlc.progress,
-                in: 0...1,
-                onEditingChanged: { editing in
-                    if editing {
-                        fsVlc.beginScrubbing()
-                    } else {
-                        fsVlc.endScrubbing(to: fsVlc.progress)
-                    }
+            TimelineSlider(
+                progress: $fsVlc.progress,
+                onScrubBegan: { fsVlc.beginScrubbing() },
+                onScrubEnded: { fraction in
+                    fsVlc.endScrubbing(to: fraction)
+                    if controlsVisible { scheduleAutoHide() }
                 }
             )
-            .tint(.white)
+            .frame(height: 28)
 
             HStack(spacing: 44) {
                 transportButton(systemName: "gobackward.10", font: .title2) {
@@ -956,6 +931,74 @@ private struct VLCFullscreenView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// nPlayer-style scrub timeline: a dim full-width track with a tinted "watched"
+/// fill and a clean draggable thumb. Replaces the system `Slider` for full
+/// control over the filled/unfilled look. Seek behavior is unchanged — it drives
+/// the same controller scrub callbacks:
+///   - `onScrubBegan` once when a drag starts (freezes live progress updates),
+///   - `onScrubEnded(fraction)` when the drag ends (performs the seek).
+/// While dragging it updates the bound `progress` so the fill/thumb track the
+/// finger; the controller suppresses its own progress writes during the drag.
+private struct TimelineSlider: View {
+    @Binding var progress: Double
+    let onScrubBegan: () -> Void
+    let onScrubEnded: (Double) -> Void
+
+    /// True between drag start and end, so the gesture only fires `onScrubBegan`
+    /// once and maps subsequent moves to the live fill.
+    @State private var dragging = false
+
+    private let trackHeight: CGFloat = 4
+    private let thumbSize: CGFloat = 14
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let clamped = min(max(progress, 0), 1)
+            let fillWidth = width * CGFloat(clamped)
+
+            ZStack(alignment: .leading) {
+                // Unfilled (remaining) track — dim.
+                Capsule()
+                    .fill(.white.opacity(0.28))
+                    .frame(height: trackHeight)
+
+                // Watched (filled) track — tinted.
+                Capsule()
+                    .fill(.tint)
+                    .frame(width: fillWidth, height: trackHeight)
+
+                // Thumb — clean white circle centered on the playhead, kept
+                // inside the track bounds at the extremes.
+                Circle()
+                    .fill(.white)
+                    .frame(width: thumbSize, height: thumbSize)
+                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    .offset(x: min(max(fillWidth - thumbSize / 2, 0), width - thumbSize))
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle()) // full-height tap/drag target
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !dragging {
+                            dragging = true
+                            onScrubBegan()
+                        }
+                        let fraction = min(max(value.location.x / width, 0), 1)
+                        progress = Double(fraction)
+                    }
+                    .onEnded { value in
+                        let fraction = min(max(value.location.x / width, 0), 1)
+                        progress = Double(fraction)
+                        dragging = false
+                        onScrubEnded(Double(fraction))
+                    }
+            )
+        }
     }
 }
 
