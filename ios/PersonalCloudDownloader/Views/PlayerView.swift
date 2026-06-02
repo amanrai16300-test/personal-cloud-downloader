@@ -2,6 +2,7 @@ import SwiftUI
 import AVKit
 import Combine
 import UIKit
+import MediaPlayer
 
 /// Phase 3, step 5: dual-engine playback.
 ///
@@ -632,15 +633,56 @@ private struct VLCFullscreenView: View {
     /// controls stay up for the full delay after the latest interaction.
     @State private var autoHideTask: DispatchWorkItem?
     @State private var wallClockText = Self.wallClockFormatter.string(from: Date())
+    @State private var videoGestureMode: VideoGestureMode = .undecided
+    @State private var gestureStartBrightness: CGFloat = UIScreen.main.brightness
+    @State private var gestureStartVolume: Float = SystemVolumeController.shared.volume
+    @State private var adjustmentOverlay: AdjustmentOverlay?
+    @State private var adjustmentOverlayHideTask: DispatchWorkItem?
 
     /// Seconds the controls stay visible before auto-hiding during playback.
     private let autoHideDelay: TimeInterval = 3
+    private let adjustmentOverlayHideDelay: TimeInterval = 0.8
     private let wallClockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private static let wallClockFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
         return formatter
     }()
+
+    private enum VideoGestureMode {
+        case undecided
+        case horizontal
+        case brightness
+        case volume
+    }
+
+    private struct AdjustmentOverlay {
+        let kind: Kind
+        let value: Double
+
+        enum Kind {
+            case brightness
+            case volume
+
+            var icon: String {
+                switch self {
+                case .brightness:
+                    return "sun.max.fill"
+                case .volume:
+                    return "speaker.wave.2.fill"
+                }
+            }
+
+            var label: String {
+                switch self {
+                case .brightness:
+                    return "Brightness"
+                case .volume:
+                    return "Volume"
+                }
+            }
+        }
+    }
 
 
     var body: some View {
@@ -662,8 +704,15 @@ private struct VLCFullscreenView: View {
                 .contentShape(Rectangle())
                 .gesture(videoAreaGesture)
 
+            SystemVolumeView()
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+
             // State overlay (spinner / replay) centered over the video.
             overlay
+
+            adjustmentOverlayView
 
             // Sidecar `.srt` subtitle overlay — bottom-centered. Holds its position
             // in BOTH Fit and Cover (native VLC subtitles shift with the Cover
@@ -706,6 +755,7 @@ private struct VLCFullscreenView: View {
         // position and stops audio so inline can resume cleanly.
         .onDisappear {
             autoHideTask?.cancel()
+            adjustmentOverlayHideTask?.cancel()
             fsVlc.teardown()
         }
     }
@@ -736,21 +786,79 @@ private struct VLCFullscreenView: View {
 
     private var videoAreaGesture: some Gesture {
         DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                let isHorizontalSwipe = abs(horizontal) >= 44 && abs(horizontal) > abs(vertical) * 1.5
+                let isVerticalSwipe = abs(vertical) >= 44 && abs(vertical) > abs(horizontal) * 1.5
+
+                if videoGestureMode == .undecided {
+                    if isHorizontalSwipe {
+                        videoGestureMode = .horizontal
+                    } else if isVerticalSwipe {
+                        let mode: VideoGestureMode = value.startLocation.x < landscapeSize.width / 2 ? .brightness : .volume
+                        videoGestureMode = mode
+                        gestureStartBrightness = UIScreen.main.brightness
+                        gestureStartVolume = SystemVolumeController.shared.volume
+                        updateVerticalAdjustment(mode: mode, translationY: vertical)
+                    }
+                } else if videoGestureMode == .brightness || videoGestureMode == .volume {
+                    updateVerticalAdjustment(mode: videoGestureMode, translationY: vertical)
+                }
+            }
             .onEnded { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
                 let isHorizontalSwipe = abs(horizontal) >= 44 && abs(horizontal) > abs(vertical) * 1.5
+                let isTap = hypot(horizontal, vertical) < 12
 
-                if isHorizontalSwipe {
+                if videoGestureMode == .horizontal || isHorizontalSwipe {
                     if horizontal > 0 {
                         fsVlc.skipForward()
                     } else {
                         fsVlc.skipBackward()
                     }
-                } else {
+                } else if isTap {
                     toggleControls()
+                } else if videoGestureMode == .brightness || videoGestureMode == .volume {
+                    scheduleAdjustmentOverlayHide()
                 }
+                videoGestureMode = .undecided
             }
+    }
+
+    private func updateVerticalAdjustment(mode: VideoGestureMode, translationY: CGFloat) {
+        let delta = Float(-translationY / max(landscapeSize.height, 1)) * 1.2
+        switch mode {
+        case .brightness:
+            let value = clamp(Double(gestureStartBrightness) + Double(delta))
+            UIScreen.main.brightness = CGFloat(value)
+            showAdjustmentOverlay(kind: .brightness, value: value)
+        case .volume:
+            let value = clamp(Double(gestureStartVolume) + Double(delta))
+            SystemVolumeController.shared.setVolume(Float(value))
+            showAdjustmentOverlay(kind: .volume, value: value)
+        case .undecided, .horizontal:
+            break
+        }
+    }
+
+    private func showAdjustmentOverlay(kind: AdjustmentOverlay.Kind, value: Double) {
+        adjustmentOverlayHideTask?.cancel()
+        adjustmentOverlay = AdjustmentOverlay(kind: kind, value: value)
+    }
+
+    private func scheduleAdjustmentOverlayHide() {
+        adjustmentOverlayHideTask?.cancel()
+        let task = DispatchWorkItem {
+            adjustmentOverlay = nil
+        }
+        adjustmentOverlayHideTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + adjustmentOverlayHideDelay, execute: task)
+    }
+
+    private func clamp(_ value: Double) -> Double {
+        min(max(value, 0), 1)
     }
 
     /// Hide the controls after `autoHideDelay`, but only while playing — paused
@@ -792,6 +900,36 @@ private struct VLCFullscreenView: View {
             }
         case .ready:
             EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var adjustmentOverlayView: some View {
+        if let adjustmentOverlay {
+            VStack(spacing: 10) {
+                Image(systemName: adjustmentOverlay.kind.icon)
+                    .font(.title3.weight(.semibold))
+                Text(adjustmentOverlay.kind.label)
+                    .font(.caption.weight(.semibold))
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.white.opacity(0.22))
+                        Capsule()
+                            .fill(.white)
+                            .frame(width: geo.size.width * CGFloat(adjustmentOverlay.value))
+                    }
+                }
+                .frame(height: 3)
+                Text("\(Int(round(adjustmentOverlay.value * 100)))%")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(width: 132)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .allowsHitTesting(false)
+            .transition(.opacity)
         }
     }
 
@@ -1004,6 +1142,44 @@ private struct VLCFullscreenView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+private final class SystemVolumeController {
+    static let shared = SystemVolumeController()
+
+    private weak var slider: UISlider?
+
+    var volume: Float {
+        slider?.value ?? AVAudioSession.sharedInstance().outputVolume
+    }
+
+    func attach(volumeView: MPVolumeView) {
+        DispatchQueue.main.async {
+            self.slider = volumeView.subviews.compactMap { $0 as? UISlider }.first
+        }
+    }
+
+    func setVolume(_ volume: Float) {
+        let clamped = min(max(volume, 0), 1)
+        if let slider {
+            slider.setValue(clamped, animated: false)
+            slider.sendActions(for: .valueChanged)
+        }
+    }
+}
+
+private struct SystemVolumeView: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let view = MPVolumeView(frame: .zero)
+        view.showsRouteButton = false
+        view.showsVolumeSlider = true
+        SystemVolumeController.shared.attach(volumeView: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {
+        SystemVolumeController.shared.attach(volumeView: uiView)
     }
 }
 
