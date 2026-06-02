@@ -17,6 +17,7 @@ on:
     branches:
       - feature/ios-companion-app
       - feature/video-player-ui-polish
+      - feature/vlc-brightness-volume-gestures
 
 jobs:
   unsigned-ipa:
