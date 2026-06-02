@@ -677,8 +677,8 @@ private struct VLCFullscreenView: View {
 
             if controlsVisible {
                 // nPlayer-style chrome: a translucent top bar (close, times,
-                // title, subtitle menu) across the top, and a translucent bottom
-                // bar (timeline + transport) across the bottom, with a floating
+                // title, subtitle menu, timeline) across the top, and a
+                // translucent bottom bar (transport) across the bottom, with a floating
                 // Fit/Cover pill. All fade together with the controls.
                 VStack(spacing: 0) {
                     topBar
@@ -776,49 +776,61 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// nPlayer-style top bar: close • wall clock • elapsed • title • remaining • subtitle/menu.
+    /// nPlayer-style top bar: close • wall clock • elapsed • title • remaining • subtitle/menu • timeline.
     /// Flat, with a light top-down scrim for legibility (no material) so it reads
     /// over any frame without heavy chrome. The native iOS status bar is hidden,
     /// and the wall clock/playback times live here.
     private var topBar: some View {
-        HStack(spacing: 12) {
-            Button(action: closeFullscreen) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 17, weight: .semibold))
+        VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                Button(action: closeFullscreen) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Text(wallClockText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.9))
+
+                Text(fsVlc.currentTimeText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.85))
+
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity)
 
-            Text(wallClockText)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.9))
+                Text(fsVlc.remainingTimeText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.85))
 
-            Text(fsVlc.currentTimeText)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.85))
-
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity)
-
-            Text(fsVlc.remainingTimeText)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.85))
-
-            // "More" area: the subtitle menu when subtitles exist, else a
-            // fixed-width spacer so the title stays optically centered.
-            Group {
-                if fsVlc.hasSidecarSubtitle || fsVlc.hasSubtitles {
-                    subtitleButton
-                } else {
-                    Color.clear.frame(width: 44, height: 44)
+                // "More" area: the subtitle menu when subtitles exist, else a
+                // fixed-width spacer so the title stays optically centered.
+                Group {
+                    if fsVlc.hasSidecarSubtitle || fsVlc.hasSubtitles {
+                        subtitleButton
+                    } else {
+                        Color.clear.frame(width: 44, height: 44)
+                    }
                 }
             }
+
+            TimelineSlider(
+                progress: $fsVlc.progress,
+                onScrubBegan: { fsVlc.beginScrubbing() },
+                onScrubEnded: { fraction in
+                    fsVlc.endScrubbing(to: fraction)
+                    if controlsVisible { scheduleAutoHide() }
+                }
+            )
+            .frame(height: 20)
         }
         .padding(.leading, 16 + safeInsets.leading)
         .padding(.trailing, 16 + safeInsets.trailing)
@@ -833,41 +845,29 @@ private struct VLCFullscreenView: View {
         )
     }
 
-    /// Compact nPlayer-style bottom bar: a slim full-width timeline sitting ABOVE
-    /// a tight transport row, with the Fit/Cover pill floating at the trailing
-    /// edge. Flat scrim (no material), reduced paddings and icon sizes so it stays
-    /// low-profile and covers little video. Playback times are in the top bar, so
-    /// none are repeated here.
+    /// Compact nPlayer-style bottom bar: a tight transport row, with the
+    /// Fit/Cover pill floating at the trailing edge. Flat scrim (no material),
+    /// reduced paddings and icon sizes so it stays low-profile and covers little
+    /// video. Playback times and the timeline are in the top bar, so none are
+    /// repeated here.
     private var bottomBar: some View {
-        VStack(spacing: 6) {
-            TimelineSlider(
-                progress: $fsVlc.progress,
-                onScrubBegan: { fsVlc.beginScrubbing() },
-                onScrubEnded: { fraction in
-                    fsVlc.endScrubbing(to: fraction)
-                    if controlsVisible { scheduleAutoHide() }
-                }
-            )
-            .frame(height: 20)
-
-            HStack(spacing: 40) {
-                transportButton(systemName: "gobackward.10", font: .title3) {
-                    fsVlc.skipBackward()
-                }
-                transportButton(
-                    systemName: fsVlc.isPlaying ? "pause.fill" : "play.fill",
-                    font: .system(size: 30)
-                ) {
-                    fsVlc.togglePlayPause()
-                }
-                transportButton(systemName: "goforward.10", font: .title3) {
-                    fsVlc.skipForward()
-                }
+        HStack(spacing: 40) {
+            transportButton(systemName: "gobackward.10", font: .title3) {
+                fsVlc.skipBackward()
             }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .overlay(alignment: .trailing) { ratioButton }
+            transportButton(
+                systemName: fsVlc.isPlaying ? "pause.fill" : "play.fill",
+                font: .system(size: 30)
+            ) {
+                fsVlc.togglePlayPause()
+            }
+            transportButton(systemName: "goforward.10", font: .title3) {
+                fsVlc.skipForward()
+            }
         }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .trailing) { ratioButton }
         .padding(.leading, 16 + safeInsets.leading)
         .padding(.trailing, 16 + safeInsets.trailing)
         .padding(.top, 6)
