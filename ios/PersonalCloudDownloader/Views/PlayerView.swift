@@ -153,7 +153,7 @@ struct PlayerView: View {
                 // `VLCFullscreenView`), not the inline `vlc`. The two never play
                 // at once: the inline player was torn down before this appeared,
                 // and this one tears down on dismiss, after which the inline
-                // player resumes. Position carries over via the shared per-URL
+                // player resumes. Position carries over via the shared stable-key
                 // `savedPositions` store. The close button lives inside it so it
                 // auto-hides with the controls.
                 //
@@ -172,6 +172,7 @@ struct PlayerView: View {
                     let landscapeSize = CGSize(width: geo.size.height, height: geo.size.width)
                     VLCFullscreenView(
                         streamURL: streamURL,
+                        resumeKey: video.path,
                         title: video.displayName,
                         landscapeSize: landscapeSize,
                         // Portrait safe-area insets remapped into the rotated
@@ -443,7 +444,7 @@ struct PlayerView: View {
         framedSurface(
             Group {
                 if liveVideo {
-                    VLCPlayerView(url: streamURL, controller: vlc)
+                    VLCPlayerView(url: streamURL, resumeKey: video.path, controller: vlc)
                 } else {
                     // Dormant surface: black fill, no VLCPlayerView competing
                     // for the shared drawable.
@@ -601,7 +602,7 @@ struct PlayerView: View {
 /// Standalone fullscreen VLC surface with its OWN `VLCPlayerController`,
 /// independent of the inline player. The inline player is torn down before this
 /// appears and resumes after it's gone, so only one VLC player ever holds audio.
-/// Playback position carries across via the shared per-URL `savedPositions`
+/// Playback position carries across via the shared stable-key `savedPositions`
 /// store: this view's controller resumes from where inline left off, and on
 /// dismiss it persists its own position for inline to pick back up.
 ///
@@ -609,6 +610,7 @@ struct PlayerView: View {
 /// to its own controller — it does not touch `PlayerView`'s inline `vlc`.
 private struct VLCFullscreenView: View {
     let streamURL: URL
+    let resumeKey: String
     /// Clean video title shown centered in the top bar (e.g. the filename).
     let title: String
     /// The landscape-shaped frame this whole view is laid out in (portrait
@@ -695,7 +697,7 @@ private struct VLCFullscreenView: View {
         ZStack {
             // Video fills the landscape frame; VLC preserves aspect internally
             // and letterboxes against the black backdrop.
-            VLCPlayerView(url: streamURL, controller: fsVlc)
+            VLCPlayerView(url: streamURL, resumeKey: resumeKey, controller: fsVlc)
                 .frame(width: landscapeSize.width, height: landscapeSize.height)
 
             // Full-area tap/swipe target. Above the video, below the bars/buttons
