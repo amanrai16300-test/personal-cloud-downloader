@@ -664,7 +664,7 @@ private struct VLCFullscreenView: View {
             VStack {
                 Spacer()
                 SubtitleOverlay(text: fsVlc.currentSubtitleText)
-                    .padding(.bottom, controlsVisible ? 116 : 28)
+                    .padding(.bottom, controlsVisible ? 96 : 28)
             }
             .animation(.easeInOut(duration: 0.2), value: controlsVisible)
 
@@ -709,11 +709,6 @@ private struct VLCFullscreenView: View {
         onClose()
     }
 
-    /// Device wall-clock formatted for the top bar, honoring the user's 12/24h
-    /// locale setting (e.g. "16:25" or "4:25 PM"). Driven by `TimelineView`.
-    private func clockText(_ date: Date) -> String {
-        date.formatted(.dateTime.hour().minute())
-    }
 
     /// Toggle control visibility on a video tap. Showing (re)arms the auto-hide
     /// timer; hiding cancels it.
@@ -768,35 +763,24 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// Translucent top bar: close • clock • elapsed • title • remaining • menu.
-    /// A thin material with a fading scrim keeps the text legible over any frame
-    /// while still letting the video read through. The native iOS status bar is
-    /// hidden in fullscreen (see `.statusBarHidden(true)`), so this bar carries
-    /// its own live wall-clock instead.
+    /// nPlayer-style top bar: close • elapsed • title • remaining • subtitle/menu.
+    /// Flat, with a light top-down scrim for legibility (no material) so it reads
+    /// over any frame without heavy chrome. The native iOS status bar is hidden,
+    /// and playback times live here, so there is no separate wall-clock.
     private var topBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             Button(action: closeFullscreen) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            // Live device wall-clock (e.g. "16:25"), replacing the hidden native
-            // status-bar time. `TimelineView(.periodic)` re-renders each minute
-            // boundary is enough, but ticking every 30s keeps it within a minute
-            // of accurate without a manual Timer.
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text(clockText(context.date))
-                    .font(.caption.monospacedDigit().weight(.medium))
-                    .foregroundStyle(.white)
-            }
-
             Text(fsVlc.currentTimeText)
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(.white.opacity(0.85))
 
             Text(title)
                 .font(.subheadline.weight(.semibold))
@@ -807,7 +791,7 @@ private struct VLCFullscreenView: View {
 
             Text(fsVlc.remainingTimeText)
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(.white.opacity(0.85))
 
             // "More" area: the subtitle menu when subtitles exist, else a
             // fixed-width spacer so the title stays optically centered.
@@ -819,24 +803,26 @@ private struct VLCFullscreenView: View {
                 }
             }
         }
-        .padding(.leading, 20 + safeInsets.leading)
-        .padding(.trailing, 20 + safeInsets.trailing)
-        .padding(.top, 10 + safeInsets.top)
-        .padding(.bottom, 10)
+        .padding(.leading, 16 + safeInsets.leading)
+        .padding(.trailing, 16 + safeInsets.trailing)
+        .padding(.top, 6 + safeInsets.top)
+        .padding(.bottom, 8)
         .background(
             LinearGradient(
-                colors: [.black.opacity(0.6), .clear],
+                colors: [.black.opacity(0.55), .clear],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .background(.ultraThinMaterial.opacity(0.5))
         )
     }
 
-    /// Translucent bottom bar: full-width scrub slider with the transport row
-    /// centered beneath it, and the Fit/Cover pill floating at the trailing edge.
+    /// Compact nPlayer-style bottom bar: a slim full-width timeline sitting ABOVE
+    /// a tight transport row, with the Fit/Cover pill floating at the trailing
+    /// edge. Flat scrim (no material), reduced paddings and icon sizes so it stays
+    /// low-profile and covers little video. Playback times are in the top bar, so
+    /// none are repeated here.
     private var bottomBar: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 6) {
             TimelineSlider(
                 progress: $fsVlc.progress,
                 onScrubBegan: { fsVlc.beginScrubbing() },
@@ -845,19 +831,19 @@ private struct VLCFullscreenView: View {
                     if controlsVisible { scheduleAutoHide() }
                 }
             )
-            .frame(height: 28)
+            .frame(height: 20)
 
-            HStack(spacing: 44) {
-                transportButton(systemName: "gobackward.10", font: .title2) {
+            HStack(spacing: 40) {
+                transportButton(systemName: "gobackward.10", font: .title3) {
                     fsVlc.skipBackward()
                 }
                 transportButton(
                     systemName: fsVlc.isPlaying ? "pause.fill" : "play.fill",
-                    font: .system(size: 42)
+                    font: .system(size: 30)
                 ) {
                     fsVlc.togglePlayPause()
                 }
-                transportButton(systemName: "goforward.10", font: .title2) {
+                transportButton(systemName: "goforward.10", font: .title3) {
                     fsVlc.skipForward()
                 }
             }
@@ -865,17 +851,16 @@ private struct VLCFullscreenView: View {
             .frame(maxWidth: .infinity)
             .overlay(alignment: .trailing) { ratioButton }
         }
-        .padding(.leading, 24 + safeInsets.leading)
-        .padding(.trailing, 24 + safeInsets.trailing)
-        .padding(.top, 12)
-        .padding(.bottom, 14 + safeInsets.bottom)
+        .padding(.leading, 16 + safeInsets.leading)
+        .padding(.trailing, 16 + safeInsets.trailing)
+        .padding(.top, 6)
+        .padding(.bottom, 8 + safeInsets.bottom)
         .background(
             LinearGradient(
-                colors: [.clear, .black.opacity(0.6)],
+                colors: [.clear, .black.opacity(0.55)],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .background(.ultraThinMaterial.opacity(0.5))
         )
     }
 
@@ -964,6 +949,8 @@ private struct VLCFullscreenView: View {
         .padding(.trailing, 4)
     }
 
+    /// Compact transport control: a 48×48 tap target (still ≥44pt, comfortable to
+    /// hit) without the bulk of the old 56pt frame, keeping the bottom bar slim.
     private func transportButton(
         systemName: String,
         font: Font,
@@ -972,7 +959,7 @@ private struct VLCFullscreenView: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(font)
-                .frame(width: 56, height: 56)
+                .frame(width: 48, height: 48)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -996,8 +983,8 @@ private struct TimelineSlider: View {
     /// once and maps subsequent moves to the live fill.
     @State private var dragging = false
 
-    private let trackHeight: CGFloat = 4
-    private let thumbSize: CGFloat = 14
+    private let trackHeight: CGFloat = 3
+    private let thumbSize: CGFloat = 12
 
     var body: some View {
         GeometryReader { geo in
