@@ -657,9 +657,11 @@ private struct VLCFullscreenView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
-        // Status bar shows only while the controls are up; it hides with them on
-        // auto-hide so it never overlaps the video or the close button.
-        .statusBarHidden(!controlsVisible)
+        // Native iOS status bar stays hidden the WHOLE time in fullscreen, so it
+        // never overlaps the video or the close button and never flashes a
+        // portrait-oriented clock during the rotation. The top bar carries its
+        // own live clock instead.
+        .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .onAppear { scheduleAutoHide() }
         // The controller's media frees with the view; `teardown` also persists
@@ -680,6 +682,12 @@ private struct VLCFullscreenView: View {
     private func closeFullscreen() {
         fsVlc.persistPosition()
         onClose()
+    }
+
+    /// Device wall-clock formatted for the top bar, honoring the user's 12/24h
+    /// locale setting (e.g. "16:25" or "4:25 PM"). Driven by `TimelineView`.
+    private func clockText(_ date: Date) -> String {
+        date.formatted(.dateTime.hour().minute())
     }
 
     /// Toggle control visibility on a video tap. Showing (re)arms the auto-hide
@@ -735,11 +743,13 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// Translucent top bar: close • elapsed • title • remaining • subtitle menu.
+    /// Translucent top bar: close • clock • elapsed • title • remaining • menu.
     /// A thin material with a fading scrim keeps the text legible over any frame
-    /// while still letting the video read through.
+    /// while still letting the video read through. The native iOS status bar is
+    /// hidden in fullscreen (see `.statusBarHidden(true)`), so this bar carries
+    /// its own live wall-clock instead.
     private var topBar: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 14) {
             Button(action: closeFullscreen) {
                 Image(systemName: "xmark")
                     .font(.system(size: 18, weight: .semibold))
@@ -748,6 +758,16 @@ private struct VLCFullscreenView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            // Live device wall-clock (e.g. "16:25"), replacing the hidden native
+            // status-bar time. `TimelineView(.periodic)` re-renders each minute
+            // boundary is enough, but ticking every 30s keeps it within a minute
+            // of accurate without a manual Timer.
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(clockText(context.date))
+                    .font(.caption.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.white)
+            }
 
             Text(fsVlc.currentTimeText)
                 .font(.caption.monospacedDigit())
