@@ -156,23 +156,37 @@ struct PlayerView: View {
                 // auto-hides with the controls.
                 //
                 // Fake-landscape: the device stays portrait (works even with the
-                // rotation lock on). Only the VLC VIDEO is laid out at landscape
-                // dimensions (swapped width/height) and rotated 90° to fill the
-                // portrait screen — that rotation lives INSIDE `VLCFullscreenView`
-                // and wraps the video alone. The control chrome (top/bottom bars,
-                // close, slider) is drawn upright in normal screen space ON TOP,
-                // so it reads horizontally to the user instead of sideways.
+                // rotation lock on), and the user TILTS the phone 90° to watch.
+                // So the ENTIRE player — video AND control chrome — is laid out in
+                // a landscape-shaped frame (the screen's width/height swapped), then
+                // the whole thing is rotated 90° and centered to fill the portrait
+                // screen. Because video + chrome share that one landscape frame and
+                // one rotation, everything reads horizontally to the tilted user:
+                // wide top/bottom bars, horizontal title/slider — true nPlayer-style
+                // landscape, not portrait chrome with a sideways video.
                 GeometryReader { geo in
-                    // `drawableSize` is the landscape-shaped (swapped) surface the
-                    // rotated video occupies, so VLC's Fill/Cover zoom matches it.
+                    // The landscape frame: portrait width/height swapped. This is
+                    // also the VLC drawable/Fill-zoom surface (`landscapeSize`).
+                    let landscapeSize = CGSize(width: geo.size.height, height: geo.size.width)
                     VLCFullscreenView(
                         streamURL: streamURL,
                         title: video.displayName,
-                        screenSize: geo.size,
-                        drawableSize: CGSize(width: geo.size.height, height: geo.size.width),
-                        safeInsets: geo.safeAreaInsets,
+                        landscapeSize: landscapeSize,
+                        // Safe-area insets remapped from portrait into the rotated
+                        // landscape frame: a 90° rotation sends portrait-top → the
+                        // landscape leading edge, portrait-bottom → trailing,
+                        // portrait-leading → bottom, portrait-trailing → top.
+                        safeInsets: EdgeInsets(
+                            top: geo.safeAreaInsets.trailing,
+                            leading: geo.safeAreaInsets.top,
+                            bottom: geo.safeAreaInsets.leading,
+                            trailing: geo.safeAreaInsets.bottom
+                        ),
                         onClose: { isFullscreen = false }
                     )
+                    .frame(width: landscapeSize.width, height: landscapeSize.height)
+                    .rotationEffect(.degrees(90))
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
                 }
                 .ignoresSafeArea()
             }
@@ -595,15 +609,14 @@ private struct VLCFullscreenView: View {
     let streamURL: URL
     /// Clean video title shown centered in the top bar (e.g. the filename).
     let title: String
-    /// The real (portrait) screen size. The video is rotated within this; the
-    /// chrome is laid out upright across it.
-    let screenSize: CGSize
-    /// Size of the (rotated) landscape video surface, used to compute the Fill
-    /// zoom so it matches what's on screen.
-    let drawableSize: CGSize
-    /// Portrait screen safe-area insets, captured by the wrapper BEFORE it
-    /// ignores the safe area. The chrome bars re-add these so the close button
-    /// and transport clear the notch / Dynamic Island / home indicator.
+    /// The landscape-shaped frame this whole view is laid out in (portrait
+    /// width/height swapped) BEFORE the wrapper rotates it 90°. Video + chrome
+    /// share this frame, so everything is genuinely landscape; it also doubles
+    /// as the VLC Fill/Cover drawable surface.
+    let landscapeSize: CGSize
+    /// Safe-area insets already remapped into the landscape frame by the wrapper,
+    /// so the chrome bars keep the close button and transport clear of the notch
+    /// / Dynamic Island / home indicator after the 90° rotation.
     let safeInsets: EdgeInsets
     /// Dismiss the fullscreen cover. Owned by `PlayerView`; the close button
     /// lives here so it fades in/out with the rest of the controls.
@@ -624,24 +637,15 @@ private struct VLCFullscreenView: View {
 
 
     var body: some View {
-        // Fills the whole portrait screen. ONLY the video is rotated into a
-        // fake-landscape frame; the chrome is drawn upright on top so it reads
-        // horizontally. Safe-area is ignored for the black/video backdrop but
-        // RESPECTED by the chrome (see `.padding(safeArea…)` on the bars).
+        // Laid out in the LANDSCAPE frame (`landscapeSize`); the wrapper rotates
+        // this whole view 90° to fill the tilted phone. So video + chrome live in
+        // one landscape coordinate space: bars span the long edge, title/slider
+        // are horizontal — true landscape, no per-element rotation.
         ZStack {
-            // --- Rotated video layer (fake-landscape) ---
-            // The video alone is laid out at landscape (swapped) dimensions and
-            // rotated 90°, centered, so it fills the portrait screen looking like
-            // a real landscape video. Nothing else is in this rotation.
+            // Video fills the landscape frame; VLC preserves aspect internally
+            // and letterboxes against the black backdrop.
             VLCPlayerView(url: streamURL, controller: fsVlc)
-                .frame(width: drawableSize.width, height: drawableSize.height)
-                .rotationEffect(.degrees(90))
-                .position(x: screenSize.width / 2, y: screenSize.height / 2)
-                .background(Color.black)
-
-            // --- Upright chrome layer (normal screen space) ---
-            // Everything below is laid out in the real portrait coordinate space,
-            // so bars/title/times/slider are horizontal to the user.
+                .frame(width: landscapeSize.width, height: landscapeSize.height)
 
             // Full-area tap target to toggle controls. Above the video, below the
             // bars/buttons so those still receive their own taps.
@@ -652,9 +656,10 @@ private struct VLCFullscreenView: View {
             // State overlay (spinner / replay) centered over the video.
             overlay
 
-            // Sidecar `.srt` subtitle overlay — upright, bottom-centered. Holds
-            // its position in BOTH Fit and Cover (native VLC subtitles shift with
-            // the Cover crop). Lifts when controls are up so it clears the bar.
+            // Sidecar `.srt` subtitle overlay — bottom-centered in the landscape
+            // frame. Holds its position in BOTH Fit and Cover (native VLC subtitles
+            // shift with the Cover crop). Lifts when controls are up so it clears
+            // the bottom bar.
             VStack {
                 Spacer()
                 SubtitleOverlay(text: fsVlc.currentSubtitleText)
@@ -664,9 +669,9 @@ private struct VLCFullscreenView: View {
 
             if controlsVisible {
                 // nPlayer-style chrome: a translucent top bar (close, times,
-                // title, subtitle menu) and a translucent bottom bar (scrub +
-                // transport), each pinned to its edge, plus a floating Fit/Cover
-                // pill on the right. All fade together with the controls.
+                // title, subtitle menu) across the top long edge, and a translucent
+                // bottom bar (scrub + transport) across the bottom long edge, with
+                // a floating Fit/Cover pill. All fade together with the controls.
                 VStack(spacing: 0) {
                     topBar
                     Spacer(minLength: 0)
@@ -675,6 +680,7 @@ private struct VLCFullscreenView: View {
                 .transition(.opacity)
             }
         }
+        .frame(width: landscapeSize.width, height: landscapeSize.height)
         .background(Color.black)
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .onAppear { scheduleAutoHide() }
@@ -919,7 +925,7 @@ private struct VLCFullscreenView: View {
     /// immediately hide controls.
     private var ratioButton: some View {
         Button {
-            fsVlc.cycleAspect(drawableSize: drawableSize)
+            fsVlc.cycleAspect(drawableSize: landscapeSize)
             if controlsVisible { scheduleAutoHide() }
         } label: {
             HStack(spacing: 5) {
