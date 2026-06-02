@@ -15,7 +15,8 @@ struct VideosView: View {
             content
                 .navigationTitle("Videos")
                 .navigationDestination(for: CompletedFile.self) { video in
-                    PlayerView(video: video)
+                    // Open straight into fullscreen; close pops back here.
+                    PlayerView(video: video, startsFullscreen: true)
                 }
         }
         .task { await load() }

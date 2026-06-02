@@ -13,6 +13,21 @@ import UIKit
 struct PlayerView: View {
     let video: CompletedFile
 
+    /// When true, the player opens straight into fullscreen (the inline player
+    /// screen is skipped for normal playback): on appear it enters the existing
+    /// fullscreen presentation, and the fullscreen close pops this whole screen
+    /// off the nav stack back to the Videos list instead of dropping to inline.
+    /// Default false so any inline-first call site keeps its old behavior.
+    var startsFullscreen = false
+
+    /// Pops this screen when running in `startsFullscreen` mode — close returns
+    /// to the Videos list rather than the (unused) inline player underneath.
+    @Environment(\.dismiss) private var dismiss
+
+    /// Guards the one-shot auto-enter so returning from the cover (which lowers
+    /// `isFullscreen`, then pops via `onDismiss`) doesn't immediately re-enter.
+    @State private var didAutoEnterFullscreen = false
+
     @State private var player: AVPlayer?
     @StateObject private var vlc = VLCPlayerController()
 
@@ -64,6 +79,15 @@ struct PlayerView: View {
         }
         .navigationTitle("Player")
         .navigationBarTitleDisplayMode(.inline)
+        // Direct-fullscreen open: enter the existing fullscreen presentation as
+        // soon as the screen appears, once. The inline surface stays dormant
+        // underneath (VLC via `inlineVLCLive`, which is always false in this mode;
+        // AVPlayer reuses the same instance, so nothing competes for audio).
+        .onAppear {
+            guard startsFullscreen, !didAutoEnterFullscreen else { return }
+            didAutoEnterFullscreen = true
+            enterFullscreen()
+        }
         .onDisappear {
             player?.pause()
             vlc.stop()
@@ -74,6 +98,13 @@ struct PlayerView: View {
             // it has nothing to restore.
             if video.isAVPlayerSupported {
                 OrientationHelper.restore(orientationBeforeFullscreen)
+            }
+            // Direct-open mode: the cover has finished dismissing and orientation
+            // is restored, so now pop back to the Videos list. Popping here
+            // (rather than at the close tap) avoids tearing the cover down
+            // mid-transition.
+            if startsFullscreen {
+                dismiss()
             }
         }) {
             if let streamURL = video.streamURL {
@@ -148,18 +179,31 @@ struct PlayerView: View {
         }
     }
 
+    /// Enter the fullscreen presentation. Shared by the inline enter-fullscreen
+    /// button and the direct-open auto-enter. For VLC, tear the inline player
+    /// down first (persists position, stops audio, frees the drawable) so the
+    /// fullscreen surface — a SEPARATE VLC controller — starts clean with no
+    /// second player still holding audio.
+    private func enterFullscreen() {
+        // Capture orientation before rotating so exit can restore it.
+        orientationBeforeFullscreen = OrientationHelper.currentOrientation()
+        if video.isAVPlayerSupported {
+            // In direct-open the inline `avPlayback.onAppear` (which lazily
+            // builds the player) may not have run before the cover presents, so
+            // make sure the AVPlayer exists for the fullscreen `avSurface`.
+            if player == nil, let url = video.streamURL {
+                player = AVPlayer(url: url)
+            }
+        } else {
+            vlc.teardown()
+        }
+        isFullscreen = true
+    }
+
     /// Top-trailing button overlaid on a player surface to enter fullscreen.
-    /// For VLC, tear the inline player down first (persists position, stops
-    /// audio, frees the drawable) so the fullscreen surface — a SEPARATE VLC
-    /// controller — starts clean with no second player still holding audio.
     private var fullscreenButton: some View {
         Button {
-            // Capture orientation before rotating so exit can restore it.
-            orientationBeforeFullscreen = OrientationHelper.currentOrientation()
-            if !video.isAVPlayerSupported {
-                vlc.teardown()
-            }
-            isFullscreen = true
+            enterFullscreen()
         } label: {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .font(.subheadline.weight(.semibold))
@@ -465,9 +509,19 @@ struct PlayerView: View {
         .buttonStyle(.plain)
     }
 
+    /// Whether the inline VLC surface should mount a live player. In direct-open
+    /// mode the inline player is never used (open → fullscreen, close → pop), so
+    /// it stays dormant throughout — this avoids a brief inline start/audio blip
+    /// both before the auto-enter (first layout → `onAppear`) and after close
+    /// (cover lowered → nav pop). Otherwise: live whenever not fullscreen.
+    private var inlineVLCLive: Bool {
+        if startsFullscreen { return false }
+        return !isFullscreen
+    }
+
     private func vlcPlayback(_ streamURL: URL) -> some View {
         VStack(spacing: Layout.sectionSpacing) {
-            vlcSurface(streamURL, liveVideo: !isFullscreen)
+            vlcSurface(streamURL, liveVideo: inlineVLCLive)
 
             vlcControls(streamURL)
 
