@@ -705,8 +705,8 @@ private struct VLCFullscreenView: View {
                 .gesture(videoAreaGesture)
 
             SystemVolumeView()
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
+                .frame(width: 120, height: 32)
+                .opacity(0.001)
                 .allowsHitTesting(false)
 
             // State overlay (spinner / replay) centered over the video.
@@ -836,8 +836,8 @@ private struct VLCFullscreenView: View {
             showAdjustmentOverlay(kind: .brightness, value: value)
         case .volume:
             let value = clamp(Double(gestureStartVolume) + Double(delta))
-            SystemVolumeController.shared.setVolume(Float(value))
-            showAdjustmentOverlay(kind: .volume, value: value)
+            let appliedValue = SystemVolumeController.shared.setVolume(Float(value))
+            showAdjustmentOverlay(kind: .volume, value: Double(appliedValue))
         case .undecided, .horizontal:
             break
         }
@@ -1148,38 +1148,63 @@ private struct VLCFullscreenView: View {
 private final class SystemVolumeController {
     static let shared = SystemVolumeController()
 
-    private weak var slider: UISlider?
+    private var volumeView: MPVolumeView?
+    private var slider: UISlider?
 
     var volume: Float {
         slider?.value ?? AVAudioSession.sharedInstance().outputVolume
     }
 
     func attach(volumeView: MPVolumeView) {
-        DispatchQueue.main.async {
-            self.slider = volumeView.subviews.compactMap { $0 as? UISlider }.first
+        DispatchQueue.main.async { [weak self] in
+            self?.volumeView = volumeView
+            self?.findSlider()
         }
     }
 
-    func setVolume(_ volume: Float) {
+    @discardableResult
+    func setVolume(_ volume: Float) -> Float {
         let clamped = min(max(volume, 0), 1)
-        if let slider {
-            slider.setValue(clamped, animated: false)
-            slider.sendActions(for: .valueChanged)
+
+        guard Thread.isMainThread else {
+            var applied = clamped
+            DispatchQueue.main.sync {
+                applied = self.setVolume(clamped)
+            }
+            return applied
         }
+
+        findSlider()
+        guard let slider else {
+            return AVAudioSession.sharedInstance().outputVolume
+        }
+
+        slider.value = clamped
+        slider.sendActions(for: .valueChanged)
+        return slider.value
+    }
+
+    private func findSlider() {
+        guard let volumeView else { return }
+        slider = volumeView.subviews.compactMap { $0 as? UISlider }.first
     }
 }
 
 private struct SystemVolumeView: UIViewRepresentable {
     func makeUIView(context: Context) -> MPVolumeView {
-        let view = MPVolumeView(frame: .zero)
+        let view = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 120, height: 32))
         view.showsRouteButton = false
         view.showsVolumeSlider = true
-        SystemVolumeController.shared.attach(volumeView: view)
+        DispatchQueue.main.async {
+            SystemVolumeController.shared.attach(volumeView: view)
+        }
         return view
     }
 
     func updateUIView(_ uiView: MPVolumeView, context: Context) {
-        SystemVolumeController.shared.attach(volumeView: uiView)
+        DispatchQueue.main.async {
+            SystemVolumeController.shared.attach(volumeView: uiView)
+        }
     }
 }
 
