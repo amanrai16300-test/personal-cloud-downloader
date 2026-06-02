@@ -631,9 +631,16 @@ private struct VLCFullscreenView: View {
     /// Pending auto-hide work, cancelled/rescheduled on every show or tap so the
     /// controls stay up for the full delay after the latest interaction.
     @State private var autoHideTask: DispatchWorkItem?
+    @State private var wallClockText = Self.wallClockFormatter.string(from: Date())
 
     /// Seconds the controls stay visible before auto-hiding during playback.
     private let autoHideDelay: TimeInterval = 3
+    private let wallClockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    private static let wallClockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
 
 
     var body: some View {
@@ -688,7 +695,13 @@ private struct VLCFullscreenView: View {
         // own live clock instead.
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
-        .onAppear { scheduleAutoHide() }
+        .onAppear {
+            wallClockText = Self.wallClockFormatter.string(from: Date())
+            scheduleAutoHide()
+        }
+        .onReceive(wallClockTimer) { date in
+            wallClockText = Self.wallClockFormatter.string(from: date)
+        }
         // The controller's media frees with the view; `teardown` also persists
         // position and stops audio so inline can resume cleanly.
         .onDisappear {
@@ -763,10 +776,10 @@ private struct VLCFullscreenView: View {
         }
     }
 
-    /// nPlayer-style top bar: close • elapsed • title • remaining • subtitle/menu.
+    /// nPlayer-style top bar: close • wall clock • elapsed • title • remaining • subtitle/menu.
     /// Flat, with a light top-down scrim for legibility (no material) so it reads
     /// over any frame without heavy chrome. The native iOS status bar is hidden,
-    /// and playback times live here, so there is no separate wall-clock.
+    /// and the wall clock/playback times live here.
     private var topBar: some View {
         HStack(spacing: 12) {
             Button(action: closeFullscreen) {
@@ -777,6 +790,10 @@ private struct VLCFullscreenView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            Text(wallClockText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.9))
 
             Text(fsVlc.currentTimeText)
                 .font(.caption.monospacedDigit())
