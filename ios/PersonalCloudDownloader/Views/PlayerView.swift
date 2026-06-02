@@ -600,7 +600,7 @@ private struct VLCFullscreenView: View {
                 // reach and hit.
                 VStack {
                     HStack {
-                        Button(action: onClose) {
+                        Button(action: closeFullscreen) {
                             Image(systemName: "xmark")
                                 .font(.system(size: 20, weight: .semibold))
                                 .foregroundStyle(.white)
@@ -644,6 +644,18 @@ private struct VLCFullscreenView: View {
             autoHideTask?.cancel()
             fsVlc.teardown()
         }
+    }
+
+    /// Close fullscreen. Persists the CURRENT fullscreen playhead synchronously
+    /// FIRST, then dismisses. Order matters: dismissing the cover makes SwiftUI
+    /// remount the inline surface, whose `start` reads `savedPositions` to
+    /// resume. That remount runs before this view's `onDisappear` (and its
+    /// `teardown`), so if the position were only persisted there, inline would
+    /// resume from the stale pre-fullscreen position. Persisting here closes that
+    /// race; the later `teardown` persist is then a harmless idempotent re-save.
+    private func closeFullscreen() {
+        fsVlc.persistPosition()
+        onClose()
     }
 
     /// Toggle control visibility on a video tap. Showing (re)arms the auto-hide

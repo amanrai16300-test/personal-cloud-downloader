@@ -15,13 +15,29 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Seconds the skip-back / skip-forward buttons jump.
     static let skipInterval: Int32 = 10
 
-    /// Last-watched fractional position (0.0–1.0) per video URL, kept for the
-    /// life of the app session. The controller is a `@StateObject` on
-    /// `PlayerView`, so it is destroyed and recreated each time the player
-    /// screen is opened — instance state cannot survive that. This static store
-    /// does, letting the same video resume where it left off. Cleared for a URL
-    /// only when its playback truly ends (see `replay`/end handling).
-    private static var savedPositions: [URL: Float] = [:]
+    /// Last-watched playback position per video URL, kept for the life of the
+    /// app session. The controller is a `@StateObject` on `PlayerView`, so it is
+    /// destroyed and recreated each time the player screen is opened — instance
+    /// state cannot survive that. This static store does, letting the same video
+    /// resume where it left off. Cleared for a URL only when its playback truly
+    /// ends (see `replay`/end handling).
+    ///
+    /// Stored as MILLISECONDS (+ duration), not a `Float` fraction: the inline ⇄
+    /// fullscreen hand-off persists and restores through here, and a `Float`
+    /// fraction loses seconds on long videos (e.g. a 2h film: one ULP of a
+    /// `Float` near 0.5 is ~0.4s, and the cumulative rounding through
+    /// fraction→seek→fraction drifts the resume point). Milliseconds restore the
+    /// exact playhead. Duration is kept so a precise fractional fallback can be
+    /// derived when a millisecond seek isn't yet possible.
+    struct SavedPosition {
+        let timeMs: Int
+        let durationMs: Int
+        /// Fractional position, for the deferred `player.position` fallback.
+        var fraction: Float {
+            durationMs > 0 ? Float(timeMs) / Float(durationMs) : 0
+        }
+    }
+    private static var savedPositions: [URL: SavedPosition] = [:]
 
     /// The URL currently loaded, captured in `start` so `stop` can persist the
     /// position against the right key without the call site passing it back.
@@ -159,11 +175,13 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         player.delegate = self
     }
 
-    /// Fractional position to restore once the freshly-loaded media becomes
-    /// seekable. Set in `start` from `savedPositions`; applied and cleared in the
-    /// delegate callbacks. VLC ignores `player.position` writes before the stream
-    /// is seekable, so the seek is deferred rather than done inline in `start`.
-    private var pendingResume: Float?
+    /// Position to restore once the freshly-loaded media becomes seekable. Set in
+    /// `start` from `savedPositions`; applied and cleared in the delegate
+    /// callbacks. VLC ignores seek writes before the stream is seekable, so the
+    /// seek is deferred rather than done inline in `start`. Carries milliseconds
+    /// so the playhead is restored exactly (a `VLCTime` seek), with the fraction
+    /// kept for the rare case the duration isn't known yet at seek time.
+    private var pendingResume: SavedPosition?
 
     /// ONE shared, subtitle-styled `VLCLibrary`, built lazily on first use and
     /// reused by every `VLCMediaPlayer` this class creates (inline + fullscreen).
@@ -214,7 +232,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         media.addOptions(["sub-margin": 48])
         player.media = media
 
-        if let saved = Self.savedPositions[url], saved > 0, saved < 1 {
+        if let saved = Self.savedPositions[url], saved.timeMs > 0 {
             pendingResume = saved
         }
 
@@ -371,9 +389,19 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     /// Apply a deferred resume seek once VLC reports the stream seekable. No-op
     /// when nothing is pending. Cleared after a successful seek so it fires once.
+    ///
+    /// Seeks by absolute MILLISECONDS (`VLCTime`) so the playhead lands exactly
+    /// where it was — this is the inline ⇄ fullscreen hand-off, where a fraction
+    /// round-trip would drift the resume point. Falls back to the fractional
+    /// `player.position` only if the stored duration is unknown (so no exact
+    /// millisecond target exists).
     private func applyPendingResumeIfReady() {
         guard let target = pendingResume, player.isSeekable else { return }
-        player.position = target
+        if target.durationMs > 0 {
+            player.time = VLCTime(int: Int32(target.timeMs))
+        } else {
+            player.position = target.fraction
+        }
         pendingResume = nil
     }
 
@@ -507,17 +535,26 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         player.media = nil
     }
 
-    /// Save the current fractional position for this session so reopening the
-    /// same video resumes here. Skips meaningless values: not seekable, NaN/out
-    /// of range, at the very start, or essentially at the end (treated as done).
-    private func persistPosition() {
+    /// Save the current playback position (milliseconds + duration) for this
+    /// session so reopening the same video — or handing off inline ⇄ fullscreen
+    /// — resumes at the exact playhead. Skips meaningless values: not seekable,
+    /// NaN/out of range, at the very start, or essentially at the end (treated as
+    /// done). Public so the fullscreen close button can persist SYNCHRONOUSLY
+    /// before the cover dismisses: SwiftUI remounts the inline surface (which
+    /// re-`start`s and reads `savedPositions`) before this controller's
+    /// `onDisappear` runs, so persisting only in `teardown`/`onDisappear` would
+    /// let inline resume from the stale pre-fullscreen position. Idempotent —
+    /// safe to call again from `teardown`.
+    func persistPosition() {
         guard let url = currentURL, player.isSeekable else { return }
         let pos = player.position
         guard pos.isFinite, pos > 0.001, pos < 0.999 else {
             Self.savedPositions[url] = nil
             return
         }
-        Self.savedPositions[url] = pos
+        let timeMs = Int(player.time.intValue)
+        let durationMs = Int(player.media?.length.intValue ?? 0)
+        Self.savedPositions[url] = SavedPosition(timeMs: timeMs, durationMs: durationMs)
     }
 
     /// Restart from the beginning after the media ended. Used by the
