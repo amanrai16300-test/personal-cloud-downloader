@@ -2,6 +2,7 @@ import SwiftUI
 
 struct VideosView: View {
     @State private var videos: [CompletedFile] = []
+    @State private var progressByPath: [String: VideoProgress] = [:]
     @State private var phase: LoadPhase = .loading
 
     enum LoadPhase: Equatable {
@@ -21,7 +22,7 @@ struct VideosView: View {
                     PlayerView(video: video, startsFullscreen: true)
                 }
                 .navigationDestination(for: VideoFolder.self) { folder in
-                    FolderVideosView(folder: folder)
+                    FolderVideosView(folder: folder, progressByPath: progressByPath)
                 }
         }
         .task { await load() }
@@ -65,7 +66,7 @@ struct VideosView: View {
                 Section {
                     ForEach(grouped.looseVideos) { video in
                         NavigationLink(value: video) {
-                            videoRow(video)
+                            videoRow(video, progress: progressByPath[video.path])
                         }
                     }
                 }
@@ -95,24 +96,8 @@ struct VideosView: View {
     }
 
     /// A single video row (loose, or inside a folder). Shows the clean filename.
-    private func videoRow(_ video: CompletedFile) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "play.rectangle.fill")
-                .font(.title2)
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(video.displayName)
-                    .font(.callout)
-                    .lineLimit(2)
-                if let date = video.modifiedDate {
-                    Text(date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-        }
-        .contentShape(Rectangle())
+    private func videoRow(_ video: CompletedFile, progress: VideoProgress?) -> some View {
+        VideoRow(video: video, progress: progress)
     }
 
     // iOS 16-compatible empty state. `ContentUnavailableView` is iOS 17+, and
@@ -156,11 +141,39 @@ struct VideosView: View {
     private func load() async {
         phase = .loading
         do {
-            videos = try await CompletedFilesAPI.fetchVideos()
+            let fetchedVideos = try await CompletedFilesAPI.fetchVideos()
+            let backendProgress = (try? await CompletedFilesAPI.fetchVideoProgress()) ?? [:]
+            let localProgress = VLCPlayerController.localProgressSnapshot()
+            let mergedProgress = Self.mergeProgress(backend: backendProgress, local: localProgress)
+            videos = fetchedVideos
+            progressByPath = mergedProgress
+            VLCPlayerController.importProgressSnapshot(mergedProgress)
             phase = .loaded
         } catch {
             phase = .error(error.localizedDescription)
         }
+    }
+
+    private static func mergeProgress(
+        backend: [String: VideoProgress],
+        local: [String: VideoProgress]
+    ) -> [String: VideoProgress] {
+        var merged = backend
+        for (path, localProgress) in local {
+            guard let backendProgress = merged[path] else {
+                merged[path] = localProgress
+                continue
+            }
+
+            if let backendDate = backendProgress.updatedDate,
+               let localDate = localProgress.updatedDate {
+                merged[path] = localDate > backendDate ? localProgress : backendProgress
+            } else if localProgress.timeMs > backendProgress.timeMs,
+                      localProgress.durationMs > 0 {
+                merged[path] = localProgress
+            }
+        }
+        return merged
     }
 }
 
@@ -236,11 +249,12 @@ enum VideoGrouping {
 /// stack's `CompletedFile` navigation destination.
 private struct FolderVideosView: View {
     let folder: VideoFolder
+    let progressByPath: [String: VideoProgress]
 
     var body: some View {
         List(folder.videos) { video in
             NavigationLink(value: video) {
-                row(video)
+                row(video, progress: progressByPath[video.path])
             }
         }
         .listStyle(.plain)
@@ -248,24 +262,81 @@ private struct FolderVideosView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func row(_ video: CompletedFile) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "play.rectangle.fill")
-                .font(.title2)
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(video.displayName)
-                    .font(.callout)
-                    .lineLimit(2)
-                if let date = video.modifiedDate {
-                    Text(date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+    private func row(_ video: CompletedFile, progress: VideoProgress?) -> some View {
+        VideoRow(video: video, progress: progress)
+    }
+}
+
+private struct VideoRow: View {
+    let video: CompletedFile
+    let progress: VideoProgress?
+
+    private var watchedPercent: Double {
+        min(max(progress?.watchedPercent ?? 0, 0), 100)
+    }
+
+    private var showsProgress: Bool {
+        watchedPercent > 5
+    }
+
+    private var isWatched: Bool {
+        watchedPercent >= 70
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Image(systemName: isWatched ? "checkmark.rectangle.fill" : "play.rectangle.fill")
+                    .font(.title2)
+                    .foregroundStyle(isWatched ? Color.secondary : Color.accentColor)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(video.displayName)
+                            .font(.callout)
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+
+                        if isWatched {
+                            watchedBadge
+                        }
+                    }
+
+                    if let date = video.modifiedDate {
+                        Text(date.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                Spacer()
             }
-            Spacer()
+            .opacity(isWatched ? 0.86 : 1)
+
+            if showsProgress {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.18))
+                        Capsule()
+                            .fill(isWatched ? Color.green.opacity(0.72) : Color.accentColor.opacity(0.72))
+                            .frame(width: geo.size.width * CGFloat(watchedPercent / 100))
+                    }
+                }
+                .frame(height: 3)
+                .padding(.leading, 40)
+            }
         }
         .contentShape(Rectangle())
+    }
+
+    private var watchedBadge: some View {
+        Label("Watched", systemImage: "checkmark.circle.fill")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.green)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.green.opacity(0.12), in: Capsule())
+            .lineLimit(1)
     }
 }
 

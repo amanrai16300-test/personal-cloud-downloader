@@ -64,10 +64,41 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private static func savePosition(_ position: SavedPosition, for key: String) {
         savedPositions[key] = position
         writeSavedPositions()
+        Task {
+            try? await CompletedFilesAPI.saveVideoProgress(
+                path: key,
+                timeMs: position.timeMs,
+                durationMs: position.durationMs
+            )
+        }
     }
 
     private static func clearPosition(for key: String) {
         savedPositions[key] = nil
+        writeSavedPositions()
+    }
+
+    static func localProgressSnapshot() -> [String: VideoProgress] {
+        Dictionary(uniqueKeysWithValues: savedPositions.map { key, position in
+            (
+                key,
+                VideoProgress.local(
+                    path: key,
+                    timeMs: position.timeMs,
+                    durationMs: position.durationMs
+                )
+            )
+        })
+    }
+
+    static func importProgressSnapshot(_ progressByPath: [String: VideoProgress]) {
+        for (path, progress) in progressByPath {
+            guard progress.timeMs > 0, progress.durationMs > 0 else { continue }
+            savedPositions[path] = SavedPosition(
+                timeMs: progress.timeMs,
+                durationMs: progress.durationMs
+            )
+        }
         writeSavedPositions()
     }
 

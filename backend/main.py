@@ -39,6 +39,15 @@ class ExtractSubtitleRequest(BaseModel):
     path: str
 
 
+class VideoProgressRequest(BaseModel):
+    path: str
+    timeMs: int
+    durationMs: int
+
+
+VIDEO_PROGRESS_FILE = settings.download_complete_dir.parent / "video_progress.json"
+
+
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
     try:
         method = getattr(qb, action)
@@ -144,6 +153,35 @@ def completed_files() -> list[dict[str, Any]]:
             )
 
     return results
+
+
+@app.post("/api/video-progress")
+def save_video_progress(payload: VideoProgressRequest) -> dict[str, Any]:
+    path = payload.path.strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="Path is required.")
+
+    time_ms = max(0, int(payload.timeMs))
+    duration_ms = max(0, int(payload.durationMs))
+    watched_percent = progress_percent(time_ms, duration_ms)
+    updated_at = datetime.now(timezone.utc).isoformat()
+
+    progress = read_video_progress()
+    record = {
+        "path": path,
+        "timeMs": time_ms,
+        "durationMs": duration_ms,
+        "watchedPercent": watched_percent,
+        "updatedAt": updated_at,
+    }
+    progress[path] = record
+    write_video_progress(progress)
+    return record
+
+
+@app.get("/api/video-progress")
+def get_video_progress() -> list[dict[str, Any]]:
+    return list(read_video_progress().values())
 
 
 # Subtitle codecs ffmpeg can convert to SubRip (.srt). Image-based codecs
@@ -312,6 +350,36 @@ def is_visible_completed_file(file_path: Path, download_dir: Path) -> bool:
         return False
 
     return suffix in preferred_extensions
+
+
+def progress_percent(time_ms: int, duration_ms: int) -> float:
+    if duration_ms <= 0:
+        return 0.0
+    return round(min(max(time_ms / duration_ms * 100, 0), 100), 2)
+
+
+def read_video_progress() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(VIDEO_PROGRESS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(path): record
+        for path, record in data.items()
+        if isinstance(path, str) and isinstance(record, dict)
+    }
+
+
+def write_video_progress(progress: dict[str, dict[str, Any]]) -> None:
+    VIDEO_PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = VIDEO_PROGRESS_FILE.with_suffix(".tmp")
+    tmp_path.write_text(
+        json.dumps(progress, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    tmp_path.replace(VIDEO_PROGRESS_FILE)
 
 
 def timestamp_to_iso(value: Any) -> str | None:
