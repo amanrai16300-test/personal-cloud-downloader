@@ -609,6 +609,8 @@ struct PlayerView: View {
 /// Self-contained controls (scrub slider, time labels, ±10s, play/pause) bound
 /// to its own controller — it does not touch `PlayerView`'s inline `vlc`.
 private struct VLCFullscreenView: View {
+    @Environment(\.scenePhase) private var scenePhase
+
     let streamURL: URL
     let resumeKey: String
     /// Clean video title shown centered in the top bar (e.g. the filename).
@@ -644,6 +646,8 @@ private struct VLCFullscreenView: View {
     /// Seconds the controls stay visible before auto-hiding during playback.
     private let autoHideDelay: TimeInterval = 3
     private let adjustmentOverlayHideDelay: TimeInterval = 0.8
+    private let savedBrightnessKey = "vlcFullscreenLastBrightness"
+    private let savedVolumeKey = "vlcFullscreenLastVolume"
     private let wallClockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private static let wallClockFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -748,7 +752,13 @@ private struct VLCFullscreenView: View {
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .onAppear {
             wallClockText = Self.wallClockFormatter.string(from: Date())
+            restoreSavedAdjustments()
             scheduleAutoHide()
+        }
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .active {
+                syncAdjustmentState()
+            }
         }
         .onReceive(wallClockTimer) { date in
             wallClockText = Self.wallClockFormatter.string(from: date)
@@ -835,13 +845,49 @@ private struct VLCFullscreenView: View {
         case .brightness:
             let value = clamp(Double(gestureStartBrightness) + Double(delta))
             UIScreen.main.brightness = CGFloat(value)
+            UserDefaults.standard.set(value, forKey: savedBrightnessKey)
             showAdjustmentOverlay(kind: .brightness, value: value)
         case .volume:
             let value = clamp(Double(gestureStartVolume) + Double(delta))
             let appliedValue = SystemVolumeController.shared.setVolume(Float(value))
+            UserDefaults.standard.set(appliedValue, forKey: savedVolumeKey)
             showAdjustmentOverlay(kind: .volume, value: Double(appliedValue))
         case .undecided, .horizontal:
             break
+        }
+    }
+
+    private func restoreSavedAdjustments() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: savedBrightnessKey) != nil {
+            UIScreen.main.brightness = CGFloat(clamp(defaults.double(forKey: savedBrightnessKey)))
+        }
+
+        if defaults.object(forKey: savedVolumeKey) != nil {
+            let savedVolume = Float(clamp(defaults.double(forKey: savedVolumeKey)))
+            _ = SystemVolumeController.shared.setVolume(savedVolume)
+        }
+
+        syncAdjustmentState()
+        DispatchQueue.main.async {
+            if defaults.object(forKey: savedVolumeKey) != nil {
+                let savedVolume = Float(clamp(defaults.double(forKey: savedVolumeKey)))
+                _ = SystemVolumeController.shared.setVolume(savedVolume)
+            }
+            syncAdjustmentState()
+        }
+    }
+
+    private func syncAdjustmentState() {
+        gestureStartBrightness = UIScreen.main.brightness
+        gestureStartVolume = SystemVolumeController.shared.volume
+        if let overlay = adjustmentOverlay {
+            switch overlay.kind {
+            case .brightness:
+                adjustmentOverlay = AdjustmentOverlay(kind: .brightness, value: Double(UIScreen.main.brightness))
+            case .volume:
+                adjustmentOverlay = AdjustmentOverlay(kind: .volume, value: Double(SystemVolumeController.shared.volume))
+            }
         }
     }
 
@@ -1154,7 +1200,18 @@ private final class SystemVolumeController {
     private var slider: UISlider?
 
     var volume: Float {
-        slider?.value ?? AVAudioSession.sharedInstance().outputVolume
+        guard Thread.isMainThread else {
+            var current = AVAudioSession.sharedInstance().outputVolume
+            DispatchQueue.main.sync {
+                current = self.volume
+            }
+            return current
+        }
+
+        findSlider()
+        let sessionVolume = AVAudioSession.sharedInstance().outputVolume
+        guard let slider else { return sessionVolume }
+        return abs(slider.value - sessionVolume) < 0.005 ? slider.value : sessionVolume
     }
 
     func attach(volumeView: MPVolumeView) {
@@ -1210,7 +1267,7 @@ private struct SystemVolumeView: UIViewRepresentable {
     }
 }
 
-/// nPlayer-style scrub timeline: a full-height dim area with a yellow "watched"
+/// nPlayer-style scrub timeline: a full-height dim area with an amber "watched"
 /// fill. Replaces the system `Slider` for full control over the filled/unfilled
 /// look. Seek behavior is unchanged — it drives the same controller scrub callbacks:
 ///   - `onScrubBegan` once when a drag starts (freezes live progress updates),
@@ -1237,9 +1294,9 @@ private struct TimelineSlider: View {
                 Rectangle()
                     .fill(.black.opacity(0.42))
 
-                // Watched (filled) track — yellow.
+                // Watched (filled) track.
                 Rectangle()
-                    .fill(.yellow)
+                    .fill(Color(red: 0.86, green: 0.61, blue: 0.18))
                     .frame(width: fillWidth)
             }
             .frame(maxHeight: .infinity)
