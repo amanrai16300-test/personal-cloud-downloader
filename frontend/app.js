@@ -1,5 +1,8 @@
 const API_BASE_URL = "http://100.92.146.101:8000";
 const POLL_MS = 5000;
+const APP_JS_VERSION = "queue-order-2026-06-03";
+
+console.info(`Personal Cloud Downloader app.js ${APP_JS_VERSION}`);
 
 const magnetLinkInput = document.querySelector("#magnetLink");
 const addMagnetButton = document.querySelector("#addMagnetButton");
@@ -118,14 +121,15 @@ function renderTorrents(torrents) {
 
   const sortedTorrents = sortTorrentsForDisplay(torrents);
 
-  torrentList.innerHTML = sortedTorrents.map((torrent) => {
+  torrentList.style.flexDirection = "column";
+  torrentList.innerHTML = sortedTorrents.map((torrent, index) => {
     const status = normalizeStatus(torrent);
     const progress = normalizeProgress(torrent);
     const name = torrent.name || torrent.hash || "Preparing download";
     const timeText = torrentTimeText(torrent, status);
 
     return `
-      <article class="download-card">
+      <article class="download-card" style="order: ${index}">
         <div class="card-top">
           <div class="download-title">
             <h3>${escapeHtml(name)}</h3>
