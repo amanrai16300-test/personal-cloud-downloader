@@ -267,6 +267,12 @@ async function deleteTorrent(hash) {
   await refreshAll({ quiet: true });
 }
 
+function confirmDeleteTorrent(hash) {
+  const torrent = cachedTorrents.find((item) => item.hash === hash);
+  const name = torrent?.name || hash || "this download";
+  return window.confirm(`Delete "${name}" and its files?`);
+}
+
 async function copyVlcLink(index) {
   const fileCards = [...completedFiles.querySelectorAll("[data-copy-index]")];
   const button = fileCards.find((item) => Number(item.dataset.copyIndex) === index);
@@ -361,7 +367,9 @@ magnetLinkInput.addEventListener("keydown", (event) => {
 torrentList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-delete-hash]");
   if (!button) return;
-  deleteTorrent(button.dataset.deleteHash).catch((error) => setStatus(error.message, true));
+  const hash = button.dataset.deleteHash;
+  if (!confirmDeleteTorrent(hash)) return;
+  deleteTorrent(hash).catch((error) => setStatus(error.message, true));
 });
 
 completedFiles.addEventListener("click", (event) => {
