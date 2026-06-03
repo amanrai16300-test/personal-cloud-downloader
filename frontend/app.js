@@ -116,7 +116,7 @@ function renderTorrents(torrents) {
     return;
   }
 
-  const sortedTorrents = [...torrents].sort(compareTorrentOrder);
+  const sortedTorrents = sortTorrentsForDisplay(torrents);
 
   torrentList.innerHTML = sortedTorrents.map((torrent) => {
     const status = normalizeStatus(torrent);
@@ -152,23 +152,36 @@ function renderTorrents(torrents) {
   cachedTorrents = sortedTorrents;
 }
 
-function compareTorrentOrder(left, right) {
-  const leftActive = isActiveTorrent(left);
-  const rightActive = isActiveTorrent(right);
+function sortTorrentsForDisplay(torrents) {
+  return torrents
+    .map((torrent, index) => ({ torrent, index }))
+    .sort(compareTorrentOrder)
+    .map((entry) => entry.torrent);
+}
+
+function compareTorrentOrder(leftEntry, rightEntry) {
+  const left = leftEntry.torrent;
+  const right = rightEntry.torrent;
+  const leftActive = isCurrentTorrent(left);
+  const rightActive = isCurrentTorrent(right);
 
   if (leftActive !== rightActive) {
     return leftActive ? -1 : 1;
   }
 
-  return torrentTimestamp(right) - torrentTimestamp(left);
+  const timeOrder = torrentTimestamp(right) - torrentTimestamp(left);
+  if (timeOrder !== 0) return timeOrder;
+
+  return rightEntry.index - leftEntry.index;
 }
 
-function isActiveTorrent(torrent) {
-  return !torrent.is_complete && normalizeProgress(torrent) < 100;
+function isCurrentTorrent(torrent) {
+  const status = normalizeStatus(torrent);
+  return status !== "Completed" && status !== "Failed";
 }
 
 function torrentTimestamp(torrent) {
-  const timestamp = Date.parse(torrent.added_at || torrent.completed_at || "");
+  const timestamp = Date.parse(torrent.added_at || torrent.completed_at || torrent.created_at || torrent.updated_at || "");
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
