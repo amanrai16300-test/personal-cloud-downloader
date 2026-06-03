@@ -160,20 +160,23 @@ def completed_files() -> list[dict[str, Any]]:
 def organize_loose_completed_videos(download_dir: Path) -> None:
     download_root = download_dir.resolve()
     for file_path in sorted(download_root.iterdir()):
-        if not file_path.is_file() or not is_video_file(file_path):
+        try:
+            if not file_path.is_file() or not is_video_file(file_path):
+                continue
+
+            target_dir = resolve_safe_download_target(download_root / file_path.stem, download_root)
+            if target_dir.exists() and not target_dir.is_dir():
+                continue
+
+            target_dir.mkdir(exist_ok=True)
+            move_into_directory(file_path, target_dir, download_root)
+
+            for suffix in (".srt", ".vtt"):
+                sidecar = download_root / f"{file_path.stem}{suffix}"
+                if sidecar.is_file():
+                    move_into_directory(sidecar, target_dir, download_root)
+        except (OSError, ValueError):
             continue
-
-        target_dir = resolve_safe_download_target(download_root / file_path.stem, download_root)
-        if target_dir.exists() and not target_dir.is_dir():
-            continue
-
-        target_dir.mkdir(exist_ok=True)
-        move_into_directory(file_path, target_dir, download_root)
-
-        for suffix in (".srt", ".vtt"):
-            sidecar = download_root / f"{file_path.stem}{suffix}"
-            if sidecar.is_file():
-                move_into_directory(sidecar, target_dir, download_root)
 
 
 def move_into_directory(file_path: Path, target_dir: Path, download_root: Path) -> None:
@@ -279,6 +282,14 @@ def resolve_completed_path(relative_path: str) -> Path:
     if not candidate.is_file():
         raise HTTPException(status_code=404, detail="File not found.")
     return candidate
+
+
+def resolve_safe_download_target(candidate: Path, download_root: Path) -> Path:
+    resolved_root = download_root.resolve()
+    resolved = candidate.resolve()
+    if resolved == resolved_root or not resolved.is_relative_to(resolved_root):
+        raise ValueError("Path is outside completed downloads root.")
+    return resolved
 
 
 def srt_stream_url(srt_path: Path) -> str:
