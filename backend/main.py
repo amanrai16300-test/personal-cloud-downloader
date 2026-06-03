@@ -138,6 +138,8 @@ def completed_files() -> list[dict[str, Any]]:
     if not download_dir.exists():
         return []
 
+    organize_loose_completed_videos(download_dir)
+
     results: list[dict[str, Any]] = []
     for file_path in sorted(download_dir.rglob("*")):
         if file_path.is_file() and is_visible_completed_file(file_path, download_dir):
@@ -153,6 +155,33 @@ def completed_files() -> list[dict[str, Any]]:
             )
 
     return results
+
+
+def organize_loose_completed_videos(download_dir: Path) -> None:
+    download_root = download_dir.resolve()
+    for file_path in sorted(download_root.iterdir()):
+        if not file_path.is_file() or not is_video_file(file_path):
+            continue
+
+        target_dir = resolve_safe_download_target(download_root / file_path.stem, download_root)
+        if target_dir.exists() and not target_dir.is_dir():
+            continue
+
+        target_dir.mkdir(exist_ok=True)
+        move_into_directory(file_path, target_dir, download_root)
+
+        for suffix in (".srt", ".vtt"):
+            sidecar = download_root / f"{file_path.stem}{suffix}"
+            if sidecar.is_file():
+                move_into_directory(sidecar, target_dir, download_root)
+
+
+def move_into_directory(file_path: Path, target_dir: Path, download_root: Path) -> None:
+    source = resolve_safe_download_target(file_path, download_root)
+    destination = resolve_safe_download_target(target_dir / file_path.name, download_root)
+    if destination.exists():
+        return
+    shutil.move(str(source), str(destination))
 
 
 @app.post("/api/video-progress")
@@ -350,6 +379,10 @@ def is_visible_completed_file(file_path: Path, download_dir: Path) -> bool:
         return False
 
     return suffix in preferred_extensions
+
+
+def is_video_file(file_path: Path) -> bool:
+    return file_path.suffix.lower() in {".mp4", ".mkv", ".avi", ".mov", ".webm"}
 
 
 def progress_percent(time_ms: int, duration_ms: int) -> float:
