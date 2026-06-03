@@ -127,9 +127,85 @@ def pause_torrent(torrent_hash: str) -> dict[str, str]:
 
 
 @app.delete("/api/torrents/{torrent_hash}")
-def delete_torrent(torrent_hash: str) -> dict[str, str]:
-    run_qb_action("delete", torrent_hash, delete_files=True)
-    return {"status": "deleted"}
+def delete_torrent(torrent_hash: str) -> dict[str, Any]:
+    torrent = find_torrent(torrent_hash)
+    candidates = build_delete_candidates(torrent)
+    result: dict[str, Any] = {
+        "torrent_hash": torrent_hash,
+        "torrent_name": str(torrent.get("name", "")) if torrent else None,
+        "qbittorrent_delete_result": None,
+        "candidate_paths_checked": [str(path) for path in candidates],
+        "deleted_file_paths": [],
+        "deleted_folder_paths": [],
+        "warnings": [] if torrent else ["Torrent was not found before delete."],
+    }
+
+    result["qbittorrent_delete_result"] = run_qb_action("delete", torrent_hash, delete_files=True)
+    delete_completed_candidates(candidates, result)
+    return result
+
+
+def find_torrent(torrent_hash: str) -> dict[str, Any] | None:
+    for torrent in run_qb_action("list_torrents"):
+        if str(torrent.get("hash", "")) == torrent_hash:
+            return torrent
+    return None
+
+
+def build_delete_candidates(torrent: dict[str, Any] | None) -> list[Path]:
+    if torrent is None:
+        return []
+
+    download_root = settings.download_complete_dir.resolve()
+    raw_candidates: list[Path] = []
+    name = str(torrent.get("name") or "").strip()
+    content_path = str(torrent.get("content_path") or "").strip()
+    save_path = str(torrent.get("save_path") or "").strip()
+
+    if content_path:
+        content = Path(content_path)
+        raw_candidates.extend([content, download_root / content.name, download_root / content.stem])
+    if save_path and name:
+        raw_candidates.append(Path(save_path) / name)
+    if name:
+        raw_candidates.append(download_root / name)
+
+    safe_candidates: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in raw_candidates:
+        try:
+            safe = resolve_safe_download_target(candidate, download_root)
+        except ValueError:
+            continue
+        if safe not in seen:
+            seen.add(safe)
+            safe_candidates.append(safe)
+
+    return safe_candidates
+
+
+def delete_completed_candidates(candidates: list[Path], result: dict[str, Any]) -> None:
+    for candidate in candidates:
+        try:
+            if candidate.is_dir():
+                shutil.rmtree(candidate)
+                result["deleted_folder_paths"].append(str(candidate))
+            elif candidate.is_file():
+                delete_file_with_sidecars(candidate, result)
+                moved_folder = candidate.parent / candidate.stem
+                if moved_folder.is_dir():
+                    shutil.rmtree(moved_folder)
+                    result["deleted_folder_paths"].append(str(moved_folder))
+        except OSError as exc:
+            result["warnings"].append(f"Failed to delete {candidate}: {exc}")
+
+
+def delete_file_with_sidecars(file_path: Path, result: dict[str, Any]) -> None:
+    paths = [file_path, file_path.with_suffix(".srt"), file_path.with_suffix(".vtt")]
+    for path in paths:
+        if path.is_file():
+            path.unlink()
+            result["deleted_file_paths"].append(str(path))
 
 
 @app.get("/api/completed-files")
