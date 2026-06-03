@@ -18,6 +18,7 @@ on:
       - feature/ios-companion-app
       - feature/video-player-ui-polish
       - feature/vlc-brightness-volume-gestures
+      - feature/vlc-player-polish-lifecycle
 
 jobs:
   unsigned-ipa:
