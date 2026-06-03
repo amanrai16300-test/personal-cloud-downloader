@@ -19,6 +19,7 @@ on:
       - feature/video-player-ui-polish
       - feature/vlc-brightness-volume-gestures
       - feature/vlc-player-polish-lifecycle
+      - feature/custom-app-icon
 
 jobs:
   unsigned-ipa:
