@@ -16,6 +16,7 @@ let cachedTorrents = [];
 let completedFileSnapshot = [];
 let isSubmitting = false;
 let isRefreshing = false;
+let pendingDeleteHash = "";
 
 function setStatus(message, isError = false) {
   statusText.textContent = message;
@@ -267,10 +268,51 @@ async function deleteTorrent(hash) {
   await refreshAll({ quiet: true });
 }
 
-function confirmDeleteTorrent(hash) {
+function showDeleteConfirmation(hash) {
   const torrent = cachedTorrents.find((item) => item.hash === hash);
   const name = torrent?.name || hash || "this download";
-  return window.confirm(`Delete "${name}" and its files?`);
+  pendingDeleteHash = hash;
+
+  let modal = document.querySelector("#deleteConfirmModal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "deleteConfirmModal";
+    modal.innerHTML = `
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9998;"></div>
+      <section role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9999;width:min(92vw,420px);background:#111827;color:white;border:1px solid rgba(255,255,255,.16);border-radius:14px;padding:18px;box-shadow:0 18px 60px rgba(0,0,0,.45);">
+        <h3 id="deleteConfirmTitle" style="margin:0 0 8px;font-size:18px;">Delete download?</h3>
+        <p id="deleteConfirmName" style="margin:0 0 16px;color:#d1d5db;line-height:1.35;word-break:break-word;"></p>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button type="button" data-delete-cancel style="border:1px solid rgba(255,255,255,.18);background:transparent;color:white;border-radius:10px;padding:10px 14px;">Cancel</button>
+          <button type="button" data-delete-confirm style="border:0;background:#dc2626;color:white;border-radius:10px;padding:10px 14px;">Delete</button>
+        </div>
+      </section>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener("click", handleDeleteConfirmationClick);
+  }
+
+  modal.querySelector("#deleteConfirmName").textContent = `${name} and its files will be deleted.`;
+  modal.hidden = false;
+}
+
+function hideDeleteConfirmation() {
+  const modal = document.querySelector("#deleteConfirmModal");
+  if (modal) modal.hidden = true;
+  pendingDeleteHash = "";
+}
+
+function handleDeleteConfirmationClick(event) {
+  if (event.target.closest("[data-delete-cancel]")) {
+    hideDeleteConfirmation();
+    return;
+  }
+
+  if (event.target.closest("[data-delete-confirm]")) {
+    const hash = pendingDeleteHash;
+    hideDeleteConfirmation();
+    deleteTorrent(hash).catch((error) => setStatus(error.message, true));
+  }
 }
 
 async function copyVlcLink(index) {
@@ -367,9 +409,7 @@ magnetLinkInput.addEventListener("keydown", (event) => {
 torrentList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-delete-hash]");
   if (!button) return;
-  const hash = button.dataset.deleteHash;
-  if (!confirmDeleteTorrent(hash)) return;
-  deleteTorrent(hash).catch((error) => setStatus(error.message, true));
+  showDeleteConfirmation(button.dataset.deleteHash);
 });
 
 completedFiles.addEventListener("click", (event) => {
