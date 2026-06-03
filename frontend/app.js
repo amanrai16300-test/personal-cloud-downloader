@@ -116,7 +116,9 @@ function renderTorrents(torrents) {
     return;
   }
 
-  torrentList.innerHTML = torrents.map((torrent) => {
+  const sortedTorrents = [...torrents].sort(compareTorrentOrder);
+
+  torrentList.innerHTML = sortedTorrents.map((torrent) => {
     const status = normalizeStatus(torrent);
     const progress = normalizeProgress(torrent);
     const name = torrent.name || torrent.hash || "Preparing download";
@@ -147,7 +149,27 @@ function renderTorrents(torrents) {
     `;
   }).join("");
 
-  cachedTorrents = torrents;
+  cachedTorrents = sortedTorrents;
+}
+
+function compareTorrentOrder(left, right) {
+  const leftActive = isActiveTorrent(left);
+  const rightActive = isActiveTorrent(right);
+
+  if (leftActive !== rightActive) {
+    return leftActive ? -1 : 1;
+  }
+
+  return torrentTimestamp(right) - torrentTimestamp(left);
+}
+
+function isActiveTorrent(torrent) {
+  return !torrent.is_complete && normalizeProgress(torrent) < 100;
+}
+
+function torrentTimestamp(torrent) {
+  const timestamp = Date.parse(torrent.added_at || torrent.completed_at || "");
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 function fileUrl(file) {
