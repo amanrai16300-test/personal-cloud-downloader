@@ -1069,11 +1069,14 @@ private struct VLCFullscreenView: View {
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
         .overlay(alignment: .leading) {
-            Group {
+            HStack(spacing: 8) {
                 if fsVlc.hasSidecarSubtitle || fsVlc.hasSubtitles {
                     subtitleButton
                 } else {
                     Color.clear.frame(width: 44, height: 44)
+                }
+                if fsVlc.hasSelectableAudioTracks {
+                    audioButton
                 }
             }
         }
@@ -1150,6 +1153,31 @@ private struct VLCFullscreenView: View {
             .frame(width: 44, height: 44)
             .background(.black.opacity(0.45), in: Circle())
             .contentShape(Circle())
+    }
+
+    /// Audio track picker. Shown only when VLC reports more than one real audio
+    /// track, so single-track videos do not show a dead menu.
+    private var audioButton: some View {
+        Menu {
+            ForEach(fsVlc.audioTracks) { track in
+                Button {
+                    fsVlc.selectAudioTrack(index: track.index)
+                    if controlsVisible { scheduleAutoHide() }
+                } label: {
+                    Label(
+                        track.name,
+                        systemImage: fsVlc.currentAudioTrackIndex == track.index ? "checkmark" : ""
+                    )
+                }
+            }
+        } label: {
+            Image(systemName: "speaker.wave.2.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(.black.opacity(0.45), in: Circle())
+                .contentShape(Circle())
+        }
     }
 
     /// Cycles Fit → Zoom → 16:9 → 4:3 → 1:1 → Stretch and shows the current

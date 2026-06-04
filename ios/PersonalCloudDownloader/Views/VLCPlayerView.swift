@@ -209,6 +209,24 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Cleared on `start` / `replay` so a fresh load auto-selects again.
     private var didAutoSelectSubtitle = false
 
+    // MARK: Audio tracks
+
+    /// One selectable VLC audio track: VLC's internal index and display label.
+    struct AudioTrack: Identifiable {
+        let index: Int32
+        let name: String
+        var id: Int32 { index }
+    }
+
+    /// Real audio tracks discovered after media parses.
+    @Published var audioTracks: [AudioTrack] = []
+
+    /// Currently selected VLC audio track index.
+    @Published var currentAudioTrackIndex: Int32 = -1
+
+    /// Only show the audio control when there is an actual choice.
+    var hasSelectableAudioTracks: Bool { audioTracks.count > 1 }
+
     // MARK: Sidecar (.srt) subtitle overlay — Phase A
 
     /// Parsed cues from a sidecar `.srt` fetched beside the video, empty when no
@@ -307,6 +325,8 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         didAutoSelectSubtitle = false
         subtitleTracks = []
         currentSubtitleIndex = -1
+        audioTracks = []
+        currentAudioTrackIndex = -1
 
         // Reset sidecar state and look for a `.srt` beside the video.
         sidecarCues = []
@@ -638,6 +658,8 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         if let key = currentResumeKey { Self.clearPosition(for: key) }
         pendingResume = nil
         didAutoSelectSubtitle = false
+        audioTracks = []
+        currentAudioTrackIndex = -1
         playbackState = .loading
         player.stop()
         player.play()
@@ -693,6 +715,32 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     func selectSubtitle(index: Int32) {
         player.currentVideoSubTitleIndex = index
         currentSubtitleIndex = index
+    }
+
+    // MARK: Audio tracks
+
+    /// Read current VLC audio tracks. VLC exposes parallel arrays with real
+    /// track indexes and names once media parses.
+    private func refreshAudioTracks() {
+        let indexes = player.audioTrackIndexes.compactMap { ($0 as? NSNumber)?.int32Value }
+        let names = player.audioTrackNames.compactMap { $0 as? String }
+        guard indexes.count == names.count else { return }
+
+        let tracks = zip(indexes, names)
+            .filter { $0.0 >= 0 }
+            .map { AudioTrack(index: $0.0, name: $0.1) }
+
+        if tracks.map(\.index) != audioTracks.map(\.index) {
+            audioTracks = tracks
+        }
+
+        currentAudioTrackIndex = player.currentAudioTrackIndex
+    }
+
+    /// Select an audio track by VLC index.
+    func selectAudioTrack(index: Int32) {
+        player.currentAudioTrackIndex = index
+        currentAudioTrackIndex = index
     }
 
     // MARK: Seeking
@@ -778,6 +826,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
         // SPU tracks are parsed by now; pick them up and auto-select once.
         refreshSubtitleTracks()
+        refreshAudioTracks()
 
         // Advance the sidecar overlay cue to match the current time, if any.
         updateCurrentCue()
