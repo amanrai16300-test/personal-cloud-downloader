@@ -499,17 +499,29 @@ http://100.92.146.101:8090/app/
 - Real Downloader web UI path confirmed:
   - `/var/www/personal-cloud/app/app.js`
 - Important deployment note:
-  - iOS/native changes require IPA build from GitHub Actions.
-  - Web Downloader changes such as `frontend/app.js` require manual deploy to `/var/www/personal-cloud/app/app.js`.
-  - Backend changes require manual deploy to Oracle backend files and service restart.
+  - Web Downloader changes:
+    - local file: `frontend/app.js`
+    - live Oracle path: `/var/www/personal-cloud/app/app.js`
+    - requires manual copy/deploy to Oracle
+  - Backend changes:
+    - local file: `backend/main.py`
+    - live Oracle path: `/home/ubuntu/personal-cloud-downloader/backend/main.py`
+    - requires manual deploy and `sudo systemctl restart personal-downloader-api.service`
+  - iOS native changes:
+    - require new IPA build/install
+    - currently blocked until GitHub Actions budget issue is resolved
+  - GitHub Actions macOS IPA builds are currently blocked by GitHub Actions budget/spending limit.
+  - Web and backend fixes can still be deployed manually to Oracle.
+  - Native iOS fixes still require a new IPA after Actions billing/budget is available again.
 - Downloader queue ordering work:
   - file: `frontend/app.js`
   - `renderTorrents(torrents)` is the real visible render path
   - marker added: `queue-order-2026-06-03`
   - active/current downloads should show above completed/old downloads
   - if not visible, verify the served JS with `/app/app.js`, because wrong deploy path caused earlier confusion
-- Pending next Downloader UI task:
-  - add delete confirmation popup before delete action
+- Downloader custom delete confirmation modal is complete.
+- It uses an in-page DOM modal, not `window.confirm()`, so it works in PC browser and iOS WKWebView.
+- `frontend/app.js` changes must be manually deployed to `/var/www/personal-cloud/app/app.js`.
 
 ## 15. Next Steps
 
@@ -908,3 +920,48 @@ Full docs:
   - qBittorrent WebView error still remains.
   - The full device runtime checklist (`docs/IOS_DEVICE_TEST_CHECKLIST.md`) is not confirmed complete unless verified separately.
 - No frontend web app, qBittorrent, or Tailscale behavior was changed.
+
+## 2026-06-04 Backend Stabilization and Subtitle Cleanup
+
+- Backend completed-files auto-folder behavior is verified.
+- Loose completed videos directly under `/srv/personal-cloud/downloads/complete/` are auto-moved into same-stem folders during `/api/completed-files`.
+- Matching same-stem `.srt` and `.vtt` files are moved with the video.
+- `/api/completed-files` crash from missing `resolve_safe_download_target` was fixed.
+- Delete behavior was updated to work with auto-foldered downloads.
+- Deleting a torrent now removes the qBittorrent entry and safely removes related completed folders/files under the completed downloads root.
+- Old orphan folders were manually cleaned once through SSH.
+- Downloader queue ordering is verified working.
+- Downloader custom delete confirmation modal is verified working.
+- Subtitle cleanup was handled server-side because GitHub Actions budget currently blocks new IPA builds.
+- Backend sanitizes active `.srt` / `.vtt` sidecar files under the completed downloads root.
+- Sanitizer removes:
+  - HTML-style tags like `<i>`, `</i>`, `<b>`, `</b>`, `<u>`, `</u>`
+  - common HTML entities like `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`
+  - ASS/SSA override tags like `{\an8}`, `{\pos(...)}`, `{\move(...)}`, `{\fad(...)}`
+- Subtitle timing lines, numbering lines, and WEBVTT headers are preserved.
+- Existing subtitle files get one `.bak` backup before modification.
+- Verified server checks:
+  - `/api/health` returns `200 OK`
+  - `/api/completed-files` returns `200 OK`
+  - grep for HTML subtitle tags returns no result
+  - grep for ASS override tags returns no result
+- Confirmed in CloudBox player:
+  - subtitles no longer show raw `<i>` text
+  - subtitles no longer show raw `{\an8}` text
+- No new IPA was required for this subtitle cleanup because it was handled by backend subtitle file sanitization.
+- GitHub Actions macOS IPA builds are currently blocked by GitHub Actions budget/spending limit.
+- Web and backend fixes can still be deployed manually to Oracle.
+- Native iOS fixes still require a new IPA after Actions billing/budget is available again.
+- Deployment notes:
+  - Web Downloader changes:
+    - local file: `frontend/app.js`
+    - live Oracle path: `/var/www/personal-cloud/app/app.js`
+    - requires manual copy/deploy to Oracle
+  - Backend changes:
+    - local file: `backend/main.py`
+    - live Oracle path: `/home/ubuntu/personal-cloud-downloader/backend/main.py`
+    - requires manual deploy and `sudo systemctl restart personal-downloader-api.service`
+  - iOS native changes:
+    - require new IPA build/install
+    - currently blocked until GitHub Actions budget issue is resolved
+- qBittorrent WebView error still remains pending.
