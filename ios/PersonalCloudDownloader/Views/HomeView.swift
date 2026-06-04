@@ -9,6 +9,7 @@ struct HomeView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var dashboard = HomeDashboardState()
     @State private var refreshTask: Task<Void, Never>?
+    @State private var refreshGeneration = 0
 
     var body: some View {
         NavigationStack {
@@ -111,7 +112,7 @@ struct HomeView: View {
             statusPill(
                 icon: serverStatusIcon,
                 title: "Server",
-                value: dashboard.serverStatus.label,
+                value: dashboard.serverStatusText,
                 tint: serverStatusColor
             )
 
@@ -265,6 +266,10 @@ struct HomeView: View {
     }
 
     private var serverStatusIcon: String {
+        if dashboard.isCheckingUnknownServer {
+            return "arrow.triangle.2.circlepath"
+        }
+
         switch dashboard.serverStatus {
         case .loading:
             return "arrow.triangle.2.circlepath"
@@ -276,6 +281,10 @@ struct HomeView: View {
     }
 
     private var serverStatusColor: Color {
+        if dashboard.isCheckingUnknownServer {
+            return .secondary
+        }
+
         switch dashboard.serverStatus {
         case .loading:
             return .secondary
@@ -288,6 +297,7 @@ struct HomeView: View {
 
     private func startRefreshLoop() {
         refreshTask?.cancel()
+        refreshGeneration += 1
         refreshTask = Task {
             await refreshDashboard()
 
@@ -302,14 +312,17 @@ struct HomeView: View {
     private func stopRefreshLoop() {
         refreshTask?.cancel()
         refreshTask = nil
+        refreshGeneration += 1
     }
 
     private func refreshDashboard() async {
-        await MainActor.run {
+        let generation = await MainActor.run {
+            refreshGeneration += 1
             dashboard.isRefreshing = true
             if !dashboard.hasLoaded {
                 dashboard.serverStatus = .loading
             }
+            return refreshGeneration
         }
 
         async let health = fetchHealth()
@@ -330,6 +343,7 @@ struct HomeView: View {
         )
 
         await MainActor.run {
+            guard generation == refreshGeneration else { return }
             dashboard = nextState
         }
     }
@@ -410,6 +424,10 @@ private struct HomeDashboardState {
     }
 
     var headerSubtitle: String {
+        if isCheckingUnknownServer {
+            return "Checking the private shelf"
+        }
+
         switch serverStatus {
         case .loading:
             return "Checking the private shelf"
@@ -426,6 +444,14 @@ private struct HomeDashboardState {
         }
         guard let lastUpdated else { return "Not yet" }
         return lastUpdated.formatted(date: .omitted, time: .shortened)
+    }
+
+    var serverStatusText: String {
+        isCheckingUnknownServer ? "Checking" : serverStatus.label
+    }
+
+    var isCheckingUnknownServer: Bool {
+        isRefreshing && serverStatus != .online
     }
 }
 
