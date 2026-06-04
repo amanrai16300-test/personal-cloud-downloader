@@ -10,13 +10,6 @@ name: iOS Unsigned Device IPA
 
 on:
   workflow_dispatch:
-  # Temporary: lets this workflow run from the feature branch before it is on
-  # the default branch (workflow_dispatch only shows on the default branch).
-  # Remove once merged to the default branch.
-  push:
-    branches:
-      - main
-      - "feature/**"
 
 jobs:
   unsigned-ipa:
