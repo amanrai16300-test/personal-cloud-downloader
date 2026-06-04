@@ -40,10 +40,14 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("CloudBox")
                         .font(.system(.largeTitle, design: .rounded, weight: .bold))
-                    Text("Private media, downloads, and files")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                    Text(dashboard.headerSubtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
+                .layoutPriority(1)
 
                 Spacer(minLength: 16)
 
@@ -131,7 +135,7 @@ struct HomeView: View {
     }
 
     private var dashboardGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 154), spacing: 12)], spacing: 12) {
             dashboardCard(
                 icon: "arrow.down.circle.fill",
                 title: "Downloader",
@@ -151,8 +155,8 @@ struct HomeView: View {
             dashboardCard(
                 icon: "externaldrive.fill",
                 title: "Files",
-                value: dashboard.completedFilesText,
-                detail: "Library index",
+                value: dashboard.filesIndexText,
+                detail: dashboard.filesIndexDetail,
                 tint: .teal
             )
 
@@ -202,13 +206,13 @@ struct HomeView: View {
 
     private var quickActions: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Quick Actions")
+            Text("Tab Shortcuts")
                 .font(.headline)
 
             VStack(spacing: 10) {
-                quickActionRow(icon: "arrow.down.circle", title: "Open Downloader", subtitle: "Use the Downloader tab", tint: .blue)
-                quickActionRow(icon: "play.rectangle", title: "Open Videos", subtitle: "Use the Videos tab", tint: .purple)
-                quickActionRow(icon: "magnet", title: "Open qBittorrent", subtitle: "Use the qBittorrent tab", tint: .green)
+                quickActionRow(icon: "arrow.down.circle", title: "Downloader", subtitle: "Switch to the Downloader tab", tint: .blue)
+                quickActionRow(icon: "play.rectangle", title: "Videos", subtitle: "Switch to the Videos tab", tint: .purple)
+                quickActionRow(icon: "magnet", title: "qBittorrent", subtitle: "Switch to the qBittorrent tab", tint: .green)
 
                 Link(destination: URL(string: "tailscale://")!) {
                     quickActionContent(icon: "network", title: "Open Tailscale", subtitle: "Private connection", tint: .orange, showsChevron: true)
@@ -366,18 +370,38 @@ private struct HomeDashboardState {
     var hasLoaded = false
 
     var torrentCountText: String {
-        guard let torrentCount else { return "Unavailable" }
+        guard let torrentCount else { return "Offline" }
         return "\(torrentCount)"
     }
 
     var activeTorrentText: String {
-        guard let torrentCount else { return "Status unavailable" }
+        guard let torrentCount else { return "No connection" }
         return torrentCount == 1 ? "Torrent tracked" : "Torrents tracked"
     }
 
     var completedFilesText: String {
-        guard let completedFileCount else { return "Unavailable" }
+        guard let completedFileCount else { return "Offline" }
         return "\(completedFileCount)"
+    }
+
+    var filesIndexText: String {
+        completedFileCount == nil ? "Offline" : "Indexed"
+    }
+
+    var filesIndexDetail: String {
+        guard let completedFileCount else { return "No connection" }
+        return completedFileCount == 1 ? "1 completed item" : "\(completedFileCount) completed items"
+    }
+
+    var headerSubtitle: String {
+        switch serverStatus {
+        case .loading:
+            return "Checking the private shelf"
+        case .online:
+            return "Tailnet online, library ready"
+        case .offline:
+            return "Private shelf unreachable"
+        }
     }
 
     var lastUpdatedText: String {
