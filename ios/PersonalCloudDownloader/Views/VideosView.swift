@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct VideosView: View {
@@ -425,18 +426,269 @@ private struct FolderVideosView: View {
     let progressByPath: [String: VideoProgress]
 
     var body: some View {
-        List(folder.videos) { video in
-            NavigationLink(value: video) {
-                row(video, progress: progressByPath[video.path])
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                folderHeader
+
+                Divider()
+                    .overlay(Color.white.opacity(0.12))
+
+                VStack(spacing: 0) {
+                    ForEach(folder.videos) { video in
+                        NavigationLink(value: video) {
+                            row(video, progress: progressByPath[video.path])
+                        }
+                        .buttonStyle(.plain)
+
+                        if video.id != folder.videos.last?.id {
+                            Divider()
+                                .overlay(Color.white.opacity(0.12))
+                                .padding(.leading, 14)
+                        }
+                    }
+                }
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 18)
+            .padding(.bottom, 34)
         }
-        .listStyle(.plain)
-        .navigationTitle(folder.name)
+        .background(folderBackground)
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarColorScheme(.dark, for: .navigationBar)
     }
 
     private func row(_ video: CompletedFile, progress: VideoProgress?) -> some View {
-        VideoRow(video: video, progress: progress)
+        FolderVideoRow(video: video, progress: progress)
+    }
+
+    private var folderHeader: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 14) {
+                Text(folder.name)
+                    .font(.system(size: 25, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: 10)
+
+                HStack(spacing: 14) {
+                    headerIcon("magnifyingglass")
+                    headerIcon("line.3.horizontal.decrease")
+                }
+            }
+
+            HStack(spacing: 7) {
+                Text(folder.videoCountLabel.replacingOccurrences(of: "videos", with: "files").replacingOccurrences(of: "video", with: "file"))
+                    .foregroundStyle(Color(red: 0.65, green: 0.69, blue: 0.78))
+                Text("•")
+                    .foregroundStyle(Color.blue)
+                Text(folder.videoCountLabel)
+                    .foregroundStyle(Color.blue)
+            }
+            .font(.system(size: 16, weight: .medium))
+        }
+    }
+
+    private func headerIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(Color(red: 0.65, green: 0.69, blue: 0.78))
+            .frame(width: 48, height: 48)
+            .background(Color.white.opacity(0.06), in: Circle())
+    }
+
+    private var folderBackground: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            RadialGradient(
+                colors: [Color(red: 0.02, green: 0.10, blue: 0.18).opacity(0.55), .clear],
+                center: .topLeading,
+                startRadius: 20,
+                endRadius: 300
+            )
+            .ignoresSafeArea()
+        }
+    }
+}
+
+private struct FolderVideoRow: View {
+    let video: CompletedFile
+    let progress: VideoProgress?
+
+    private var watchedPercent: Double {
+        min(max(progress?.watchedPercent ?? 0, 0), 100)
+    }
+
+    private var isWatched: Bool {
+        watchedPercent >= 70
+    }
+
+    private var isPartiallyWatched: Bool {
+        watchedPercent > 5 && watchedPercent < 70
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            thumbnail
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text(video.displayName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(3)
+
+                metadata
+
+                HStack(spacing: 12) {
+                    progressBar
+                    statusLabel
+                }
+            }
+        }
+        .padding(.vertical, 18)
+        .contentShape(Rectangle())
+    }
+
+    private var thumbnail: some View {
+        ZStack(alignment: .bottomTrailing) {
+            thumbnailImage
+
+            if let durationText {
+                Text(durationText)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.70), in: Capsule())
+                    .padding(6)
+            }
+        }
+        .frame(width: 112, height: 72)
+    }
+
+    @ViewBuilder
+    private var thumbnailImage: some View {
+        if let url = video.thumbnailImageURL {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFill()
+                default:
+                    thumbnailPlaceholder
+                }
+            }
+            .frame(width: 112, height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            }
+        } else {
+            thumbnailPlaceholder
+        }
+    }
+
+    private var thumbnailPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.16),
+                        Color(red: 0.045, green: 0.055, blue: 0.07),
+                        Color.black
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.28))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            }
+    }
+
+    @ViewBuilder
+    private var metadata: some View {
+        if let date = video.modifiedDate {
+            Text(date.formatted(date: .abbreviated, time: .shortened))
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color(red: 0.65, green: 0.69, blue: 0.78))
+                .lineLimit(1)
+        }
+    }
+
+    private var progressBar: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.18))
+                Capsule()
+                    .fill(progressColor)
+                    .frame(width: geo.size.width * CGFloat(watchedPercent / 100))
+            }
+        }
+        .frame(height: 4)
+    }
+
+    private var statusLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: statusIcon)
+                .font(.system(size: 15, weight: .bold))
+            Text(statusText)
+                .font(.system(size: 14, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(progressColor)
+        .frame(width: 104, alignment: .trailing)
+    }
+
+    private var statusIcon: String {
+        if isWatched {
+            return "checkmark.circle.fill"
+        }
+        return "clock"
+    }
+
+    private var statusText: String {
+        if isWatched {
+            return "Watched"
+        }
+        if isPartiallyWatched {
+            return "\(Int(watchedPercent.rounded()))% watched"
+        }
+        return "Not watched"
+    }
+
+    private var progressColor: Color {
+        if isWatched {
+            return .green
+        }
+        if isPartiallyWatched {
+            return .blue
+        }
+        return Color(red: 0.62, green: 0.65, blue: 0.72)
+    }
+
+    private var durationText: String? {
+        guard let durationMs = progress?.durationMs, durationMs > 0 else { return nil }
+        let totalSeconds = durationMs / 1000
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 {
+            return "\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", seconds))"
+        }
+        return "\(minutes):\(String(format: "%02d", seconds))"
     }
 }
 

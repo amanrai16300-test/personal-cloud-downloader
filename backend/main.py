@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import re
 import shutil
@@ -47,6 +48,8 @@ class VideoProgressRequest(BaseModel):
 
 
 VIDEO_PROGRESS_FILE = settings.download_complete_dir.parent / "video_progress.json"
+THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
+THUMBNAIL_TIMESTAMPS_SECONDS = (10, 1)
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -231,16 +234,111 @@ def completed_files() -> list[dict[str, Any]]:
         if is_visible_completed_file(file_path, download_dir):
             relative_path = file_path.relative_to(download_dir).as_posix()
             stat = file_path.stat()
-            results.append(
-                {
-                    "name": relative_path,
-                    "path": str(Path(relative_path)),
-                    "url": f"{settings.stream_base_url}/{quote(relative_path)}",
-                    "modified_at": timestamp_to_iso(stat.st_mtime),
-                }
-            )
+            item = {
+                "name": relative_path,
+                "path": str(Path(relative_path)),
+                "url": f"{settings.stream_base_url}/{quote(relative_path)}",
+                "modified_at": timestamp_to_iso(stat.st_mtime),
+            }
+            thumbnail_url = thumbnail_url_for_completed_video(file_path, download_dir)
+            if thumbnail_url:
+                item["thumbnail_url"] = thumbnail_url
+            results.append(item)
 
     return results
+
+
+def thumbnail_url_for_completed_video(file_path: Path, download_dir: Path) -> str | None:
+    if not is_video_file(file_path):
+        return None
+
+    thumbnail_path = ensure_video_thumbnail(file_path, download_dir)
+    if thumbnail_path is None:
+        return None
+
+    try:
+        relative = thumbnail_path.relative_to(download_dir.resolve()).as_posix()
+    except ValueError:
+        return None
+    return f"{settings.stream_base_url}/{quote(relative)}"
+
+
+def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
+    download_root = download_dir.resolve()
+
+    try:
+        video_path = resolve_safe_download_target(file_path, download_root)
+        if not video_path.is_file() or not is_video_file(video_path):
+            return None
+    except ValueError:
+        return None
+
+    if shutil.which("ffmpeg") is None:
+        return None
+
+    try:
+        relative = video_path.relative_to(download_root).as_posix()
+        stat = video_path.stat()
+    except (OSError, ValueError):
+        return None
+
+    cache_dir = download_root / THUMBNAIL_CACHE_DIR_NAME
+    cache_key = hashlib.sha256(f"{relative}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()
+
+    try:
+        thumbnail_path = resolve_safe_download_target(cache_dir / f"{cache_key}.jpg", download_root)
+    except ValueError:
+        return None
+
+    if thumbnail_path.is_file():
+        return thumbnail_path
+
+    try:
+        cache_dir.mkdir(exist_ok=True)
+    except OSError:
+        return None
+
+    for timestamp in THUMBNAIL_TIMESTAMPS_SECONDS:
+        if extract_video_thumbnail(video_path, thumbnail_path, timestamp):
+            return thumbnail_path
+
+    return None
+
+
+def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_seconds: int) -> bool:
+    tmp_path = thumbnail_path.with_name(f"{thumbnail_path.stem}.tmp.jpg")
+    tmp_path.unlink(missing_ok=True)
+
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss", str(timestamp_seconds),
+                "-i", str(video_path),
+                "-frames:v", "1",
+                "-q:v", "3",
+                "-vf", "scale=320:-1",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG_TIMEOUT_S,
+        )
+    except (subprocess.SubprocessError, OSError):
+        tmp_path.unlink(missing_ok=True)
+        return False
+
+    if result.returncode != 0 or not tmp_path.is_file() or tmp_path.stat().st_size == 0:
+        tmp_path.unlink(missing_ok=True)
+        return False
+
+    try:
+        tmp_path.replace(thumbnail_path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def organize_loose_completed_videos(download_dir: Path) -> None:

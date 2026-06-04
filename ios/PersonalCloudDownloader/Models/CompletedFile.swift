@@ -3,12 +3,14 @@ import Foundation
 /// One completed file from `GET /api/completed-files`.
 ///
 /// Backend fields: name (relative path), path, url (stream link), modified_at
-/// (ISO8601, nullable). No size field is provided by this endpoint.
+/// (ISO8601, nullable), thumbnail_url (nullable). No size field is provided by
+/// this endpoint.
 struct CompletedFile: Decodable, Identifiable, Hashable {
     let name: String
     let path: String
     let url: String
     let modifiedAt: String?
+    let thumbnailURL: String?
 
     // Stable identity from the unique stream URL.
     var id: String { url }
@@ -18,13 +20,15 @@ struct CompletedFile: Decodable, Identifiable, Hashable {
         case path
         case url
         case modifiedAt = "modified_at"
+        case thumbnailURL = "thumbnail_url"
     }
 
-    init(name: String, path: String, url: String, modifiedAt: String?) {
+    init(name: String, path: String, url: String, modifiedAt: String?, thumbnailURL: String? = nil) {
         self.name = name
         self.path = path
         self.url = url
         self.modifiedAt = modifiedAt
+        self.thumbnailURL = thumbnailURL
     }
 
     /// Last path component without directory prefix, e.g. "Big Buck Bunny.mp4".
@@ -53,6 +57,18 @@ struct CompletedFile: Decodable, Identifiable, Hashable {
     /// backend emitted a bare relative path).
     var streamURL: URL? {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let resolved = URL(string: trimmed),
+              let scheme = resolved.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              resolved.host != nil
+        else { return nil }
+        return resolved
+    }
+
+    var thumbnailImageURL: URL? {
+        guard let thumbnailURL else { return nil }
+        let trimmed = thumbnailURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let resolved = URL(string: trimmed),
               let scheme = resolved.scheme?.lowercased(),
