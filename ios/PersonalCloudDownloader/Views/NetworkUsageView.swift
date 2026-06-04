@@ -21,16 +21,6 @@ struct NetworkUsageView: View {
                 }
             }
             .navigationTitle("Network")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await loadUsage() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(isLoading)
-                }
-            }
             .refreshable {
                 await loadUsage()
             }
