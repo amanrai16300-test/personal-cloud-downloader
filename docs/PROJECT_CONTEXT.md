@@ -458,6 +458,59 @@ http://100.92.146.101:8090/app/
 - Oracle migration backend testing is complete.
 - Simple Seedr-style UI MVP is live on Oracle.
 
+### 2026-06-03 CloudBox / Personal Cloud Downloader Progress Update
+
+- iOS app renamed to `CloudBox`.
+- Custom app icon added from `assets/app-icon.png`.
+- AppIcon asset catalog added under `ios/PersonalCloudDownloader/Assets.xcassets/AppIcon.appiconset/`.
+- XcodeGen display name fixed using `targets > PersonalCloudDownloader > info > properties > CFBundleDisplayName: CloudBox`.
+- GitHub Actions workflow should use `main` and `"feature/**"` so future feature branches trigger automatically.
+- VLC fake-landscape player was kept because real landscape was unreliable with iPhone rotation lock.
+- VLC fullscreen UI was polished:
+  - custom top clock
+  - nPlayer-style top nav timeline
+  - X has separate space
+  - timeline starts after X
+  - amber/gold progress background
+  - subtitle button bottom-left
+  - Fit/Cover bottom-right
+  - bottom bar transport-only
+- VLC gestures were added:
+  - left vertical swipe controls brightness
+  - right vertical swipe controls volume
+  - overlay preview for brightness and volume
+  - horizontal swipe seeks
+  - brightness/volume sync after app foreground works
+- VLC resume now persists using stable `CompletedFile.path`, `timeMs`, and `durationMs`.
+- Backend video progress storage was added:
+  - `POST /api/video-progress`
+  - `GET /api/video-progress`
+  - stores `path`, `timeMs`, `durationMs`, `watchedPercent`, and `updatedAt`
+- Videos list now shows a progress bar and watched badge when progress is `>= 70%`.
+- Single-file torrent grouping was fixed:
+  - qB add uses `root_folder: "true"` for future downloads
+  - existing loose root videos display as one-video folder groups
+- Delete behavior was fixed:
+  - `DELETE /api/torrents/{torrent_hash}` uses qB delete-with-files
+  - safely removes the selected torrent package from the completed downloads root
+  - cleans video, folder, `.srt`, `.vtt`, sidecar files, and empty leftovers
+- Real `/files/` root confirmed:
+  - `/srv/personal-cloud/downloads/complete/`
+- Real Downloader web UI path confirmed:
+  - `/var/www/personal-cloud/app/app.js`
+- Important deployment note:
+  - iOS/native changes require IPA build from GitHub Actions.
+  - Web Downloader changes such as `frontend/app.js` require manual deploy to `/var/www/personal-cloud/app/app.js`.
+  - Backend changes require manual deploy to Oracle backend files and service restart.
+- Downloader queue ordering work:
+  - file: `frontend/app.js`
+  - `renderTorrents(torrents)` is the real visible render path
+  - marker added: `queue-order-2026-06-03`
+  - active/current downloads should show above completed/old downloads
+  - if not visible, verify the served JS with `/app/app.js`, because wrong deploy path caused earlier confusion
+- Pending next Downloader UI task:
+  - add delete confirmation popup before delete action
+
 ## 15. Next Steps
 
 - Keep AWS services private through Tailscale.
