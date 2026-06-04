@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -303,6 +304,15 @@ IMAGE_SUBTITLE_CODECS = {
     "dvb_subtitle",
     "xsub",
 }
+SUBTITLE_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9]*(?:\s+[^<>]*)?>")
+SUBTITLE_ENTITY_RE = re.compile(r"&amp;|&lt;|&gt;|&quot;|&#39;")
+SUBTITLE_ENTITY_REPLACEMENTS = {
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+}
 # Hard limits so a stuck/huge probe or extract can't wedge the request.
 FFPROBE_TIMEOUT_S = 30
 FFMPEG_TIMEOUT_S = 120
@@ -323,6 +333,7 @@ def extract_subtitle(payload: ExtractSubtitleRequest) -> dict[str, Any]:
 
     # Never overwrite an existing sidecar (could be user-provided).
     if srt_path.exists():
+        sanitize_subtitle_file(srt_path, create_backup=True)
         return {"status": "exists", "url": srt_stream_url(srt_path)}
 
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
@@ -343,6 +354,7 @@ def extract_subtitle(payload: ExtractSubtitleRequest) -> dict[str, Any]:
     if not extract_to_srt(video_path, chosen["sub_index"], srt_path):
         return {"status": "extraction_failed"}
 
+    sanitize_subtitle_file(srt_path, create_backup=False)
     return {"status": "extracted", "url": srt_stream_url(srt_path)}
 
 
@@ -373,6 +385,89 @@ def srt_stream_url(srt_path: Path) -> str:
     completed-files listing uses for videos."""
     relative = srt_path.relative_to(settings.download_complete_dir.resolve()).as_posix()
     return f"{settings.stream_base_url}/{quote(relative)}"
+
+
+def sanitize_subtitle_file(subtitle_path: Path, *, create_backup: bool) -> bool:
+    """Clean cue dialogue text in .srt/.vtt files under completed downloads."""
+    completed_root = settings.download_complete_dir.resolve()
+    resolved = subtitle_path.resolve()
+    if resolved.suffix.lower() not in {".srt", ".vtt"} or not resolved.is_relative_to(completed_root):
+        return False
+
+    try:
+        original = resolved.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    sanitized = sanitize_subtitle_content(original)
+    if sanitized == original:
+        return False
+
+    try:
+        if create_backup:
+            shutil.copy2(resolved, subtitle_backup_path(resolved))
+        resolved.write_text(sanitized, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def subtitle_backup_path(subtitle_path: Path) -> Path:
+    backup_path = subtitle_path.with_name(f"{subtitle_path.name}.bak")
+    if not backup_path.exists():
+        return backup_path
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return subtitle_path.with_name(f"{subtitle_path.name}.{timestamp}.bak")
+
+
+def sanitize_subtitle_content(content: str) -> str:
+    lines = content.splitlines(keepends=True)
+    sanitized_lines: list[str] = []
+    in_dialogue = False
+
+    for line in lines:
+        text, newline = split_subtitle_newline(line)
+        stripped = text.strip()
+
+        if stripped == "":
+            in_dialogue = False
+            sanitized_lines.append(line)
+            continue
+
+        if is_subtitle_timing_line(text):
+            in_dialogue = True
+            sanitized_lines.append(line)
+            continue
+
+        if in_dialogue:
+            sanitized_lines.append(sanitize_subtitle_dialogue_text(text) + newline)
+        else:
+            sanitized_lines.append(line)
+
+    return "".join(sanitized_lines)
+
+
+def split_subtitle_newline(line: str) -> tuple[str, str]:
+    if line.endswith("\r\n"):
+        return line[:-2], "\r\n"
+    if line.endswith("\n"):
+        return line[:-1], "\n"
+    if line.endswith("\r"):
+        return line[:-1], "\r"
+    return line, ""
+
+
+def is_subtitle_timing_line(text: str) -> bool:
+    return "-->" in text
+
+
+def sanitize_subtitle_dialogue_text(text: str) -> str:
+    decoded = SUBTITLE_ENTITY_RE.sub(
+        lambda match: SUBTITLE_ENTITY_REPLACEMENTS[match.group(0)],
+        text,
+    )
+    return SUBTITLE_TAG_RE.sub("", decoded)
 
 
 def probe_subtitle_streams(video_path: Path) -> list[dict[str, Any]] | None:
