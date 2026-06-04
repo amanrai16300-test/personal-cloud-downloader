@@ -1,0 +1,602 @@
+<!-- Design preview only. This file is not app runtime and makes no backend calls. -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CloudBox Home Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #030814;
+      --panel: #06152d;
+      --panel-2: #081d3d;
+      --line: rgba(63, 126, 239, 0.48);
+      --text: #f7f9ff;
+      --muted: #91a3c7;
+      --blue: #2384ff;
+      --green: #24e06b;
+      --purple: #8b3df4;
+      --cyan: #13c9d9;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(38, 113, 255, 0.26), transparent 34rem),
+        linear-gradient(140deg, #061b39 0%, var(--bg) 48%, #01040c 100%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+    }
+
+    .phone {
+      width: min(100vw, 430px);
+      min-height: min(100vh, 932px);
+      position: relative;
+      overflow: hidden;
+      padding: 42px 18px 96px;
+      background:
+        radial-gradient(circle at 8% 0%, rgba(51, 124, 255, 0.25), transparent 18rem),
+        linear-gradient(155deg, #061a35 0%, #030814 50%, #01040c 100%);
+    }
+
+    .status {
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .status-icons {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: rgba(255, 255, 255, 0.92);
+      font-size: 14px;
+    }
+
+    .battery {
+      padding: 1px 6px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.70);
+      color: #10141c;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .nav-title {
+      margin: 36px 0 28px;
+      text-align: center;
+      font-size: 28px;
+      font-weight: 800;
+    }
+
+    .stack {
+      display: grid;
+      gap: 22px;
+    }
+
+    .hero {
+      min-height: 174px;
+      position: relative;
+      overflow: hidden;
+      border-radius: 26px;
+      padding: 34px 22px 26px;
+      background:
+        radial-gradient(circle at 9% 0%, rgba(54, 132, 255, 0.42), transparent 15rem),
+        linear-gradient(135deg, #0b2d66 0%, #031028 48%, #020817 100%);
+      border: 1px solid rgba(89, 144, 255, 0.68);
+      box-shadow: 0 22px 44px rgba(0, 0, 0, 0.28);
+    }
+
+    .hero h1 {
+      margin: 0;
+      max-width: 210px;
+      font-size: 40px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 18px 0 22px;
+      color: var(--muted);
+      font-size: 17px;
+      font-weight: 600;
+    }
+
+    .pill {
+      width: fit-content;
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      padding: 10px 13px;
+      border-radius: 999px;
+      background: rgba(35, 132, 255, 0.22);
+      border: 1px solid rgba(80, 147, 255, 0.22);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .pill span:last-child {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-weight: 500;
+    }
+
+    .badge {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      width: 54px;
+      height: 54px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: rgba(36, 224, 107, 0.18);
+      border: 2px solid rgba(36, 224, 107, 0.88);
+      color: var(--green);
+      font-size: 28px;
+      font-weight: 900;
+      box-shadow: 0 0 26px rgba(36, 224, 107, 0.30);
+    }
+
+    .hero-art {
+      position: absolute;
+      right: 36px;
+      bottom: 26px;
+      width: 126px;
+      height: 118px;
+      opacity: 0.92;
+    }
+
+    .ring {
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      border: 1px solid rgba(65, 131, 255, 0.12);
+      border-radius: 50%;
+    }
+
+    .ring:nth-child(1) { width: 78px; height: 78px; }
+    .ring:nth-child(2) { width: 104px; height: 104px; }
+    .ring:nth-child(3) { width: 130px; height: 130px; }
+
+    .server {
+      position: absolute;
+      left: 28px;
+      top: 18px;
+      width: 62px;
+      height: 78px;
+      border-radius: 12px;
+      transform: skewY(-8deg);
+      background: linear-gradient(145deg, #62a8ff, #082453 52%, #03132d);
+      border: 1px solid rgba(97, 164, 255, 0.65);
+      box-shadow: 0 16px 28px rgba(0, 0, 0, 0.35);
+    }
+
+    .server::before,
+    .server::after {
+      content: "";
+      position: absolute;
+      left: 11px;
+      right: 11px;
+      height: 1px;
+      background: rgba(113, 181, 255, 0.36);
+    }
+
+    .server::before { top: 28px; }
+    .server::after { top: 50px; }
+
+    .cloud {
+      position: absolute;
+      right: 10px;
+      bottom: 2px;
+      width: 82px;
+      height: 42px;
+      border-radius: 30px;
+      background: linear-gradient(145deg, #1a6bed, #061a3d);
+      filter: drop-shadow(0 14px 16px rgba(0, 0, 0, 0.35));
+    }
+
+    .cloud::before,
+    .cloud::after {
+      content: "";
+      position: absolute;
+      bottom: 18px;
+      border-radius: 50%;
+      background: inherit;
+    }
+
+    .cloud::before {
+      left: 15px;
+      width: 42px;
+      height: 42px;
+    }
+
+    .cloud::after {
+      right: 9px;
+      width: 32px;
+      height: 32px;
+    }
+
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .status-card,
+    .metric,
+    .action,
+    .note {
+      border-radius: 24px;
+      background: linear-gradient(135deg, rgba(35, 132, 255, 0.13), rgba(6, 21, 45, 0.88));
+      border: 1px solid var(--line);
+    }
+
+    .status-card {
+      min-height: 82px;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding: 16px;
+    }
+
+    .status-card.online {
+      background: linear-gradient(135deg, rgba(36, 224, 107, 0.22), rgba(6, 34, 38, 0.78));
+      border-color: rgba(36, 224, 107, 0.38);
+    }
+
+    .icon {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: rgba(35, 132, 255, 0.18);
+      color: var(--blue);
+      border: 1px solid rgba(35, 132, 255, 0.30);
+      font-size: 25px;
+      font-weight: 900;
+    }
+
+    .online .icon {
+      background: rgba(36, 224, 107, 0.20);
+      color: var(--green);
+      border-color: rgba(36, 224, 107, 0.30);
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .value {
+      margin-top: 2px;
+      color: var(--text);
+      font-size: 23px;
+      line-height: 1;
+      font-weight: 800;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .metric {
+      min-height: 160px;
+      position: relative;
+      overflow: hidden;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .metric.blue { border-color: rgba(35, 132, 255, 0.50); }
+    .metric.purple { border-color: rgba(139, 61, 244, 0.50); background: linear-gradient(135deg, rgba(139, 61, 244, 0.20), rgba(6, 21, 45, 0.88)); }
+    .metric.cyan { border-color: rgba(19, 201, 217, 0.48); background: linear-gradient(135deg, rgba(19, 201, 217, 0.18), rgba(6, 21, 45, 0.88)); }
+
+    .metric .icon {
+      width: 52px;
+      height: 52px;
+      color: #fff;
+      background: linear-gradient(145deg, var(--blue), rgba(35, 132, 255, 0.35));
+      box-shadow: 0 12px 22px rgba(35, 132, 255, 0.24);
+    }
+
+    .metric.purple .icon { background: linear-gradient(145deg, var(--purple), rgba(139, 61, 244, 0.35)); }
+    .metric.cyan .icon { background: linear-gradient(145deg, var(--cyan), rgba(19, 201, 217, 0.35)); }
+
+    .metric-copy {
+      margin-top: auto;
+      position: relative;
+      z-index: 2;
+    }
+
+    .metric .value {
+      margin: 8px 0 8px;
+      font-size: 28px;
+    }
+
+    .wave {
+      position: absolute;
+      left: -10px;
+      right: -10px;
+      bottom: -10px;
+      height: 46px;
+      opacity: 0.34;
+      background:
+        radial-gradient(70% 60% at 20% 100%, transparent 49%, currentColor 50%, transparent 52%),
+        radial-gradient(70% 60% at 80% 100%, transparent 49%, currentColor 50%, transparent 52%);
+      color: var(--blue);
+    }
+
+    .purple .wave { color: var(--purple); }
+    .cyan .wave { color: var(--cyan); }
+
+    .action {
+      min-height: 82px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 18px;
+    }
+
+    .action .globe {
+      width: 62px;
+      height: 62px;
+      position: relative;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: rgba(35, 132, 255, 0.17);
+      border: 1px solid rgba(35, 132, 255, 0.46);
+      font-size: 34px;
+    }
+
+    .lock {
+      position: absolute;
+      right: -3px;
+      bottom: -3px;
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue);
+      font-size: 13px;
+    }
+
+    .action h2 {
+      margin: 0;
+      font-size: 23px;
+      line-height: 1;
+    }
+
+    .action p {
+      margin: 8px 0 0;
+      color: var(--blue);
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .chev {
+      margin-left: auto;
+      width: 52px;
+      height: 52px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      border: 2px solid rgba(35, 132, 255, 0.75);
+      color: #b6d2ff;
+      font-size: 32px;
+    }
+
+    .note {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      padding: 20px;
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+
+    .note-icon {
+      width: 54px;
+      text-align: center;
+      font-size: 35px;
+      flex: 0 0 auto;
+    }
+
+    .tabs {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 92px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 12px 18px 24px;
+      background: rgba(6, 21, 45, 0.82);
+      border: 1px solid rgba(67, 120, 209, 0.25);
+      border-radius: 24px 24px 0 0;
+      backdrop-filter: blur(18px);
+    }
+
+    .tab {
+      display: grid;
+      place-items: center;
+      gap: 4px;
+      color: rgba(194, 205, 224, 0.78);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .tab strong {
+      color: var(--blue);
+    }
+
+    .tab-icon {
+      font-size: 24px;
+      line-height: 1;
+      filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.25));
+    }
+
+    @media (max-width: 390px) {
+      .phone {
+        padding-left: 14px;
+        padding-right: 14px;
+      }
+
+      .hero h1 {
+        font-size: 34px;
+      }
+
+      .hero-art {
+        width: 104px;
+        right: 22px;
+        opacity: 0.72;
+      }
+
+      .metrics {
+        gap: 10px;
+      }
+
+      .metric {
+        min-height: 148px;
+        padding: 13px;
+      }
+
+      .metric .icon {
+        width: 46px;
+        height: 46px;
+      }
+
+      .label {
+        font-size: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="phone" aria-label="CloudBox Home dashboard preview">
+    <div class="status">
+      <div>22:42</div>
+      <div class="status-icons">
+        <span>▮▮▮▮</span>
+        <span>Wi-Fi</span>
+        <span class="battery">34</span>
+      </div>
+    </div>
+
+    <div class="nav-title">Home</div>
+
+    <section class="stack">
+      <article class="hero">
+        <h1>CloudBox</h1>
+        <p class="subtitle">Tailnet online, library ready</p>
+        <div class="pill">
+          <span>▣</span>
+          <span>Tailscale private</span>
+          <span>100.92.146.101</span>
+        </div>
+        <div class="badge">✓</div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="ring"></div>
+          <div class="ring"></div>
+          <div class="ring"></div>
+          <div class="server"></div>
+          <div class="cloud"></div>
+        </div>
+      </article>
+
+      <section class="two">
+        <article class="status-card online">
+          <div class="icon">✓</div>
+          <div>
+            <div class="label">Server</div>
+            <div class="value">Online</div>
+          </div>
+        </article>
+        <article class="status-card">
+          <div class="icon">◷</div>
+          <div>
+            <div class="label">Updated</div>
+            <div class="value">22:42</div>
+          </div>
+        </article>
+      </section>
+
+      <section class="metrics">
+        <article class="metric blue">
+          <div class="icon">↓</div>
+          <div class="metric-copy">
+            <div class="label">Downloader</div>
+            <div class="value">1</div>
+            <div class="label">Torrent tracked</div>
+          </div>
+          <div class="wave"></div>
+        </article>
+        <article class="metric purple">
+          <div class="icon">▶</div>
+          <div class="metric-copy">
+            <div class="label">Videos</div>
+            <div class="value">8</div>
+            <div class="label">Completed files</div>
+          </div>
+          <div class="wave"></div>
+        </article>
+        <article class="metric cyan">
+          <div class="icon">▰</div>
+          <div class="metric-copy">
+            <div class="label">Files</div>
+            <div class="value">Indexed</div>
+            <div class="label">8 completed items</div>
+          </div>
+          <div class="wave"></div>
+        </article>
+      </section>
+
+      <article class="action">
+        <div class="globe">◎<span class="lock">▣</span></div>
+        <div>
+          <h2>Open Tailscale</h2>
+          <p>Private connection / VPN route</p>
+        </div>
+        <div class="chev">›</div>
+      </article>
+
+      <article class="note">
+        <div class="note-icon">♢</div>
+        <div>Private CloudBox access stays behind Tailscale. Offline values mean the phone cannot reach the server right now.</div>
+      </article>
+    </section>
+
+    <nav class="tabs" aria-label="Tab bar preview">
+      <div class="tab"><strong class="tab-icon">⌂</strong><strong>Home</strong></div>
+      <div class="tab"><span class="tab-icon">↓</span><span>Downloader</span></div>
+      <div class="tab"><span class="tab-icon">▶</span><span>Videos</span></div>
+      <div class="tab"><span class="tab-icon">qb</span><span>qBittorrent</span></div>
+      <div class="tab"><span class="tab-icon">•••</span><span>More</span></div>
+    </nav>
+  </main>
+</body>
+</html>

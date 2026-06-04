@@ -965,3 +965,34 @@ Full docs:
     - require new IPA build/install
     - currently blocked until GitHub Actions budget issue is resolved
 - qBittorrent WebView error still remains pending.
+
+## Dynamic Video Thumbnail Update
+
+- Dynamic video thumbnails are now implemented and verified.
+- Backend generates one `.jpg` thumbnail per video using `ffmpeg`.
+- Thumbnail cache path:
+
+```text
+/srv/personal-cloud/downloads/complete/_cloudbox-thumbnails/
+```
+
+- Backend reuses existing thumbnails and does not regenerate them repeatedly.
+- `/api/completed-files` now returns optional `thumbnail_url`.
+- Existing API fields remain unchanged:
+  - `name`
+  - `path`
+  - `url`
+  - `modified_at`
+- `_cloudbox-thumbnails` is not returned as a normal video/folder item.
+- iOS `CompletedFile` model now supports optional `thumbnail_url`.
+- iOS Videos folder-detail rows display real thumbnails with `AsyncImage`.
+- If `thumbnail_url` is missing or image loading fails, the existing styled placeholder remains.
+- Future downloads should get thumbnails automatically when `/api/completed-files` runs.
+- Verified server checks:
+  - thumbnail `.jpg` files were created
+  - `thumbnail_url` appears in `/api/completed-files`
+  - `_cloudbox-thumbnails` does not appear as a normal `name` or `path` item
+- Confirmed in CloudBox: real video thumbnails show correctly in the Videos folder-detail list.
+- Deployment note: this feature required both:
+  - backend deploy to Oracle for thumbnail generation and `thumbnail_url`
+  - new IPA build/install for iOS thumbnail display.
