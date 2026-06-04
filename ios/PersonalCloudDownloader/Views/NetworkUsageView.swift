@@ -13,11 +13,7 @@ struct NetworkUsageView: View {
                 } else if let usage {
                     usageContent(usage)
                 } else {
-                    ContentUnavailableView(
-                        "Network usage unavailable",
-                        systemImage: "antenna.radiowaves.left.and.right.slash",
-                        description: Text(errorMessage ?? "Pull to refresh or check the server connection.")
-                    )
+                    unavailableView
                 }
             }
             .navigationTitle("Network")
@@ -30,6 +26,22 @@ struct NetworkUsageView: View {
                 }
             }
         }
+    }
+
+    private var unavailableView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                .font(.system(size: 44))
+                .foregroundStyle(.secondary)
+            Text("Network usage unavailable")
+                .font(.headline)
+            Text(errorMessage ?? "Pull to refresh or check the server connection.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
