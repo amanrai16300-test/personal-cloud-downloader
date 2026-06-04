@@ -18,20 +18,42 @@ struct RootTabView: View {
                     Label("Videos", systemImage: "play.rectangle")
                 }
 
-            QBittorrentView()
+            NetworkUsageView()
                 .tabItem {
+                    Label("Network", systemImage: "antenna.radiowaves.left.and.right")
+                }
+
+            MoreView()
+                .tabItem {
+                    Label("More", systemImage: "ellipsis.circle")
+                }
+        }
+    }
+}
+
+private struct MoreView: View {
+    var body: some View {
+        NavigationStack {
+            List {
+                NavigationLink {
+                    QBittorrentView()
+                } label: {
                     Label("qBittorrent", systemImage: "magnet")
                 }
 
-            FilesView()
-                .tabItem {
+                NavigationLink {
+                    FilesView()
+                } label: {
                     Label("Files", systemImage: "folder")
                 }
 
-            SettingsView()
-                .tabItem {
+                NavigationLink {
+                    SettingsView()
+                } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
+            }
+            .navigationTitle("More")
         }
     }
 }

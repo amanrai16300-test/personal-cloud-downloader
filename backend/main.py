@@ -1,4 +1,5 @@
 import asyncio
+import calendar
 import hashlib
 import json
 import re
@@ -51,6 +52,8 @@ VIDEO_PROGRESS_FILE = settings.download_complete_dir.parent / "video_progress.js
 THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
 THUMBNAIL_TIMESTAMPS_SECONDS = (10, 30, 60, 1)
 MIN_THUMBNAIL_BYTES = 2 * 1024
+NETWORK_INTERFACE = "enp0s6"
+VNSTAT_TIMEOUT_SECONDS = 5
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -79,6 +82,25 @@ async def stop_auto_pause_monitor() -> None:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/network-usage")
+def network_usage() -> dict[str, Any]:
+    data = run_vnstat_json()
+    if data is not None:
+        return data
+
+    text = run_vnstat_text()
+    if text is not None:
+        return {
+            "status": "ok",
+            "interface": NETWORK_INTERFACE,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "format": "text",
+            "raw": text,
+        }
+
+    raise HTTPException(status_code=503, detail="vnstat is unavailable or returned no network data.")
 
 
 @app.post("/api/add-magnet")
@@ -721,6 +743,186 @@ def progress_percent(time_ms: int, duration_ms: int) -> float:
     if duration_ms <= 0:
         return 0.0
     return round(min(max(time_ms / duration_ms * 100, 0), 100), 2)
+
+
+def run_vnstat_json() -> dict[str, Any] | None:
+    result = run_fixed_command(["vnstat", "-i", NETWORK_INTERFACE, "--json"])
+    if result is None:
+        return None
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+
+    interfaces = payload.get("interfaces")
+    if not isinstance(interfaces, list) or not interfaces:
+        return None
+
+    interface = next(
+        (item for item in interfaces if isinstance(item, dict) and item.get("name") == NETWORK_INTERFACE),
+        interfaces[0],
+    )
+    if not isinstance(interface, dict):
+        return None
+
+    traffic = interface.get("traffic")
+    if not isinstance(traffic, dict):
+        return None
+
+    now = datetime.now(timezone.utc)
+    month_rows = [row for row in traffic.get("month", []) if isinstance(row, dict)]
+    day_rows = [row for row in traffic.get("day", []) if isinstance(row, dict)]
+    current_month = find_current_month(month_rows, now)
+    current_day = find_current_day(day_rows, now)
+    daily = [format_usage_row(row, "day", now) for row in day_rows[-14:]]
+
+    return {
+        "status": "ok",
+        "interface": str(interface.get("name") or NETWORK_INTERFACE),
+        "updated_at": now.isoformat(),
+        "format": "json",
+        "month": format_usage_row(current_month, "month", now) if current_month else None,
+        "today": format_usage_row(current_day, "day", now) if current_day else None,
+        "daily": [row for row in daily if row is not None],
+    }
+
+
+def run_vnstat_text() -> str | None:
+    result = run_fixed_command(["vnstat", "-i", NETWORK_INTERFACE])
+    if result is None:
+        return None
+    output = (result.stdout or "").strip()
+    return output or None
+
+
+def run_fixed_command(command: list[str]) -> subprocess.CompletedProcess[str] | None:
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=VNSTAT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result
+
+
+def find_current_month(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any] | None:
+    return next(
+        (
+            row for row in reversed(rows)
+            if row_date_part(row, "year") == now.year and row_date_part(row, "month") == now.month
+        ),
+        rows[-1] if rows else None,
+    )
+
+
+def find_current_day(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any] | None:
+    return next(
+        (
+            row for row in reversed(rows)
+            if (
+                row_date_part(row, "year") == now.year
+                and row_date_part(row, "month") == now.month
+                and row_date_part(row, "day") == now.day
+            )
+        ),
+        rows[-1] if rows else None,
+    )
+
+
+def row_date_part(row: dict[str, Any], part: str) -> int | None:
+    date = row.get("date")
+    if not isinstance(date, dict):
+        return None
+    value = date.get(part)
+    return int(value) if isinstance(value, int) else None
+
+
+def format_usage_row(row: dict[str, Any], period: str, now: datetime) -> dict[str, Any] | None:
+    rx = int(row.get("rx", 0) or 0)
+    tx = int(row.get("tx", 0) or 0)
+    total = rx + tx
+    avg_bps = average_bits_per_second(total, row, period, now)
+    result: dict[str, Any] = {
+        "date": format_vnstat_date(row, period),
+        "rx_bytes": rx,
+        "tx_bytes": tx,
+        "total_bytes": total,
+        "rx": format_bytes(rx),
+        "tx": format_bytes(tx),
+        "total": format_bytes(total),
+        "avg_rate_bps": avg_bps,
+        "avg_rate": format_bps(avg_bps),
+    }
+    if period == "month":
+        estimate = estimate_monthly_total(total, row, now)
+        result["estimated_total_bytes"] = estimate
+        result["estimated_total"] = format_bytes(estimate)
+    return result
+
+
+def format_vnstat_date(row: dict[str, Any], period: str) -> str:
+    date = row.get("date")
+    if not isinstance(date, dict):
+        return ""
+    year = int(date.get("year", 0) or 0)
+    month = int(date.get("month", 0) or 0)
+    day = int(date.get("day", 0) or 0)
+    if period == "month" and year and month:
+        return f"{year:04d}-{month:02d}"
+    if year and month and day:
+        return f"{year:04d}-{month:02d}-{day:02d}"
+    return ""
+
+
+def average_bits_per_second(total_bytes: int, row: dict[str, Any], period: str, now: datetime) -> float:
+    date = row.get("date")
+    if not isinstance(date, dict):
+        return 0.0
+    year = int(date.get("year", now.year) or now.year)
+    month = int(date.get("month", now.month) or now.month)
+    day = int(date.get("day", 1) or 1)
+    start = datetime(year, month, 1, tzinfo=timezone.utc)
+    if period == "day":
+        start = datetime(year, month, day, tzinfo=timezone.utc)
+    elapsed = max((now - start).total_seconds(), 1.0)
+    return total_bytes * 8 / elapsed
+
+
+def estimate_monthly_total(total_bytes: int, row: dict[str, Any], now: datetime) -> int:
+    if row_date_part(row, "year") != now.year or row_date_part(row, "month") != now.month:
+        return total_bytes
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    elapsed = max((now - month_start).total_seconds(), 1.0)
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    month_seconds = days_in_month * 24 * 60 * 60
+    return int(total_bytes * (month_seconds / elapsed))
+
+
+def format_bytes(value: int) -> str:
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    amount = float(value)
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            return f"{amount:.1f} {unit}" if unit != "B" else f"{int(amount)} B"
+        amount /= 1024
+    return f"{value} B"
+
+
+def format_bps(value: float) -> str:
+    units = ["bit/s", "Kbit/s", "Mbit/s", "Gbit/s"]
+    amount = float(value)
+    for unit in units:
+        if amount < 1000 or unit == units[-1]:
+            return f"{amount:.1f} {unit}"
+        amount /= 1000
+    return f"{value:.1f} bit/s"
 
 
 def read_video_progress() -> dict[str, dict[str, Any]]:
