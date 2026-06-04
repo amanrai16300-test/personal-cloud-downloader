@@ -219,6 +219,7 @@ def completed_files() -> list[dict[str, Any]]:
         return []
 
     organize_loose_completed_videos(download_dir)
+    ensure_missing_video_thumbnails(download_dir)
 
     results: list[dict[str, Any]] = []
     for file_path in sorted(download_dir.rglob("*")):
@@ -246,6 +247,28 @@ def completed_files() -> list[dict[str, Any]]:
             results.append(item)
 
     return results
+
+
+def ensure_missing_video_thumbnails(download_dir: Path) -> None:
+    for video_path in iter_completed_video_files(download_dir):
+        ensure_video_thumbnail(video_path, download_dir)
+
+
+def iter_completed_video_files(download_dir: Path):
+    download_root = download_dir.resolve()
+    for file_path in sorted(download_root.rglob("*")):
+        try:
+            resolved = resolve_safe_download_target(file_path, download_root)
+            relative = resolved.relative_to(download_root)
+        except ValueError:
+            continue
+
+        if THUMBNAIL_CACHE_DIR_NAME in relative.parts:
+            continue
+        if not resolved.is_file() or not is_video_file(resolved):
+            continue
+
+        yield resolved
 
 
 def thumbnail_url_for_completed_video(file_path: Path, download_dir: Path) -> str | None:
@@ -302,6 +325,7 @@ def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
         if extract_video_thumbnail(video_path, thumbnail_path, timestamp):
             return thumbnail_path
 
+    print(f"Warning: thumbnail generation failed for {relative}")
     return None
 
 
@@ -655,6 +679,9 @@ def is_visible_completed_file(file_path: Path, download_dir: Path) -> bool:
     support_dirs = {"screens", "screenshots", "sample", "samples"}
     hidden_extensions = {".nfo", ".txt", ".jpg", ".jpeg", ".png", ".webp"}
     preferred_extensions = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".zip", ".rar", ".7z", ".iso", ".pdf"}
+
+    if THUMBNAIL_CACHE_DIR_NAME in relative_path.parts:
+        return False
 
     if any(part in support_dirs for part in path_parts[:-1]):
         return False
