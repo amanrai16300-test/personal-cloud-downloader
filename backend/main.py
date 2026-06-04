@@ -49,7 +49,8 @@ class VideoProgressRequest(BaseModel):
 
 VIDEO_PROGRESS_FILE = settings.download_complete_dir.parent / "video_progress.json"
 THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
-THUMBNAIL_TIMESTAMPS_SECONDS = (10, 1)
+THUMBNAIL_TIMESTAMPS_SECONDS = (10, 30, 60, 1)
+MIN_THUMBNAIL_BYTES = 2 * 1024
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -313,8 +314,13 @@ def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
     except ValueError:
         return None
 
-    if thumbnail_path.is_file():
+    if is_valid_thumbnail(thumbnail_path):
         return thumbnail_path
+    if thumbnail_path.exists():
+        try:
+            thumbnail_path.unlink()
+        except OSError:
+            return None
 
     try:
         cache_dir.mkdir(exist_ok=True)
@@ -325,8 +331,19 @@ def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
         if extract_video_thumbnail(video_path, thumbnail_path, timestamp):
             return thumbnail_path
 
+    try:
+        thumbnail_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     print(f"Warning: thumbnail generation failed for {relative}")
     return None
+
+
+def is_valid_thumbnail(thumbnail_path: Path) -> bool:
+    try:
+        return thumbnail_path.is_file() and thumbnail_path.stat().st_size >= MIN_THUMBNAIL_BYTES
+    except OSError:
+        return False
 
 
 def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_seconds: int) -> bool:
@@ -353,7 +370,7 @@ def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_se
         tmp_path.unlink(missing_ok=True)
         return False
 
-    if result.returncode != 0 or not tmp_path.is_file() or tmp_path.stat().st_size == 0:
+    if result.returncode != 0 or not is_valid_thumbnail(tmp_path):
         tmp_path.unlink(missing_ok=True)
         return False
 
