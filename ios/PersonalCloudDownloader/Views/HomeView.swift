@@ -3,6 +3,7 @@ import SwiftUI
 
 struct HomeView: View {
     private let serverIP = "100.92.146.101"
+    private let backendBaseURL = CompletedFilesAPI.baseURL
     private let refreshInterval: UInt64 = 12_000_000_000
 
     @Environment(\.scenePhase) private var scenePhase
@@ -172,13 +173,6 @@ struct HomeView: View {
                 tint: .teal
             )
 
-            dashboardCard(
-                icon: "network",
-                title: "Private Link",
-                value: dashboard.serverStatus == .online ? "Ready" : "Check VPN",
-                detail: "Tailscale route",
-                tint: .orange
-            )
         }
     }
 
@@ -341,7 +335,7 @@ struct HomeView: View {
     }
 
     private func fetchHealth() async -> Bool {
-        guard let url = URL(string: "http://\(serverIP)/api/health") else { return false }
+        guard let url = URL(string: "\(backendBaseURL)/api/health") else { return false }
 
         do {
             let (_, response) = try await URLSession.shared.data(from: url)
@@ -353,7 +347,7 @@ struct HomeView: View {
     }
 
     private func fetchJSONArrayCount(path: String) async -> Int? {
-        guard let url = URL(string: "http://\(serverIP)\(path)") else { return nil }
+        guard let url = URL(string: "\(backendBaseURL)\(path)") else { return nil }
 
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
