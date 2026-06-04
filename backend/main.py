@@ -314,6 +314,7 @@ IMAGE_SUBTITLE_CODECS = {
     "xsub",
 }
 SUBTITLE_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9]*(?:\s+[^<>]*)?>")
+SUBTITLE_ASS_OVERRIDE_RE = re.compile(r"\{[^{}]*\\[^{}]*\}")
 SUBTITLE_ENTITY_RE = re.compile(r"&amp;|&lt;|&gt;|&quot;|&#39;")
 SUBTITLE_ENTITY_REPLACEMENTS = {
     "&amp;": "&",
@@ -473,7 +474,8 @@ def sanitize_subtitle_dialogue_text(text: str) -> str:
         lambda match: SUBTITLE_ENTITY_REPLACEMENTS[match.group(0)],
         text,
     )
-    return SUBTITLE_TAG_RE.sub("", decoded)
+    without_ass_overrides = SUBTITLE_ASS_OVERRIDE_RE.sub("", decoded)
+    return SUBTITLE_TAG_RE.sub("", without_ass_overrides)
 
 
 def probe_subtitle_streams(video_path: Path) -> list[dict[str, Any]] | None:
