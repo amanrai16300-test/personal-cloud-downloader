@@ -3,8 +3,11 @@ import SwiftUI
 
 struct HomeView: View {
     private let serverIP = "100.92.146.101"
+    private let refreshInterval: UInt64 = 12_000_000_000
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var dashboard = HomeDashboardState()
+    @State private var refreshTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -13,7 +16,7 @@ struct HomeView: View {
                     heroHeader
                     statusStrip
                     dashboardGrid
-                    quickActions
+                    tailscaleAction
                     privateCloudNote
                 }
                 .padding(.horizontal, 18)
@@ -27,9 +30,18 @@ struct HomeView: View {
             .refreshable {
                 await refreshDashboard()
             }
-            .task {
-                guard !dashboard.hasLoaded else { return }
-                await refreshDashboard()
+            .onAppear {
+                startRefreshLoop()
+            }
+            .onDisappear {
+                stopRefreshLoop()
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active {
+                    startRefreshLoop()
+                } else {
+                    stopRefreshLoop()
+                }
             }
         }
     }
@@ -204,28 +216,18 @@ struct HomeView: View {
         }
     }
 
-    private var quickActions: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Tab Shortcuts")
-                .font(.headline)
-
-            VStack(spacing: 10) {
-                quickActionRow(icon: "arrow.down.circle", title: "Downloader", subtitle: "Switch to the Downloader tab", tint: .blue)
-                quickActionRow(icon: "play.rectangle", title: "Videos", subtitle: "Switch to the Videos tab", tint: .purple)
-                quickActionRow(icon: "magnet", title: "qBittorrent", subtitle: "Switch to the qBittorrent tab", tint: .green)
-
-                Link(destination: URL(string: "tailscale://")!) {
-                    quickActionContent(icon: "network", title: "Open Tailscale", subtitle: "Private connection", tint: .orange, showsChevron: true)
-                }
-            }
+    private var tailscaleAction: some View {
+        Link(destination: URL(string: "tailscale://")!) {
+            actionCardContent(
+                icon: "network",
+                title: "Open Tailscale",
+                subtitle: "Private connection / VPN route",
+                tint: .orange
+            )
         }
     }
 
-    private func quickActionRow(icon: String, title: String, subtitle: String, tint: Color) -> some View {
-        quickActionContent(icon: icon, title: title, subtitle: subtitle, tint: tint, showsChevron: false)
-    }
-
-    private func quickActionContent(icon: String, title: String, subtitle: String, tint: Color, showsChevron: Bool) -> some View {
+    private func actionCardContent(icon: String, title: String, subtitle: String, tint: Color) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.headline.weight(.semibold))
@@ -244,14 +246,16 @@ struct HomeView: View {
 
             Spacer()
 
-            if showsChevron {
-                Image(systemName: "arrow.up.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-            }
+            Image(systemName: "arrow.up.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.quaternary, lineWidth: 1)
+        }
     }
 
     private var privateCloudNote: some View {
@@ -286,6 +290,24 @@ struct HomeView: View {
         case .offline:
             return .red
         }
+    }
+
+    private func startRefreshLoop() {
+        refreshTask?.cancel()
+        refreshTask = Task {
+            await refreshDashboard()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: refreshInterval)
+                guard !Task.isCancelled else { return }
+                await refreshDashboard()
+            }
+        }
+    }
+
+    private func stopRefreshLoop() {
+        refreshTask?.cancel()
+        refreshTask = nil
     }
 
     private func refreshDashboard() async {
