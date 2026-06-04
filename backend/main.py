@@ -219,7 +219,16 @@ def completed_files() -> list[dict[str, Any]]:
 
     results: list[dict[str, Any]] = []
     for file_path in sorted(download_dir.rglob("*")):
-        if file_path.is_file() and is_visible_completed_file(file_path, download_dir):
+        if not file_path.is_file():
+            continue
+
+        if file_path.suffix.lower() in {".srt", ".vtt"}:
+            try:
+                sanitize_subtitle_file(file_path, create_backup=True)
+            except OSError:
+                pass
+
+        if is_visible_completed_file(file_path, download_dir):
             relative_path = file_path.relative_to(download_dir).as_posix()
             stat = file_path.stat()
             results.append(
@@ -396,7 +405,7 @@ def sanitize_subtitle_file(subtitle_path: Path, *, create_backup: bool) -> bool:
 
     try:
         original = resolved.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False
 
     sanitized = sanitize_subtitle_content(original)
@@ -405,7 +414,9 @@ def sanitize_subtitle_file(subtitle_path: Path, *, create_backup: bool) -> bool:
 
     try:
         if create_backup:
-            shutil.copy2(resolved, subtitle_backup_path(resolved))
+            backup_path = subtitle_backup_path(resolved)
+            if not backup_path.exists():
+                shutil.copy2(resolved, backup_path)
         resolved.write_text(sanitized, encoding="utf-8")
     except OSError:
         return False
@@ -413,12 +424,7 @@ def sanitize_subtitle_file(subtitle_path: Path, *, create_backup: bool) -> bool:
 
 
 def subtitle_backup_path(subtitle_path: Path) -> Path:
-    backup_path = subtitle_path.with_name(f"{subtitle_path.name}.bak")
-    if not backup_path.exists():
-        return backup_path
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    return subtitle_path.with_name(f"{subtitle_path.name}.{timestamp}.bak")
+    return subtitle_path.with_name(f"{subtitle_path.name}.bak")
 
 
 def sanitize_subtitle_content(content: str) -> str:
