@@ -4,6 +4,10 @@ struct VideosView: View {
     @State private var videos: [CompletedFile] = []
     @State private var progressByPath: [String: VideoProgress] = [:]
     @State private var phase: LoadPhase = .loading
+    private let background = Color(red: 0.015, green: 0.035, blue: 0.075)
+    private let panel = Color(red: 0.025, green: 0.075, blue: 0.145)
+    private let stroke = Color(red: 0.20, green: 0.31, blue: 0.48)
+    private let muted = Color(red: 0.62, green: 0.68, blue: 0.80)
 
     enum LoadPhase: Equatable {
         case loading
@@ -14,7 +18,10 @@ struct VideosView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Videos")
+                .background(videosBackground)
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarColorScheme(.dark, for: .navigationBar)
                 // A tapped loose video (no parent folder) opens straight into
                 // fullscreen, same as before. A tapped folder pushes the list of
                 // videos inside it.
@@ -32,8 +39,7 @@ struct VideosView: View {
     private var content: some View {
         switch phase {
         case .loading:
-            ProgressView("Loading videos…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            loadingView
 
         case .error(let message):
             errorView(message)
@@ -52,52 +58,206 @@ struct VideosView: View {
     /// each render, so pull-to-refresh reflows automatically.
     private var list: some View {
         let grouped = VideoGrouping.group(videos)
-        return List {
-            if !grouped.folders.isEmpty {
-                Section {
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                videosHeader(grouped)
+
+                VStack(spacing: 14) {
                     ForEach(grouped.folders) { folder in
                         NavigationLink(value: folder) {
                             folderRow(folder)
                         }
+                        .buttonStyle(.plain)
+                    }
+
+                    ForEach(grouped.looseVideos) { video in
+                        NavigationLink(value: video) {
+                            videoCard(video, progress: progressByPath[video.path])
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
-            if !grouped.looseVideos.isEmpty {
-                Section {
-                    ForEach(grouped.looseVideos) { video in
-                        NavigationLink(value: video) {
-                            videoRow(video, progress: progressByPath[video.path])
-                        }
-                    }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 32)
+        }
+        .refreshable { await load() }
+    }
+
+    private var videosBackground: some View {
+        ZStack {
+            background.ignoresSafeArea()
+            LinearGradient(
+                colors: [
+                    Color(red: 0.025, green: 0.10, blue: 0.20),
+                    background,
+                    Color(red: 0.0, green: 0.01, blue: 0.025)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            RadialGradient(
+                colors: [Color.blue.opacity(0.18), .clear],
+                center: .topLeading,
+                startRadius: 10,
+                endRadius: 320
+            )
+            .ignoresSafeArea()
+        }
+    }
+
+    private func videosHeader(_ grouped: VideoGrouping.Result) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Videos")
+                        .font(.system(size: 40, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+
+                    summaryRow(grouped)
+                }
+
+                Spacer()
+
+                HStack(spacing: 14) {
+                    headerIcon("magnifyingglass")
+                    headerIcon("slider.horizontal.3")
                 }
             }
         }
-        .listStyle(.plain)
-        .refreshable { await load() }
+    }
+
+    private func summaryRow(_ grouped: VideoGrouping.Result) -> some View {
+        HStack(spacing: 7) {
+            Text(grouped.folders.count == 1 ? "1 folder" : "\(grouped.folders.count) folders")
+                .foregroundStyle(muted)
+            Text("•")
+                .foregroundStyle(Color.purple)
+            Text(videos.count == 1 ? "1 video" : "\(videos.count) videos")
+                .foregroundStyle(Color.purple)
+        }
+        .font(.system(size: 18, weight: .medium))
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+
+    private func headerIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(muted)
+            .frame(width: 56, height: 56)
+            .background(panel.opacity(0.72), in: Circle())
+            .overlay(Circle().stroke(stroke.opacity(0.42), lineWidth: 1))
     }
 
     /// File-manager-style folder row: folder glyph, torrent name, video count.
     private func folderRow(_ folder: VideoFolder) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "folder.fill")
-                .font(.title2)
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 18) {
+            folderIcon
+
+            VStack(alignment: .leading, spacing: 9) {
                 Text(folder.name)
-                    .font(.callout)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
                     .lineLimit(2)
+
                 Text(folder.videoCountLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(muted)
+
+                if let date = folder.latestModifiedDate {
+                    Label(date.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(muted)
+                        .lineLimit(1)
+                }
             }
+
             Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(muted)
         }
-        .contentShape(Rectangle())
+        .padding(.horizontal, 18)
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
+        .background(panel.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(stroke.opacity(0.34), lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var folderIcon: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.36, green: 0.50, blue: 1.0),
+                            Color(red: 0.18, green: 0.55, blue: 1.0)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 70, height: 56)
+                .offset(y: 9)
+
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(red: 0.38, green: 0.42, blue: 1.0))
+                .frame(width: 34, height: 18)
+        }
+        .frame(width: 76, height: 70)
+        .shadow(color: Color.blue.opacity(0.24), radius: 12, y: 8)
     }
 
     /// A single video row (loose, or inside a folder). Shows the clean filename.
     private func videoRow(_ video: CompletedFile, progress: VideoProgress?) -> some View {
         VideoRow(video: video, progress: progress)
+    }
+
+    private func videoCard(_ video: CompletedFile, progress: VideoProgress?) -> some View {
+        HStack(spacing: 18) {
+            Image(systemName: "play.rectangle.fill")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(Color.blue)
+                .frame(width: 76, height: 70)
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text(video.displayName)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+
+                if let date = video.modifiedDate {
+                    Label(date.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(muted)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(muted)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
+        .background(panel.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(stroke.opacity(0.34), lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     // iOS 16-compatible empty state. `ContentUnavailableView` is iOS 17+, and
@@ -106,28 +266,37 @@ struct VideosView: View {
         VStack(spacing: 12) {
             Image(systemName: "play.slash")
                 .font(.largeTitle)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(muted)
             Text("No Videos")
                 .font(.headline)
+                .foregroundStyle(.white)
             Text("No completed video files were found.")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(muted)
                 .multilineTextAlignment(.center)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var loadingView: some View {
+        ProgressView("Loading videos…")
+            .tint(.blue)
+            .foregroundStyle(muted)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func errorView(_ message: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "wifi.exclamationmark")
                 .font(.largeTitle)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(muted)
             Text("Failed to load videos")
                 .font(.headline)
+                .foregroundStyle(.white)
             Text(message)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(muted)
                 .multilineTextAlignment(.center)
             Button("Retry") {
                 Task { await load() }
@@ -190,6 +359,10 @@ struct VideoFolder: Identifiable, Hashable {
     /// "8 videos" / "1 video" — simple count label for the folder row.
     var videoCountLabel: String {
         videos.count == 1 ? "1 video" : "\(videos.count) videos"
+    }
+
+    var latestModifiedDate: Date? {
+        videos.compactMap(\.modifiedDate).max()
     }
 }
 
