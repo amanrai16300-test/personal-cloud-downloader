@@ -964,7 +964,44 @@ Full docs:
   - iOS native changes:
     - require new IPA build/install
     - currently blocked until GitHub Actions budget issue is resolved
-- qBittorrent WebView error still remains pending.
+- qBittorrent WebView issue was later fixed enough for the page to load in app.
+
+## Latest CloudBox UI + Thumbnail Progress
+
+- Home dashboard redesign was updated to match the provided reference design.
+- Home now uses a dark navy/black premium dashboard style.
+- Home includes:
+  - large CloudBox hero card
+  - server status card
+  - updated time card
+  - Downloader / Videos / Files cards
+  - Open Tailscale action
+  - private access note
+- Home live data still uses:
+  - `/api/health`
+  - `/api/torrents`
+  - `/api/completed-files`
+- Home status logic was fixed:
+  - Server Online depends only on `/api/health`
+  - Downloader failure does not mark server offline
+  - Videos/Files failure does not mark server offline
+  - refresh race protection prevents old failed refreshes from overwriting newer good status
+- Removed misleading `Private Link / Check VPN` card.
+- Kept only real `Open Tailscale` action using `tailscale://`.
+
+## Videos UI Update
+
+- Videos folder list was restyled to match the provided reference design.
+- Folder cards now use a premium dark/glass style.
+- Folder-detail video list was restyled to match the provided reference design.
+- Folder-detail rows now show:
+  - thumbnail area
+  - video title
+  - real modified date when available
+  - watch progress bar/status from existing progress data
+  - duration badge only when real duration exists
+- No fake sizes, dates, durations, or thumbnails are used.
+- Folder grouping, video navigation, playback, progress, subtitles, and refresh behavior remain unchanged.
 
 ## Dynamic Video Thumbnail Update
 
@@ -988,11 +1025,57 @@ Full docs:
 - iOS Videos folder-detail rows display real thumbnails with `AsyncImage`.
 - If `thumbnail_url` is missing or image loading fails, the existing styled placeholder remains.
 - Future downloads should get thumbnails automatically when `/api/completed-files` runs.
+- Backend now detects bad/tiny generated thumbnails under 2KB.
+- Bad/tiny thumbnails are deleted and regenerated automatically.
+- ffmpeg thumbnail generation now tries multiple timestamps:
+  - 10s
+  - 30s
+  - 60s
+  - 1s fallback
+- Existing good thumbnails are reused and not regenerated repeatedly.
+- Thumbnail generation failure for one video does not crash `/api/completed-files`.
 - Verified server checks:
+  - `/api/health` returns `200 OK`
+  - `/api/completed-files` returns `thumbnail_url`
   - thumbnail `.jpg` files were created
   - `thumbnail_url` appears in `/api/completed-files`
   - `_cloudbox-thumbnails` does not appear as a normal `name` or `path` item
+  - bad Squid Game thumbnails around 581-685 bytes were regenerated into valid larger thumbnails above 2KB
 - Confirmed in CloudBox: real video thumbnails show correctly in the Videos folder-detail list.
+- Confirmed in CloudBox: thumbnails show for the new series.
 - Deployment note: this feature required both:
   - backend deploy to Oracle for thumbnail generation and `thumbnail_url`
   - new IPA build/install for iOS thumbnail display.
+
+## qBittorrent WebView Status
+
+- qBittorrent URL remains:
+
+```text
+http://100.92.146.101:8080
+```
+
+- iPhone Safari can open qBittorrent successfully, confirming server/Tailscale is working.
+- CloudBox WebView fix was added:
+  - shared `WKWebView` uses persistent `WKWebsiteDataStore.default()`
+  - `NSURLErrorDomain -999` cancelled navigation is no longer shown as a failed-load screen
+  - popup / `target=_blank` handling stays inside app WebView
+  - qB redirect reload loop was reduced by comparing requested URL instead of redirected current URL
+- qB page now loads in the app.
+- Remaining qB limitation:
+  - after fully closing/reopening the app, qB login page may still return because qB session/cookie may be session-only
+  - true auto-login is not implemented
+  - no qB username/password is hardcoded in the app
+
+## Deployment Notes
+
+- Backend thumbnail fixes require deploying `backend/main.py` to Oracle and restarting:
+
+```bash
+sudo systemctl restart personal-downloader-api.service
+```
+
+- iOS UI/model/WebView changes require new IPA build/install.
+- GitHub Actions IPA workflow is manual-only now, so backend/frontend/docs pushes do not automatically create IPA builds.
+- Manual IPA build path:
+  - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
