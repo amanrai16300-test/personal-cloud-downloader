@@ -25,22 +25,28 @@ struct WebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
-        webView.load(URLRequest(url: url))
+        context.coordinator.load(url, in: webView)
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        // Reload only if the requested URL changed.
-        if webView.url != url {
-            webView.load(URLRequest(url: url))
+        // Compare against the app-requested URL, not qBittorrent redirects.
+        if context.coordinator.requestedURL != url {
+            context.coordinator.load(url, in: webView)
         }
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         private let parent: WebView
+        var requestedURL: URL?
 
         init(_ parent: WebView) {
             self.parent = parent
+        }
+
+        func load(_ url: URL, in webView: WKWebView) {
+            requestedURL = url
+            webView.load(URLRequest(url: url))
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -53,11 +59,23 @@ struct WebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            guard !isCancelledNavigation(error) else {
+                parent.isLoading = false
+                parent.error = nil
+                return
+            }
+
             parent.isLoading = false
             parent.error = error
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            guard !isCancelledNavigation(error) else {
+                parent.isLoading = false
+                parent.error = nil
+                return
+            }
+
             parent.isLoading = false
             parent.error = error
         }
@@ -73,6 +91,11 @@ struct WebView: UIViewRepresentable {
             }
 
             return nil
+        }
+
+        private func isCancelledNavigation(_ error: Error) -> Bool {
+            let nsError = error as NSError
+            return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
         }
     }
 }
