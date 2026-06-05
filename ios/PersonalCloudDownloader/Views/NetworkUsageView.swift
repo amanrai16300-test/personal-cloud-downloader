@@ -6,6 +6,8 @@ struct NetworkUsageView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var autoRefreshTask: Task<Void, Never>?
+    @State private var isVisible = false
+    @State private var refreshGeneration = 0
 
     var body: some View {
         NavigationStack {
@@ -23,13 +25,15 @@ struct NetworkUsageView: View {
                 await loadUsage()
             }
             .onAppear {
+                isVisible = true
                 startAutoRefresh()
             }
             .onDisappear {
+                isVisible = false
                 stopAutoRefresh()
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active {
+                if phase == .active && isVisible {
                     Task {
                         await loadUsage()
                     }
@@ -84,14 +88,15 @@ struct NetworkUsageView: View {
                         usageSection(title: "Today", row: today, showEstimate: false)
                     }
 
-                    if !usage.daily.isEmpty {
+                    let dailyRows = usage.latestDailyRows
+                    if !dailyRows.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Daily Usage")
                                 .font(.headline)
                             VStack(spacing: 0) {
-                                ForEach(usage.daily) { row in
+                                ForEach(dailyRows) { row in
                                     dailyRow(row)
-                                    if row.id != usage.daily.last?.id {
+                                    if row.id != dailyRows.last?.id {
                                         Divider()
                                     }
                                 }
@@ -247,17 +252,28 @@ struct NetworkUsageView: View {
         if isLoading {
             return
         }
+        refreshGeneration += 1
+        let generation = refreshGeneration
         isLoading = true
+        defer {
+            if generation == refreshGeneration {
+                isLoading = false
+            }
+        }
         if usage == nil {
             errorMessage = nil
         }
         do {
-            usage = try await NetworkUsageAPI.fetch()
+            let response = try await NetworkUsageAPI.fetch()
+            guard generation == refreshGeneration else { return }
+            usage = response
             errorMessage = nil
+        } catch is CancellationError {
+            return
         } catch {
-            errorMessage = usage == nil ? "Could not load network usage." : "Could not refresh network usage."
+            guard generation == refreshGeneration else { return }
+            errorMessage = usage == nil ? "Could not load network usage." : "Last refresh failed."
         }
-        isLoading = false
     }
 }
 
@@ -294,6 +310,10 @@ private struct NetworkUsageResponse: Decodable {
             return updatedAt
         }
         return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    var latestDailyRows: [NetworkUsageRow] {
+        Array(daily.sorted { $0.date > $1.date }.prefix(10))
     }
 
     private enum CodingKeys: String, CodingKey {
