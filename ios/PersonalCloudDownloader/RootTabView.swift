@@ -28,6 +28,7 @@ struct RootTabView: View {
                     Label("More", systemImage: "ellipsis.circle")
                 }
         }
+        .tint(Color(red: 0.28, green: 0.58, blue: 1.0))
     }
 }
 

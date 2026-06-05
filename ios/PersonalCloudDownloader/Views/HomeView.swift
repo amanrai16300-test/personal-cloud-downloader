@@ -187,7 +187,7 @@ struct HomeView: View {
     }
 
     private var statusStrip: some View {
-        HStack(spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 154), spacing: 12)], spacing: 12) {
             statusPill(
                 icon: serverStatusIcon,
                 title: "Server",
@@ -207,9 +207,9 @@ struct HomeView: View {
     private func statusPill(icon: String, title: String, value: String, tint: Color) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.title3.weight(.bold))
+                .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(tint)
-                .frame(width: 48, height: 48)
+                .frame(width: 44, height: 44)
                 .background(tint.opacity(0.18), in: Circle())
                 .overlay(Circle().stroke(tint.opacity(0.32), lineWidth: 1))
                 .shadow(color: tint.opacity(0.22), radius: 10)
@@ -219,11 +219,12 @@ struct HomeView: View {
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(mutedText)
                 Text(value)
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
+            .layoutPriority(1)
         }
         .padding(16)
         .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
@@ -339,6 +340,7 @@ struct HomeView: View {
                 tint: .orange
             )
         }
+        .buttonStyle(HomePressStyle())
     }
 
     private func actionCardContent(icon: String, title: String, subtitle: String, tint: Color) -> some View {
@@ -362,10 +364,15 @@ struct HomeView: View {
                 Text(title)
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
                 Text(subtitle)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Color.blue)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
+            .layoutPriority(1)
 
             Spacer()
 
@@ -527,6 +534,15 @@ struct HomeView: View {
         } catch {
             return nil
         }
+    }
+}
+
+private struct HomePressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

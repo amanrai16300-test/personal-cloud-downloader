@@ -347,10 +347,20 @@ struct NetworkUsageView: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
             }
-            HStack(spacing: 8) {
-                dailyPill("RX \(row.rx)")
-                dailyPill("TX \(row.tx)")
-                dailyPill(row.avgRate)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    dailyPill("RX \(row.rx)")
+                    dailyPill("TX \(row.tx)")
+                    dailyPill(row.avgRate)
+                }
+
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        dailyPill("RX \(row.rx)")
+                        dailyPill("TX \(row.tx)")
+                    }
+                    dailyPill(row.avgRate)
+                }
             }
         }
         .padding(.horizontal, 16)
