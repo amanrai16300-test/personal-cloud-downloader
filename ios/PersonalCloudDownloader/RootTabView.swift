@@ -43,44 +43,53 @@ private struct MoreView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    header
+                    moreHero
 
-                    VStack(spacing: 12) {
-                        NavigationLink {
-                            QBittorrentView()
-                        } label: {
-                            moreRow(
-                                title: "qBittorrent",
-                                subtitle: "Manage remote torrents",
-                                systemImage: "magnet",
-                                tint: .orange
-                            )
-                        }
-                        .buttonStyle(MorePressStyle())
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Server Tools")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(muted)
+                            .textCase(.uppercase)
+                            .tracking(1.0)
+                            .padding(.horizontal, 2)
 
-                        NavigationLink {
-                            FilesView()
-                        } label: {
-                            moreRow(
-                                title: "Files",
-                                subtitle: "Browse CloudBox storage",
-                                systemImage: "folder.fill",
-                                tint: .blue
-                            )
-                        }
-                        .buttonStyle(MorePressStyle())
+                        VStack(spacing: 12) {
+                            NavigationLink {
+                                QBittorrentView()
+                            } label: {
+                                moreRow(
+                                    title: "qBittorrent",
+                                    subtitle: "Manage remote torrents",
+                                    systemImage: "magnet",
+                                    tint: .orange
+                                )
+                            }
+                            .buttonStyle(MorePressStyle())
 
-                        NavigationLink {
-                            SettingsView()
-                        } label: {
-                            moreRow(
-                                title: "Settings",
-                                subtitle: "CloudBox app preferences",
-                                systemImage: "gearshape.fill",
-                                tint: .gray
-                            )
+                            NavigationLink {
+                                FilesView()
+                            } label: {
+                                moreRow(
+                                    title: "Files",
+                                    subtitle: "Browse CloudBox storage",
+                                    systemImage: "folder.fill",
+                                    tint: .blue
+                                )
+                            }
+                            .buttonStyle(MorePressStyle())
+
+                            NavigationLink {
+                                SettingsView()
+                            } label: {
+                                moreRow(
+                                    title: "Settings",
+                                    subtitle: "CloudBox app preferences",
+                                    systemImage: "gearshape.fill",
+                                    tint: .gray
+                                )
+                            }
+                            .buttonStyle(MorePressStyle())
                         }
-                        .buttonStyle(MorePressStyle())
                     }
                 }
                 .padding(.horizontal, 18)
@@ -117,30 +126,72 @@ private struct MoreView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("More")
-                .font(.system(size: 40, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.84)
+    private var moreHero: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.blue.opacity(0.34), elevatedPanel.opacity(0.72)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 72, height: 72)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.blue.opacity(0.46), lineWidth: 1)
+                    }
 
-            Text("CloudBox controls and server tools")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(muted)
-                .lineLimit(2)
+                Image(systemName: "shippingbox.fill")
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("More")
+                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.84)
+
+                Text("CloudBox controls and server tools")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(muted)
+                    .lineLimit(2)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 0)
         }
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [Color(red: 0.07, green: 0.18, blue: 0.38), panel.opacity(0.82)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.blue.opacity(0.52), lineWidth: 1.25)
+        }
+        .shadow(color: Color.blue.opacity(0.20), radius: 22, y: 12)
     }
 
     private func moreRow(title: String, subtitle: String, systemImage: String, tint: Color) -> some View {
         HStack(spacing: 15) {
             Image(systemName: systemImage)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 23, weight: .semibold))
                 .foregroundStyle(tint)
-                .frame(width: 52, height: 52)
-                .background(tint.opacity(0.15), in: Circle())
-                .overlay(Circle().stroke(tint.opacity(0.34), lineWidth: 1))
+                .frame(width: 56, height: 56)
+                .background(tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(tint.opacity(0.38), lineWidth: 1)
+                }
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(title)
@@ -166,10 +217,10 @@ private struct MoreView: View {
                 .background(elevatedPanel.opacity(0.60), in: Circle())
         }
         .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
         .background(
             LinearGradient(
-                colors: [elevatedPanel.opacity(0.82), panel.opacity(0.74)],
+                colors: [tint.opacity(0.18), elevatedPanel.opacity(0.86), panel.opacity(0.80)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
@@ -177,8 +228,9 @@ private struct MoreView: View {
         )
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(stroke.opacity(0.38), lineWidth: 1)
+                .stroke(tint.opacity(0.40), lineWidth: 1.25)
         }
+        .shadow(color: tint.opacity(0.12), radius: 14, y: 8)
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 }

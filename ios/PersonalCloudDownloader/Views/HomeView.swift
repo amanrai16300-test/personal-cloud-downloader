@@ -9,6 +9,7 @@ struct HomeView: View {
     private let cardBackground = Color(red: 0.025, green: 0.075, blue: 0.155)
     private let cardStroke = Color(red: 0.16, green: 0.39, blue: 0.82)
     private let mutedText = Color(red: 0.58, green: 0.66, blue: 0.80)
+    private let premiumBlue = Color(red: 0.28, green: 0.58, blue: 1.0)
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var dashboard = HomeDashboardState()
@@ -80,8 +81,14 @@ struct HomeView: View {
         ZStack(alignment: .topTrailing) {
             HStack(alignment: .center, spacing: 14) {
                 VStack(alignment: .leading, spacing: 18) {
+                    Text("Private media shelf")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(premiumBlue)
+                        .textCase(.uppercase)
+                        .tracking(1.2)
+
                     Text("CloudBox")
-                        .font(.system(size: 38, weight: .bold, design: .rounded))
+                        .font(.system(size: 42, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.white)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
@@ -92,6 +99,8 @@ struct HomeView: View {
                         .lineLimit(2)
 
                     serverPill
+
+                    heroStatsRow
                 }
                 .layoutPriority(1)
 
@@ -118,7 +127,7 @@ struct HomeView: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.055, green: 0.18, blue: 0.40),
+                            Color(red: 0.09, green: 0.24, blue: 0.52),
                             Color(red: 0.015, green: 0.045, blue: 0.11),
                             Color(red: 0.0, green: 0.02, blue: 0.055)
                         ],
@@ -126,12 +135,60 @@ struct HomeView: View {
                         endPoint: .bottomTrailing
                     )
                 )
+                .overlay(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.16), .clear],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(height: 96)
+                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                }
         }
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(cardStroke.opacity(0.75), lineWidth: 1)
+                .stroke(
+                    LinearGradient(
+                        colors: [premiumBlue.opacity(0.86), Color.white.opacity(0.18)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.25
+                )
         }
-        .shadow(color: Color.blue.opacity(0.16), radius: 24, y: 14)
+        .shadow(color: premiumBlue.opacity(0.30), radius: 30, y: 18)
+    }
+
+    private var heroStatsRow: some View {
+        HStack(spacing: 10) {
+            heroStat(title: "Server", value: dashboard.serverStatusText, tint: serverStatusColor)
+            heroStat(title: "Updated", value: dashboard.lastUpdatedText, tint: premiumBlue)
+        }
+    }
+
+    private func heroStat(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(mutedText)
+                .textCase(.uppercase)
+            Text(value)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(minWidth: 92, alignment: .leading)
+        .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(tint.opacity(0.34), lineWidth: 1)
+        }
     }
 
     private var serverPill: some View {
@@ -230,7 +287,7 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
         .background(
             LinearGradient(
-                colors: [tint.opacity(0.18), cardBackground.opacity(0.78)],
+                colors: [tint.opacity(0.24), cardBackground.opacity(0.92)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
@@ -238,8 +295,9 @@ struct HomeView: View {
         )
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(tint.opacity(0.38), lineWidth: 1)
+                .stroke(tint.opacity(0.50), lineWidth: 1.25)
         }
+        .shadow(color: tint.opacity(0.16), radius: 16, y: 9)
     }
 
     private var dashboardGrid: some View {
@@ -384,11 +442,19 @@ struct HomeView: View {
                 .overlay(Circle().stroke(Color.blue.opacity(0.72), lineWidth: 1.5))
         }
         .padding(18)
-        .background(cardBackground.opacity(0.80), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(
+            LinearGradient(
+                colors: [Color.blue.opacity(0.20), cardBackground.opacity(0.90)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(cardStroke.opacity(0.62), lineWidth: 1)
+                .stroke(Color.blue.opacity(0.58), lineWidth: 1.25)
         }
+        .shadow(color: Color.blue.opacity(0.18), radius: 18, y: 10)
     }
 
     private var privateCloudNote: some View {

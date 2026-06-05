@@ -122,6 +122,7 @@ struct NetworkUsageView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header(usage)
+                    networkSummaryStrip(usage)
                     storageCard(usage.storage)
                     rawOutputCard(raw)
                 }
@@ -134,6 +135,7 @@ struct NetworkUsageView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header(usage)
+                    networkSummaryStrip(usage)
                     storageCard(usage.storage)
 
                     if let month = usage.month {
@@ -229,6 +231,68 @@ struct NetworkUsageView: View {
             .overlay(Capsule().stroke(cardStroke.opacity(0.30), lineWidth: 1))
     }
 
+    @ViewBuilder
+    private func networkSummaryStrip(_ usage: NetworkUsageResponse) -> some View {
+        if usage.month != nil || usage.today != nil {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 142), spacing: 12)], spacing: 12) {
+                if let month = usage.month {
+                    summaryTile(title: "Month", value: month.total, detail: "Total traffic", tint: accentBlue)
+                }
+                if let today = usage.today {
+                    summaryTile(
+                        title: "Today",
+                        value: today.total,
+                        detail: "Total traffic",
+                        tint: Color(red: 0.40, green: 0.82, blue: 0.92)
+                    )
+                }
+            }
+        }
+    }
+
+    private func summaryTile(title: String, value: String, detail: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(mutedText)
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+                Spacer()
+                Circle()
+                    .fill(tint)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: tint.opacity(0.55), radius: 8)
+            }
+
+            Text(value)
+                .font(.system(size: 25, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.68)
+
+            Text(detail)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(mutedText)
+                .lineLimit(1)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 116, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [tint.opacity(0.22), panelBackground.opacity(0.86)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(tint.opacity(0.44), lineWidth: 1.25)
+        }
+        .shadow(color: tint.opacity(0.16), radius: 18, y: 10)
+    }
+
     private func usageSection(title: String, row: NetworkUsageRow, showEstimate: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
@@ -276,11 +340,14 @@ struct NetworkUsageView: View {
                     }
                     Spacer()
                     Text("\(disk.usedPercentDisplay)%")
-                        .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                        .font(.system(size: 32, weight: .bold, design: .rounded).monospacedDigit())
                         .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
                 }
 
                 storageProgress(disk.progress)
+                    .padding(.top, 2)
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     metric("Used", disk.used)
@@ -305,8 +372,9 @@ struct NetworkUsageView: View {
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(cardStroke.opacity(0.42), lineWidth: 1)
+                    .stroke(accentBlue.opacity(0.54), lineWidth: 1.25)
             }
+            .shadow(color: accentBlue.opacity(0.16), radius: 18, y: 10)
         } else if let error = storage?.error {
             warningCard(error)
         }
@@ -396,6 +464,7 @@ struct NetworkUsageView: View {
             }
         }
         .frame(height: 7)
+        .shadow(color: accentBlue.opacity(0.32), radius: 8, y: 2)
     }
 
     private func rawOutputCard(_ raw: String) -> some View {
