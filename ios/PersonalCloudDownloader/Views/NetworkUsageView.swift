@@ -1,9 +1,11 @@
 import SwiftUI
 
 struct NetworkUsageView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var usage: NetworkUsageResponse?
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var autoRefreshTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -20,9 +22,17 @@ struct NetworkUsageView: View {
             .refreshable {
                 await loadUsage()
             }
-            .task {
-                if usage == nil {
-                    await loadUsage()
+            .onAppear {
+                startAutoRefresh()
+            }
+            .onDisappear {
+                stopAutoRefresh()
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active {
+                    Task {
+                        await loadUsage()
+                    }
                 }
             }
         }
@@ -50,6 +60,7 @@ struct NetworkUsageView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header(usage)
+                    storageCard(usage.storage)
                     Text(raw)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.green)
@@ -63,6 +74,7 @@ struct NetworkUsageView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header(usage)
+                    storageCard(usage.storage)
 
                     if let month = usage.month {
                         usageSection(title: "Current Month", row: month, showEstimate: true)
@@ -100,6 +112,11 @@ struct NetworkUsageView: View {
             Text("Updated \(usage.updatedAtDisplay)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if isLoading {
+                Text("Refreshing...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let errorMessage {
                 Text(errorMessage)
                     .font(.caption)
@@ -126,6 +143,52 @@ struct NetworkUsageView: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func storageCard(_ storage: StorageUsage?) -> some View {
+        if let disk = storage?.rootDisk {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Storage")
+                            .font(.headline)
+                        Text("\(disk.mount) (\(disk.path))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("\(disk.usedPercentDisplay)%")
+                        .font(.subheadline.monospacedDigit().weight(.semibold))
+                }
+
+                ProgressView(value: disk.progress)
+                    .tint(.blue)
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    metric("Used", disk.used)
+                    metric("Total", disk.total)
+                    metric("Available", disk.available)
+                    metric("Percentage", "\(disk.usedPercentDisplay)%")
+                }
+
+                if let error = storage?.error {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        } else if let error = storage?.error {
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        }
     }
 
     private func metric(_ label: String, _ value: String) -> some View {
@@ -162,14 +225,37 @@ struct NetworkUsageView: View {
         .padding(.vertical, 10)
     }
 
+    private func startAutoRefresh() {
+        guard autoRefreshTask == nil else { return }
+        autoRefreshTask = Task {
+            await loadUsage()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 12_000_000_000)
+                if Task.isCancelled { break }
+                await loadUsage()
+            }
+        }
+    }
+
+    private func stopAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+    }
+
     @MainActor
     private func loadUsage() async {
+        if isLoading {
+            return
+        }
         isLoading = true
-        errorMessage = nil
+        if usage == nil {
+            errorMessage = nil
+        }
         do {
             usage = try await NetworkUsageAPI.fetch()
+            errorMessage = nil
         } catch {
-            errorMessage = "Could not load network usage."
+            errorMessage = usage == nil ? "Could not load network usage." : "Could not refresh network usage."
         }
         isLoading = false
     }
@@ -201,6 +287,7 @@ private struct NetworkUsageResponse: Decodable {
     let today: NetworkUsageRow?
     let daily: [NetworkUsageRow]
     let raw: String?
+    let storage: StorageUsage?
 
     var updatedAtDisplay: String {
         guard let date = ISO8601DateFormatter().date(from: updatedAt) else {
@@ -218,6 +305,7 @@ private struct NetworkUsageResponse: Decodable {
         case today
         case daily
         case raw
+        case storage
     }
 
     init(from decoder: Decoder) throws {
@@ -230,6 +318,39 @@ private struct NetworkUsageResponse: Decodable {
         today = try container.decodeIfPresent(NetworkUsageRow.self, forKey: .today)
         daily = try container.decodeIfPresent([NetworkUsageRow].self, forKey: .daily) ?? []
         raw = try container.decodeIfPresent(String.self, forKey: .raw)
+        storage = try container.decodeIfPresent(StorageUsage.self, forKey: .storage)
+    }
+}
+
+private struct StorageUsage: Decodable {
+    let status: String
+    let disks: [StorageDisk]
+    let error: String?
+
+    var rootDisk: StorageDisk? {
+        disks.first { $0.path == "/" } ?? disks.first
+    }
+}
+
+private struct StorageDisk: Decodable, Identifiable {
+    let path: String
+    let mount: String
+    let usedBytes: Int64
+    let totalBytes: Int64
+    let availableBytes: Int64
+    let usedPercent: Double
+    let used: String
+    let total: String
+    let available: String
+
+    var id: String { "\(mount)-\(path)" }
+
+    var progress: Double {
+        min(max(usedPercent / 100, 0), 1)
+    }
+
+    var usedPercentDisplay: String {
+        usedPercent.formatted(.number.precision(.fractionLength(0...1)))
     }
 }
 

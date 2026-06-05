@@ -54,6 +54,7 @@ THUMBNAIL_TIMESTAMPS_SECONDS = (10, 30, 60, 1)
 MIN_THUMBNAIL_BYTES = 2 * 1024
 NETWORK_INTERFACE = "enp0s6"
 VNSTAT_TIMEOUT_SECONDS = 5
+STORAGE_PATHS = ("/", "/srv/personal-cloud/downloads/complete")
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -86,8 +87,10 @@ def health() -> dict[str, str]:
 
 @app.get("/api/network-usage")
 def network_usage() -> dict[str, Any]:
+    storage = get_storage_usage()
     data = run_vnstat_json()
     if data is not None:
+        data["storage"] = storage
         return data
 
     text = run_vnstat_text()
@@ -98,6 +101,7 @@ def network_usage() -> dict[str, Any]:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "format": "text",
             "raw": text,
+            "storage": storage,
         }
 
     raise HTTPException(status_code=503, detail="vnstat is unavailable or returned no network data.")
@@ -810,6 +814,57 @@ def run_fixed_command(command: list[str]) -> subprocess.CompletedProcess[str] | 
     if result.returncode != 0:
         return None
     return result
+
+
+def get_storage_usage() -> dict[str, Any]:
+    disks: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for path in STORAGE_PATHS:
+        if path != "/" and not Path(path).exists():
+            continue
+        result = run_fixed_command(["df", "-B1", path])
+        if result is None:
+            errors.append(f"Could not load storage usage for {path}.")
+            continue
+        disk = parse_df_output(result.stdout, path)
+        if disk is None:
+            errors.append(f"Could not parse storage usage for {path}.")
+            continue
+        disks.append(disk)
+
+    status = "ok" if disks and not errors else "partial" if disks else "error"
+    storage: dict[str, Any] = {"status": status, "disks": disks}
+    if errors:
+        storage["error"] = " ".join(errors)
+    return storage
+
+
+def parse_df_output(output: str, path: str) -> dict[str, Any] | None:
+    lines = [line for line in output.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+    parts = lines[-1].split()
+    if len(parts) < 6:
+        return None
+    try:
+        total_bytes = int(parts[1])
+        used_bytes = int(parts[2])
+        available_bytes = int(parts[3])
+        used_percent = float(parts[4].rstrip("%"))
+    except ValueError:
+        return None
+
+    return {
+        "path": path,
+        "mount": parts[5],
+        "used_bytes": used_bytes,
+        "total_bytes": total_bytes,
+        "available_bytes": available_bytes,
+        "used_percent": used_percent,
+        "used": format_bytes(used_bytes),
+        "total": format_bytes(total_bytes),
+        "available": format_bytes(available_bytes),
+    }
 
 
 def find_current_month(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any] | None:
