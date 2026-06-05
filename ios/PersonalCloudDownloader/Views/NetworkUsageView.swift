@@ -236,7 +236,7 @@ struct NetworkUsageView: View {
         if usage.month != nil || usage.today != nil {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 142), spacing: 12)], spacing: 12) {
                 if let month = usage.month {
-                    summaryTile(title: "Month", value: month.total, detail: "Total traffic", tint: accentBlue)
+                    summaryTile(title: "Monthly Outgoing", value: month.tx, detail: "TX this month", tint: accentBlue)
                 }
                 if let today = usage.today {
                     summaryTile(

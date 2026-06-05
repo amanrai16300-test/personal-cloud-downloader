@@ -1,6 +1,11 @@
 import SwiftUI
+import UIKit
 
 struct RootTabView: View {
+    init() {
+        Self.configureTabBarAppearance()
+    }
+
     var body: some View {
         TabView {
             HomeView()
@@ -28,7 +33,38 @@ struct RootTabView: View {
                     Label("More", systemImage: "ellipsis.circle")
                 }
         }
-        .tint(Color(red: 0.28, green: 0.58, blue: 1.0))
+        .tint(Color(red: 0.42, green: 0.76, blue: 1.0))
+    }
+
+    private static func configureTabBarAppearance() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor(red: 0.012, green: 0.028, blue: 0.060, alpha: 0.98)
+        appearance.shadowColor = UIColor(red: 0.12, green: 0.24, blue: 0.42, alpha: 0.75)
+
+        let selected = UIColor(red: 0.72, green: 0.88, blue: 1.0, alpha: 1)
+        let normal = UIColor(red: 0.46, green: 0.54, blue: 0.68, alpha: 1)
+
+        configureTabItem(appearance.stackedLayoutAppearance, selected: selected, normal: normal)
+        configureTabItem(appearance.inlineLayoutAppearance, selected: selected, normal: normal)
+        configureTabItem(appearance.compactInlineLayoutAppearance, selected: selected, normal: normal)
+
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+        UITabBar.appearance().isTranslucent = false
+    }
+
+    private static func configureTabItem(_ item: UITabBarItemAppearance, selected: UIColor, normal: UIColor) {
+        item.selected.iconColor = selected
+        item.selected.titleTextAttributes = [
+            .foregroundColor: selected,
+            .font: UIFont.systemFont(ofSize: 11, weight: .semibold)
+        ]
+        item.normal.iconColor = normal
+        item.normal.titleTextAttributes = [
+            .foregroundColor: normal,
+            .font: UIFont.systemFont(ofSize: 11, weight: .medium)
+        ]
     }
 }
 
