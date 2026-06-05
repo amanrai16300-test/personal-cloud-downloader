@@ -7,6 +7,7 @@ struct VideosView: View {
     @State private var phase: LoadPhase = .loading
     private let background = Color(red: 0.015, green: 0.035, blue: 0.075)
     private let panel = Color(red: 0.025, green: 0.075, blue: 0.145)
+    private let elevatedPanel = Color(red: 0.035, green: 0.105, blue: 0.205)
     private let stroke = Color(red: 0.20, green: 0.31, blue: 0.48)
     private let muted = Color(red: 0.62, green: 0.68, blue: 0.80)
 
@@ -63,23 +64,23 @@ struct VideosView: View {
             VStack(alignment: .leading, spacing: 22) {
                 videosHeader(grouped)
 
-                VStack(spacing: 14) {
+                VStack(spacing: 12) {
                     ForEach(grouped.folders) { folder in
                         NavigationLink(value: folder) {
                             folderRow(folder)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CloudBoxPressStyle())
                     }
 
                     ForEach(grouped.looseVideos) { video in
                         NavigationLink(value: video) {
                             videoCard(video, progress: progressByPath[video.path])
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CloudBoxPressStyle())
                     }
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 18)
             .padding(.top, 18)
             .padding(.bottom, 32)
         }
@@ -111,22 +112,14 @@ struct VideosView: View {
 
     private func videosHeader(_ grouped: VideoGrouping.Result) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Videos")
-                        .font(.system(size: 40, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Videos")
+                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.84)
 
-                    summaryRow(grouped)
-                }
-
-                Spacer()
-
-                HStack(spacing: 14) {
-                    headerIcon("magnifyingglass")
-                    headerIcon("slider.horizontal.3")
-                }
+                summaryRow(grouped)
             }
         }
     }
@@ -145,51 +138,53 @@ struct VideosView: View {
         .minimumScaleFactor(0.8)
     }
 
-    private func headerIcon(_ systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(muted)
-            .frame(width: 56, height: 56)
-            .background(panel.opacity(0.72), in: Circle())
-            .overlay(Circle().stroke(stroke.opacity(0.42), lineWidth: 1))
-    }
-
     /// File-manager-style folder row: folder glyph, torrent name, video count.
     private func folderRow(_ folder: VideoFolder) -> some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 16) {
             folderIcon
 
             VStack(alignment: .leading, spacing: 9) {
                 Text(folder.name)
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Text(folder.videoCountLabel)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(muted)
 
                 if let date = folder.latestModifiedDate {
                     Label(date.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(muted)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.78)
                 }
             }
+            .layoutPriority(1)
 
             Spacer()
 
             Image(systemName: "chevron.right")
-                .font(.title2.weight(.semibold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(muted)
+                .frame(width: 34, height: 34)
+                .background(elevatedPanel.opacity(0.60), in: Circle())
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 20)
-        .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
-        .background(panel.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [elevatedPanel.opacity(0.82), panel.opacity(0.74)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+        )
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(stroke.opacity(0.34), lineWidth: 1)
+                .stroke(stroke.opacity(0.38), lineWidth: 1)
         }
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
@@ -224,35 +219,40 @@ struct VideosView: View {
     }
 
     private func videoCard(_ video: CompletedFile, progress: VideoProgress?) -> some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 16) {
             Image(systemName: "play.rectangle.fill")
-                .font(.system(size: 34, weight: .semibold))
+                .font(.system(size: 30, weight: .semibold))
                 .foregroundStyle(Color.blue)
-                .frame(width: 76, height: 70)
+                .frame(width: 66, height: 66)
+                .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             VStack(alignment: .leading, spacing: 9) {
                 Text(video.displayName)
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if let date = video.modifiedDate {
                     Label(date.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(muted)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.78)
                 }
             }
+            .layoutPriority(1)
 
             Spacer()
 
             Image(systemName: "chevron.right")
-                .font(.title2.weight(.semibold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(muted)
+                .frame(width: 34, height: 34)
+                .background(elevatedPanel.opacity(0.60), in: Circle())
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 20)
-        .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 108, alignment: .leading)
         .background(panel.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -264,48 +264,73 @@ struct VideosView: View {
     // iOS 16-compatible empty state. `ContentUnavailableView` is iOS 17+, and
     // the deployment target is 16.0, so this is built from plain views instead.
     private var emptyView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             Image(systemName: "play.slash")
-                .font(.largeTitle)
+                .font(.system(size: 38, weight: .semibold))
                 .foregroundStyle(muted)
+                .frame(width: 76, height: 76)
+                .background(panel.opacity(0.82), in: Circle())
+                .overlay(Circle().stroke(stroke.opacity(0.42), lineWidth: 1))
             Text("No Videos")
-                .font(.headline)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
             Text("No completed video files were found.")
-                .font(.footnote)
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(muted)
                 .multilineTextAlignment(.center)
         }
-        .padding()
+        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(videosBackground)
     }
 
     private var loadingView: some View {
-        ProgressView("Loading videos…")
-            .tint(.blue)
-            .foregroundStyle(muted)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 16) {
+            ProgressView()
+                .tint(.blue)
+                .scaleEffect(1.15)
+            VStack(spacing: 5) {
+                Text("Loading videos")
+                    .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("Reading the CloudBox library")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(muted)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(videosBackground)
     }
 
     private func errorView(_ message: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             Image(systemName: "wifi.exclamationmark")
-                .font(.largeTitle)
+                .font(.system(size: 38, weight: .semibold))
                 .foregroundStyle(muted)
+                .frame(width: 76, height: 76)
+                .background(panel.opacity(0.82), in: Circle())
+                .overlay(Circle().stroke(stroke.opacity(0.42), lineWidth: 1))
             Text("Failed to load videos")
-                .font(.headline)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
             Text(message)
-                .font(.footnote)
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(muted)
                 .multilineTextAlignment(.center)
-            Button("Retry") {
+                .padding(.horizontal, 18)
+            Button {
                 Task { await load() }
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+                    .font(.system(size: 15, weight: .semibold))
             }
             .buttonStyle(.borderedProminent)
+            .tint(.blue)
         }
-        .padding()
+        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(videosBackground)
     }
 
     private func load() async {
@@ -424,31 +449,37 @@ enum VideoGrouping {
 private struct FolderVideosView: View {
     let folder: VideoFolder
     let progressByPath: [String: VideoProgress]
+    private let background = Color(red: 0.015, green: 0.035, blue: 0.075)
+    private let panel = Color(red: 0.025, green: 0.075, blue: 0.145)
+    private let stroke = Color(red: 0.20, green: 0.31, blue: 0.48)
+    private let muted = Color(red: 0.62, green: 0.68, blue: 0.80)
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 16) {
                 folderHeader
-
-                Divider()
-                    .overlay(Color.white.opacity(0.12))
 
                 VStack(spacing: 0) {
                     ForEach(folder.videos) { video in
                         NavigationLink(value: video) {
                             row(video, progress: progressByPath[video.path])
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CloudBoxPressStyle())
 
                         if video.id != folder.videos.last?.id {
                             Divider()
-                                .overlay(Color.white.opacity(0.12))
-                                .padding(.leading, 14)
+                                .overlay(Color.white.opacity(0.10))
+                                .padding(.leading, 128)
                         }
                     }
                 }
+                .background(panel.opacity(0.74), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(stroke.opacity(0.34), lineWidth: 1)
+                }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 34)
         }
@@ -463,25 +494,17 @@ private struct FolderVideosView: View {
     }
 
     private var folderHeader: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .center, spacing: 14) {
-                Text(folder.name)
-                    .font(.system(size: 25, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Spacer(minLength: 10)
-
-                HStack(spacing: 14) {
-                    headerIcon("magnifyingglass")
-                    headerIcon("line.3.horizontal.decrease")
-                }
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            Text(folder.name)
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 7) {
                 Text(folder.videoCountLabel.replacingOccurrences(of: "videos", with: "files").replacingOccurrences(of: "video", with: "file"))
-                    .foregroundStyle(Color(red: 0.65, green: 0.69, blue: 0.78))
+                    .foregroundStyle(muted)
                 Text("•")
                     .foregroundStyle(Color.blue)
                 Text(folder.videoCountLabel)
@@ -491,22 +514,24 @@ private struct FolderVideosView: View {
         }
     }
 
-    private func headerIcon(_ systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.title2.weight(.semibold))
-            .foregroundStyle(Color(red: 0.65, green: 0.69, blue: 0.78))
-            .frame(width: 48, height: 48)
-            .background(Color.white.opacity(0.06), in: Circle())
-    }
-
     private var folderBackground: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            background.ignoresSafeArea()
+            LinearGradient(
+                colors: [
+                    Color(red: 0.025, green: 0.10, blue: 0.20),
+                    background,
+                    Color(red: 0.0, green: 0.01, blue: 0.025)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
             RadialGradient(
-                colors: [Color(red: 0.02, green: 0.10, blue: 0.18).opacity(0.55), .clear],
+                colors: [Color.blue.opacity(0.16), .clear],
                 center: .topLeading,
-                startRadius: 20,
-                endRadius: 300
+                startRadius: 10,
+                endRadius: 320
             )
             .ignoresSafeArea()
         }
@@ -516,6 +541,8 @@ private struct FolderVideosView: View {
 private struct FolderVideoRow: View {
     let video: CompletedFile
     let progress: VideoProgress?
+    private let muted = Color(red: 0.62, green: 0.68, blue: 0.80)
+    private let elevatedPanel = Color(red: 0.035, green: 0.105, blue: 0.205)
 
     private var watchedPercent: Double {
         min(max(progress?.watchedPercent ?? 0, 0), 100)
@@ -530,14 +557,15 @@ private struct FolderVideoRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 13) {
             thumbnail
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text(video.displayName)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 metadata
 
@@ -546,9 +574,11 @@ private struct FolderVideoRow: View {
                     statusLabel
                 }
             }
+            .layoutPriority(1)
         }
-        .padding(.vertical, 18)
-        .contentShape(Rectangle())
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var thumbnail: some View {
@@ -565,7 +595,7 @@ private struct FolderVideoRow: View {
                     .padding(6)
             }
         }
-        .frame(width: 112, height: 72)
+        .frame(width: 108, height: 70)
     }
 
     @ViewBuilder
@@ -581,11 +611,11 @@ private struct FolderVideoRow: View {
                     thumbnailPlaceholder
                 }
             }
-            .frame(width: 112, height: 72)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .frame(width: 108, height: 70)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
             }
         } else {
             thumbnailPlaceholder
@@ -593,7 +623,7 @@ private struct FolderVideoRow: View {
     }
 
     private var thumbnailPlaceholder: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(
                 LinearGradient(
                     colors: [
@@ -611,8 +641,8 @@ private struct FolderVideoRow: View {
                     .foregroundStyle(Color.white.opacity(0.28))
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
             }
     }
 
@@ -620,9 +650,10 @@ private struct FolderVideoRow: View {
     private var metadata: some View {
         if let date = video.modifiedDate {
             Text(date.formatted(date: .abbreviated, time: .shortened))
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Color(red: 0.65, green: 0.69, blue: 0.78))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(muted)
                 .lineLimit(1)
+                .minimumScaleFactor(0.78)
         }
     }
 
@@ -630,25 +661,29 @@ private struct FolderVideoRow: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.white.opacity(0.18))
+                    .fill(Color.white.opacity(0.14))
                 Capsule()
                     .fill(progressColor)
                     .frame(width: geo.size.width * CGFloat(watchedPercent / 100))
             }
         }
-        .frame(height: 4)
+        .frame(height: 5)
     }
 
     private var statusLabel: some View {
         HStack(spacing: 6) {
             Image(systemName: statusIcon)
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 13, weight: .bold))
             Text(statusText)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 12, weight: .semibold))
                 .lineLimit(1)
+                .minimumScaleFactor(0.72)
         }
         .foregroundStyle(progressColor)
-        .frame(width: 104, alignment: .trailing)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(width: 108, alignment: .center)
+        .background(elevatedPanel.opacity(0.48), in: Capsule())
     }
 
     private var statusIcon: String {
@@ -762,6 +797,15 @@ private struct VideoRow: View {
             .padding(.vertical, 3)
             .background(.green.opacity(0.12), in: Capsule())
             .lineLimit(1)
+    }
+}
+
+private struct CloudBoxPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
