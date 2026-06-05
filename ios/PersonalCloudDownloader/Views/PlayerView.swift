@@ -227,8 +227,10 @@ struct PlayerView: View {
                 .foregroundStyle(.white)
                 .padding(10)
                 .background(.black.opacity(0.5), in: Circle())
+                .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
                 .contentShape(Circle())
         }
+        .buttonStyle(PlayerPressStyle())
         .padding(12)
     }
 
@@ -385,8 +387,11 @@ struct PlayerView: View {
                 Image(systemName: "wifi.exclamationmark")
                     .font(.system(size: 38))
                     .foregroundStyle(.orange)
+                    .frame(width: 64, height: 64)
+                    .background(.orange.opacity(0.16), in: Circle())
+                    .overlay(Circle().stroke(.orange.opacity(0.28), lineWidth: 1))
                 Text("Playback failed")
-                    .font(.headline)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                 Text("Could not load this video. Check the connection and try again.")
                     .font(.caption)
@@ -399,7 +404,11 @@ struct PlayerView: View {
                 .padding(.top, 2)
             }
             .padding(24)
-            .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(0.10), lineWidth: 1)
+            }
             .padding(24)
         }
     }
@@ -417,7 +426,7 @@ struct PlayerView: View {
                 }
                 .foregroundStyle(.white)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PlayerPressStyle())
         }
     }
 
@@ -523,7 +532,7 @@ struct PlayerView: View {
                 .frame(width: 56, height: 56)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PlayerPressStyle())
     }
 
     /// Whether the inline VLC surface should mount a live player. In direct-open
@@ -582,20 +591,32 @@ struct PlayerView: View {
     private var errorState: some View {
         VStack(spacing: 14) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48))
+                .font(.system(size: 38, weight: .semibold))
                 .foregroundStyle(.orange)
+                .frame(width: 76, height: 76)
+                .background(.orange.opacity(0.16), in: Circle())
+                .overlay(Circle().stroke(.orange.opacity(0.30), lineWidth: 1))
 
             Text(video.displayName)
-                .font(.title3.weight(.semibold))
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
+                .lineLimit(3)
 
             Text("No valid stream URL for this video.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.70))
                 .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .background(.black.opacity(0.30), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.white.opacity(0.10), lineWidth: 1)
         }
         .padding(Layout.screenPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.94))
     }
 }
 
@@ -944,7 +965,7 @@ private struct VLCFullscreenView: View {
                     }
                     .foregroundStyle(.white)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PlayerPressStyle())
             }
         case .ready:
             EmptyView()
@@ -1000,7 +1021,7 @@ private struct VLCFullscreenView: View {
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PlayerPressStyle())
 
                 TimelineSlider(
                     progress: $fsVlc.progress,
@@ -1200,7 +1221,7 @@ private struct VLCFullscreenView: View {
             .background(.black.opacity(0.45), in: Capsule())
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PlayerPressStyle())
         .padding(.trailing, 4)
     }
 
@@ -1217,7 +1238,16 @@ private struct VLCFullscreenView: View {
                 .frame(width: 48, height: 48)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PlayerPressStyle())
+    }
+}
+
+private struct PlayerPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
