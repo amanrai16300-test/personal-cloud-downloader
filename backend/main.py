@@ -54,7 +54,7 @@ THUMBNAIL_TIMESTAMPS_SECONDS = (10, 30, 60, 1)
 MIN_THUMBNAIL_BYTES = 2 * 1024
 NETWORK_INTERFACE = "enp0s6"
 VNSTAT_TIMEOUT_SECONDS = 5
-STORAGE_PATHS = ("/", "/srv/personal-cloud/downloads/complete")
+STORAGE_PATHS = ("/srv/personal-cloud",)
 TRENDS_FILE = Path("/tmp/trends.json")
 
 
