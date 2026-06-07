@@ -34,7 +34,7 @@ MIN_VOTES = 5
 MIN_FALLBACK_ITEMS = 8
 MAX_PAGES = 5
 TRENDING_SOURCE_BONUS = 80
-MAX_NON_TRENDING_AGE_DAYS = 730
+MAX_GLOBAL_AGE_DAYS = 730
 TRAILER_LANGUAGES = ("en-US", "hi-IN")
 BAD_TRAILER_WORDS = (
     "clip",
@@ -73,6 +73,22 @@ def item_date(raw_item):
     return value if isinstance(value, str) else ""
 
 
+def recent_activity_date(raw_item):
+    values = (
+        raw_item.get("last_air_date"),
+        raw_item.get("next_episode_to_air", {}).get("air_date")
+        if isinstance(raw_item.get("next_episode_to_air"), dict)
+        else None,
+        raw_item.get("last_episode_to_air", {}).get("air_date")
+        if isinstance(raw_item.get("last_episode_to_air"), dict)
+        else None,
+    )
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def is_recent(raw_item, start_date, end_date):
     value = item_date(raw_item)
     return bool(value) and start_date <= value <= end_date
@@ -88,20 +104,40 @@ def parse_item_date(raw_item):
         return None
 
 
-def item_age_days(raw_item):
-    date_value = parse_item_date(raw_item)
+def item_age_days(raw_item, date_getter=item_date):
+    date_value = parse_item_date_value(date_getter(raw_item))
     if not date_value:
         return None
     return (datetime.now(timezone.utc).date() - date_value).days
+
+
+def parse_item_date_value(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).date()
+    except ValueError:
+        return None
 
 
 def is_trending_week(raw_item):
     return "trending_week" in raw_item.get("_trend_sources", ())
 
 
-def is_allowed_by_age(raw_item):
+def is_allowed_by_age(raw_item, media_type=None, freshness_scope="all"):
+    if freshness_scope != "global":
+        return True
+
     age_days = item_age_days(raw_item)
-    return age_days is None or age_days <= MAX_NON_TRENDING_AGE_DAYS or is_trending_week(raw_item)
+    if age_days is None:
+        return True
+    if age_days <= MAX_GLOBAL_AGE_DAYS:
+        return True
+    if media_type != "tv":
+        return False
+
+    activity_age_days = item_age_days(raw_item, recent_activity_date)
+    return activity_age_days is not None and activity_age_days <= MAX_GLOBAL_AGE_DAYS
 
 
 def score_item(raw_item):
@@ -116,12 +152,12 @@ def score_item(raw_item):
     )
 
 
-def rank_items(raw_items, start_date=None, end_date=None):
+def rank_items(raw_items, start_date=None, end_date=None, media_type=None, freshness_scope="all"):
     filtered = [
         item for item in raw_items
         if isinstance(item, dict)
         and (not start_date or not end_date or is_recent(item, start_date, end_date))
-        and is_allowed_by_age(item)
+        and is_allowed_by_age(item, media_type, freshness_scope)
         and (item.get("vote_count") or 0) >= MIN_VOTES
     ]
     return sorted(
@@ -171,6 +207,19 @@ def merge_deduped(raw_items):
         current["_trend_sources"].update(raw_item.get("_trend_sources", ()))
         for key in ("popularity", "vote_count", "vote_average"):
             current[key] = max(current.get(key) or 0, raw_item.get(key) or 0)
+        if (raw_item.get("last_air_date") or "") > (current.get("last_air_date") or ""):
+            current["last_air_date"] = raw_item.get("last_air_date")
+        for key in ("next_episode_to_air", "last_episode_to_air"):
+            raw_episode = raw_item.get(key)
+            current_episode = current.get(key)
+            if (
+                isinstance(raw_episode, dict)
+                and (
+                    not isinstance(current_episode, dict)
+                    or (raw_episode.get("air_date") or "") > (current_episode.get("air_date") or "")
+                )
+            ):
+                current[key] = raw_episode
         if item_date(raw_item) > item_date(current):
             current.update({key: value for key, value in raw_item.items() if key != "_trend_sources"})
     return list(merged.values())
@@ -187,7 +236,7 @@ def fetch_global_collection(*, media_type, sources, fallback_days):
                 params.update(recent_discover_params(media_type, start_date, end_date))
             raw_items.extend(tag_items(fetch_pages(source["path"], params), source["name"]))
 
-        ranked_items = rank_items(merge_deduped(raw_items))
+        ranked_items = rank_items(merge_deduped(raw_items), media_type=media_type, freshness_scope="global")
         if len(ranked_items) > len(best_items):
             best_items = ranked_items
         if len(ranked_items) >= MIN_FALLBACK_ITEMS:
