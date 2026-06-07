@@ -10,6 +10,7 @@ Cron example:
 """
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -32,6 +33,8 @@ TV_FALLBACK_DAYS = (90, 180, 365)
 MIN_VOTES = 5
 MIN_FALLBACK_ITEMS = 8
 MAX_PAGES = 5
+TRENDING_SOURCE_BONUS = 80
+MAX_NON_TRENDING_AGE_DAYS = 730
 TRAILER_LANGUAGES = ("en-US", "hi-IN")
 BAD_TRAILER_WORDS = (
     "clip",
@@ -75,19 +78,58 @@ def is_recent(raw_item, start_date, end_date):
     return bool(value) and start_date <= value <= end_date
 
 
-def rank_items(raw_items, start_date, end_date):
+def parse_item_date(raw_item):
+    value = item_date(raw_item)
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).date()
+    except ValueError:
+        return None
+
+
+def item_age_days(raw_item):
+    date_value = parse_item_date(raw_item)
+    if not date_value:
+        return None
+    return (datetime.now(timezone.utc).date() - date_value).days
+
+
+def is_trending_week(raw_item):
+    return "trending_week" in raw_item.get("_trend_sources", ())
+
+
+def is_allowed_by_age(raw_item):
+    age_days = item_age_days(raw_item)
+    return age_days is None or age_days <= MAX_NON_TRENDING_AGE_DAYS or is_trending_week(raw_item)
+
+
+def score_item(raw_item):
+    age_days = item_age_days(raw_item)
+    recency_score = 0 if age_days is None else max(0, 365 - age_days) / 3
+    return (
+        (raw_item.get("popularity") or 0)
+        + math.sqrt(raw_item.get("vote_count") or 0)
+        + ((raw_item.get("vote_average") or 0) * 4)
+        + recency_score
+        + (TRENDING_SOURCE_BONUS if is_trending_week(raw_item) else 0)
+    )
+
+
+def rank_items(raw_items, start_date=None, end_date=None):
     filtered = [
         item for item in raw_items
         if isinstance(item, dict)
-        and is_recent(item, start_date, end_date)
+        and (not start_date or not end_date or is_recent(item, start_date, end_date))
+        and is_allowed_by_age(item)
         and (item.get("vote_count") or 0) >= MIN_VOTES
     ]
     return sorted(
         filtered,
         key=lambda item: (
-            item_date(item),
+            score_item(item),
             item.get("popularity") or 0,
-            item.get("vote_average") or 0,
+            item_date(item),
         ),
         reverse=True,
     )
@@ -103,11 +145,49 @@ def fetch_pages(path, params=None):
     return raw_items
 
 
-def fetch_collection(path, *, media_type, params=None, fallback_days):
+def tag_items(raw_items, source_name):
+    tagged_items = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        item = dict(raw_item)
+        item["_trend_sources"] = {source_name}
+        tagged_items.append(item)
+    return tagged_items
+
+
+def merge_deduped(raw_items):
+    merged = {}
+    for raw_item in raw_items:
+        tmdb_id = raw_item.get("id")
+        if not tmdb_id:
+            continue
+        if tmdb_id not in merged:
+            merged[tmdb_id] = dict(raw_item)
+            merged[tmdb_id]["_trend_sources"] = set(raw_item.get("_trend_sources", ()))
+            continue
+
+        current = merged[tmdb_id]
+        current["_trend_sources"].update(raw_item.get("_trend_sources", ()))
+        for key in ("popularity", "vote_count", "vote_average"):
+            current[key] = max(current.get(key) or 0, raw_item.get(key) or 0)
+        if item_date(raw_item) > item_date(current):
+            current.update({key: value for key, value in raw_item.items() if key != "_trend_sources"})
+    return list(merged.values())
+
+
+def fetch_global_collection(*, media_type, sources, fallback_days):
     best_items = []
     for days in fallback_days:
         start_date, end_date = recent_date_range(days)
-        ranked_items = rank_items(fetch_pages(path, params), start_date, end_date)
+        raw_items = []
+        for source in sources:
+            params = dict(source.get("params") or {})
+            if source.get("recent_discover"):
+                params.update(recent_discover_params(media_type, start_date, end_date))
+            raw_items.extend(tag_items(fetch_pages(source["path"], params), source["name"]))
+
+        ranked_items = rank_items(merge_deduped(raw_items))
         if len(ranked_items) > len(best_items):
             best_items = ranked_items
         if len(ranked_items) >= MIN_FALLBACK_ITEMS:
@@ -148,7 +228,6 @@ def fetch_india_collection(path, *, media_type, fallback_days):
 
 def fetch_india_window(path, media_type, start_date, end_date):
     raw_items = []
-    seen = set()
     for language in LANGUAGES:
         for page in range(1, MAX_PAGES + 1):
             payload = tmdb_get(
@@ -159,6 +238,7 @@ def fetch_india_window(path, media_type, start_date, end_date):
                     "region": "IN",
                     "with_origin_country": "IN",
                     "with_original_language": language,
+                    "sort_by": "popularity.desc",
                     "include_adult": "false",
                 },
             )
@@ -168,24 +248,21 @@ def fetch_india_window(path, media_type, start_date, end_date):
             for raw_item in results:
                 if not isinstance(raw_item, dict):
                     continue
-                tmdb_id = raw_item.get("id")
-                if tmdb_id in seen:
-                    continue
-                seen.add(tmdb_id)
+                raw_item["_trend_sources"] = {"india_discover"}
                 raw_items.append(raw_item)
-    return raw_items
+    return merge_deduped(raw_items)
 
 
 def recent_discover_params(media_type, start_date, end_date):
     if media_type == "movie":
         return {
-            "sort_by": "primary_release_date.desc",
+            "sort_by": "popularity.desc",
             "primary_release_date.gte": start_date,
             "primary_release_date.lte": end_date,
             "vote_count.gte": MIN_VOTES,
         }
     return {
-        "sort_by": "first_air_date.desc",
+        "sort_by": "popularity.desc",
         "first_air_date.gte": start_date,
         "first_air_date.lte": end_date,
         "vote_count.gte": MIN_VOTES,
@@ -290,19 +367,34 @@ def write_json(payload):
 def main():
     payload = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "global_movies": fetch_collection(
-            "/movie/now_playing",
+        "global_movies": fetch_global_collection(
             media_type="movie",
-            params={"region": "US", "include_adult": "false"},
+            sources=[
+                {"name": "trending_week", "path": "/trending/movie/week"},
+                {"name": "now_playing", "path": "/movie/now_playing", "params": {"region": "US"}},
+                {"name": "popular", "path": "/movie/popular", "params": {"region": "US"}},
+                {
+                    "name": "recent_discover",
+                    "path": "/discover/movie",
+                    "params": {"include_adult": "false"},
+                    "recent_discover": True,
+                },
+            ],
             fallback_days=MOVIE_FALLBACK_DAYS,
         ),
-        "global_series": fetch_discover_collection(
-            "/discover/tv",
+        "global_series": fetch_global_collection(
             media_type="tv",
-            base_params={
-                "with_status": "0",
-                "include_adult": "false",
-            },
+            sources=[
+                {"name": "trending_week", "path": "/trending/tv/week"},
+                {"name": "on_the_air", "path": "/tv/on_the_air"},
+                {"name": "popular", "path": "/tv/popular"},
+                {
+                    "name": "recent_discover",
+                    "path": "/discover/tv",
+                    "params": {"with_status": "0", "include_adult": "false"},
+                    "recent_discover": True,
+                },
+            ],
             fallback_days=TV_FALLBACK_DAYS,
         ),
         "india_movies": fetch_india_collection(
