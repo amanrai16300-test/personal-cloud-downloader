@@ -55,6 +55,7 @@ MIN_THUMBNAIL_BYTES = 2 * 1024
 NETWORK_INTERFACE = "enp0s6"
 VNSTAT_TIMEOUT_SECONDS = 5
 STORAGE_PATHS = ("/", "/srv/personal-cloud/downloads/complete")
+TRENDS_FILE = Path("/tmp/trends.json")
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -83,6 +84,24 @@ async def stop_auto_pause_monitor() -> None:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/trends")
+def trends() -> dict[str, Any]:
+    try:
+        data = json.loads(TRENDS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"error": "data not available"}
+
+    required_sections = ("global_movies", "global_series", "india_movies", "india_series")
+    if not isinstance(data, dict):
+        return {"error": "data not available"}
+    if not isinstance(data.get("updated_at"), str):
+        return {"error": "data not available"}
+    if any(not isinstance(data.get(section), list) for section in required_sections):
+        return {"error": "data not available"}
+
+    return data
 
 
 @app.get("/api/network-usage")

@@ -1,6 +1,6 @@
 const API_BASE_URL = "http://100.92.146.101:8000";
 const POLL_MS = 5000;
-const APP_JS_VERSION = "queue-order-2026-06-03";
+const APP_JS_VERSION = "trends-2026-06-07";
 
 console.info(`Personal Cloud Downloader app.js ${APP_JS_VERSION}`);
 
@@ -17,6 +17,12 @@ let completedFileSnapshot = [];
 let isSubmitting = false;
 let isRefreshing = false;
 let pendingDeleteHash = "";
+let trendsState = {
+  loaded: false,
+  loading: false,
+  error: "",
+  data: null,
+};
 
 function setStatus(message, isError = false) {
   statusText.textContent = message;
@@ -111,6 +117,390 @@ function emptyCard(title, text) {
       <p class="empty">${escapeHtml(text)}</p>
     </article>
   `;
+}
+
+function installTrendsHomeEntry() {
+  installTrendsStyles();
+
+  if (document.querySelector("#trendsHomeEntry")) return;
+
+  const entry = document.createElement("section");
+  entry.id = "trendsHomeEntry";
+  entry.className = "trends-home-entry";
+  entry.innerHTML = `
+    <div class="trends-entry-copy">
+      <p class="trends-kicker">TMDB trends</p>
+      <h2>Browse what is rising now</h2>
+      <p>Movies and series from global and India shelves, with ratings visible before you open anything.</p>
+    </div>
+    <button class="trends-open-button" type="button" data-open-trends>
+      Open Trends
+    </button>
+  `;
+
+  const anchor = completedFiles.closest("section") || torrentList.closest("section") || document.body.firstElementChild;
+  if (anchor?.parentNode) {
+    anchor.parentNode.insertBefore(entry, anchor);
+  } else {
+    document.body.appendChild(entry);
+  }
+
+  entry.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-open-trends]");
+    if (!button) return;
+    openTrendsView();
+  });
+}
+
+function installTrendsStyles() {
+  if (document.querySelector("#trendsStyles")) return;
+
+  const styles = document.createElement("style");
+  styles.id = "trendsStyles";
+  styles.textContent = `
+    .trends-home-entry {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: center;
+      margin: 22px 0;
+      padding: 20px;
+      border: 1px solid rgba(245, 245, 239, .12);
+      border-radius: 18px;
+      background: color-mix(in srgb, #111827 88%, #2dd4bf 12%);
+      box-shadow: 0 18px 55px rgba(0, 0, 0, .22);
+    }
+    .trends-entry-copy h2 {
+      margin: 4px 0 8px;
+      color: #f5f5ef;
+      font-size: clamp(1.25rem, 2.4vw, 1.9rem);
+      letter-spacing: 0;
+    }
+    .trends-entry-copy p {
+      margin: 0;
+      color: rgba(245, 245, 239, .72);
+      line-height: 1.45;
+      max-width: 58ch;
+    }
+    .trends-kicker {
+      color: #5eead4 !important;
+      font-size: .78rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .trends-open-button,
+    .trends-back-button,
+    .trailer-button {
+      min-height: 42px;
+      border: 1px solid rgba(245, 245, 239, .14);
+      border-radius: 999px;
+      background: #f5f5ef;
+      color: #111827;
+      font-weight: 750;
+      padding: 0 16px;
+      cursor: pointer;
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+    }
+    .trends-open-button:hover,
+    .trends-back-button:hover,
+    .trailer-button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(94, 234, 212, .55);
+    }
+    .trends-view {
+      margin: 24px 0;
+      padding: 22px;
+      border: 1px solid rgba(245, 245, 239, .10);
+      border-radius: 22px;
+      background: #0f1724;
+      color: #f5f5ef;
+    }
+    .trends-view[hidden] {
+      display: none;
+    }
+    .trends-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+    .trends-header h2 {
+      margin: 0 0 8px;
+      font-size: clamp(1.6rem, 4vw, 2.6rem);
+      letter-spacing: 0;
+    }
+    .trends-header p,
+    .trends-updated,
+    .trend-meta,
+    .trend-empty,
+    .trend-message {
+      color: rgba(245, 245, 239, .68);
+    }
+    .trends-back-button {
+      background: transparent;
+      color: #f5f5ef;
+    }
+    .trends-sections {
+      display: grid;
+      gap: 30px;
+    }
+    .trend-section-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .trend-section-header h3 {
+      margin: 0;
+      font-size: 1.12rem;
+      letter-spacing: 0;
+    }
+    .trend-count {
+      color: rgba(245, 245, 239, .48);
+      font-size: .85rem;
+    }
+    .trend-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
+      gap: 16px;
+    }
+    .trend-card {
+      min-width: 0;
+      border: 1px solid rgba(245, 245, 239, .10);
+      border-radius: 14px;
+      background: #141e2d;
+      overflow: hidden;
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+    .trend-card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(94, 234, 212, .34);
+      background: #172235;
+    }
+    .trend-poster,
+    .trend-placeholder {
+      width: 100%;
+      aspect-ratio: 2 / 3;
+      display: block;
+      object-fit: cover;
+      background: #1d293b;
+    }
+    .trend-placeholder {
+      display: grid;
+      place-items: center;
+      color: rgba(245, 245, 239, .46);
+      font-weight: 750;
+      text-align: center;
+      padding: 12px;
+    }
+    .trend-card-body {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+    }
+    .trend-card h4 {
+      margin: 0;
+      font-size: .95rem;
+      line-height: 1.25;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+    .trend-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .trend-rating {
+      color: #f8d66d;
+      font-weight: 800;
+    }
+    .trailer-button {
+      min-height: 34px;
+      width: 100%;
+      background: transparent;
+      color: #f5f5ef;
+      border-radius: 10px;
+    }
+    .trend-message {
+      padding: 20px;
+      border: 1px solid rgba(245, 245, 239, .10);
+      border-radius: 14px;
+      background: #141e2d;
+    }
+    @media (max-width: 720px) {
+      .trends-home-entry,
+      .trends-header,
+      .trend-section-header {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+      .trends-open-button,
+      .trends-back-button {
+        width: 100%;
+      }
+      .trends-view {
+        padding: 16px;
+      }
+      .trend-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+    }
+  `;
+  document.head.appendChild(styles);
+}
+
+function openTrendsView() {
+  let view = document.querySelector("#trendsView");
+  if (!view) {
+    view = document.createElement("section");
+    view.id = "trendsView";
+    view.className = "trends-view";
+    view.hidden = true;
+    view.innerHTML = `
+      <div class="trends-header">
+        <div>
+          <p class="trends-kicker">TMDB metadata only</p>
+          <h2>Trends</h2>
+          <p>Global and India shelves from TMDB, updated by the server script.</p>
+          <p class="trends-updated" data-trends-updated></p>
+        </div>
+        <button class="trends-back-button" type="button" data-close-trends>Back home</button>
+      </div>
+      <div class="trends-content" data-trends-content></div>
+    `;
+    const entry = document.querySelector("#trendsHomeEntry");
+    if (entry?.parentNode) {
+      entry.parentNode.insertBefore(view, entry.nextSibling);
+    } else {
+      document.body.appendChild(view);
+    }
+    view.addEventListener("click", (event) => {
+      if (event.target.closest("[data-close-trends]")) {
+        closeTrendsView();
+      }
+    });
+  }
+
+  view.hidden = false;
+  view.scrollIntoView({ behavior: "smooth", block: "start" });
+  loadTrends();
+}
+
+function closeTrendsView() {
+  const view = document.querySelector("#trendsView");
+  if (view) view.hidden = true;
+  document.querySelector("#trendsHomeEntry")?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function loadTrends() {
+  if (trendsState.loading) return;
+  if (trendsState.loaded) {
+    renderTrendsView();
+    return;
+  }
+
+  trendsState.loading = true;
+  trendsState.error = "";
+  renderTrendsView();
+
+  try {
+    const data = await apiFetch("/api/trends");
+    if (data?.error) throw new Error(data.error);
+    trendsState.data = data;
+    trendsState.loaded = true;
+  } catch (error) {
+    trendsState.error = error.message || "data not available";
+  } finally {
+    trendsState.loading = false;
+    renderTrendsView();
+  }
+}
+
+function renderTrendsView() {
+  const content = document.querySelector("[data-trends-content]");
+  const updated = document.querySelector("[data-trends-updated]");
+  if (!content) return;
+
+  if (trendsState.loading) {
+    updated.textContent = "";
+    content.innerHTML = `<div class="trend-message">Loading TMDB trends...</div>`;
+    return;
+  }
+
+  if (trendsState.error) {
+    updated.textContent = "";
+    content.innerHTML = `<div class="trend-message">Trends unavailable. ${escapeHtml(trendsState.error)}</div>`;
+    return;
+  }
+
+  const data = trendsState.data || {};
+  updated.textContent = data.updated_at ? `Updated ${formatDateTime(data.updated_at)}` : "";
+  content.innerHTML = `
+    <div class="trends-sections">
+      ${renderTrendSection("Global Movies", data.global_movies)}
+      ${renderTrendSection("Global Series", data.global_series)}
+      ${renderTrendSection("India Movies", data.india_movies)}
+      ${renderTrendSection("India Series", data.india_series)}
+    </div>
+  `;
+}
+
+function renderTrendSection(title, items) {
+  const safeItems = Array.isArray(items) ? items : [];
+  return `
+    <section class="trend-section">
+      <div class="trend-section-header">
+        <h3>${escapeHtml(title)}</h3>
+        <span class="trend-count">${safeItems.length} titles</span>
+      </div>
+      ${safeItems.length
+        ? `<div class="trend-grid">${safeItems.map(renderTrendCard).join("")}</div>`
+        : `<p class="trend-empty">No titles available.</p>`}
+    </section>
+  `;
+}
+
+function renderTrendCard(item) {
+  const title = item?.title || "Untitled";
+  const poster = item?.poster_url
+    ? `<img class="trend-poster" src="${escapeHtml(item.poster_url)}" alt="${escapeHtml(title)} poster" loading="lazy">`
+    : `<div class="trend-placeholder" aria-label="No poster available">No poster</div>`;
+  const rating = formatTrendRating(item?.rating);
+  const releaseYear = item?.release_year || "Year N/A";
+  const trailer = item?.trailer_url
+    ? `<a class="trailer-button" href="${escapeHtml(item.trailer_url)}" target="_blank" rel="noreferrer">Trailer</a>`
+    : "";
+
+  return `
+    <article class="trend-card">
+      ${poster}
+      <div class="trend-card-body">
+        <h4>${escapeHtml(title)}</h4>
+        <div class="trend-meta-row">
+          <span class="trend-rating">${escapeHtml(rating)}</span>
+          <span class="trend-meta">${escapeHtml(releaseYear)}</span>
+        </div>
+        ${trailer}
+      </div>
+    </article>
+  `;
+}
+
+function formatTrendRating(value) {
+  const rating = Number(value);
+  if (!Number.isFinite(rating)) return "N/A";
+  return `TMDB ${rating.toFixed(1)}`;
 }
 
 function renderTorrents(torrents) {
@@ -418,5 +808,6 @@ completedFiles.addEventListener("click", (event) => {
   copyVlcLink(Number(button.dataset.copyIndex)).catch((error) => setStatus(error.message, true));
 });
 
+installTrendsHomeEntry();
 refreshAll();
 window.setInterval(() => refreshAll({ quiet: true }), POLL_MS);
