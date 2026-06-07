@@ -27,7 +27,23 @@ ITEM_LIMIT = 15
 LANGUAGES = ("hi", "en")
 RECENT_MOVIE_DAYS = 120
 RECENT_TV_DAYS = 90
+MOVIE_FALLBACK_DAYS = (120, 180, 365)
+TV_FALLBACK_DAYS = (90, 180, 365)
 MIN_VOTES = 5
+MIN_FALLBACK_ITEMS = 8
+MAX_PAGES = 5
+TRAILER_LANGUAGES = ("en-US", "hi-IN")
+BAD_TRAILER_WORDS = (
+    "clip",
+    "featurette",
+    "interview",
+    "promo",
+    "reaction",
+    "recap",
+    "review",
+    "song",
+    "teaser",
+)
 
 
 def tmdb_get(path, params=None):
@@ -77,24 +93,64 @@ def rank_items(raw_items, start_date, end_date):
     )
 
 
-def fetch_collection(path, *, media_type, params=None, days=RECENT_MOVIE_DAYS):
-    start_date, end_date = recent_date_range(days)
+def fetch_pages(path, params=None):
     raw_items = []
-    for page in range(1, 4):
+    for page in range(1, MAX_PAGES + 1):
         payload = tmdb_get(path, {**(params or {}), "page": page})
         results = payload.get("results", [])
         if isinstance(results, list):
             raw_items.extend(results)
+    return raw_items
 
-    return normalize_collection(rank_items(raw_items, start_date, end_date), media_type)
+
+def fetch_collection(path, *, media_type, params=None, fallback_days):
+    best_items = []
+    for days in fallback_days:
+        start_date, end_date = recent_date_range(days)
+        ranked_items = rank_items(fetch_pages(path, params), start_date, end_date)
+        if len(ranked_items) > len(best_items):
+            best_items = ranked_items
+        if len(ranked_items) >= MIN_FALLBACK_ITEMS:
+            return normalize_collection(ranked_items, media_type)
+
+    return normalize_collection(best_items, media_type)
 
 
-def fetch_india_collection(path, *, media_type, days):
-    start_date, end_date = recent_date_range(days)
+def fetch_discover_collection(path, *, media_type, base_params=None, fallback_days):
+    best_items = []
+    for days in fallback_days:
+        start_date, end_date = recent_date_range(days)
+        params = {
+            **recent_discover_params(media_type, start_date, end_date),
+            **(base_params or {}),
+        }
+        ranked_items = rank_items(fetch_pages(path, params), start_date, end_date)
+        if len(ranked_items) > len(best_items):
+            best_items = ranked_items
+        if len(ranked_items) >= MIN_FALLBACK_ITEMS:
+            return normalize_collection(ranked_items, media_type)
+
+    return normalize_collection(best_items, media_type)
+
+
+def fetch_india_collection(path, *, media_type, fallback_days):
+    best_items = []
+    for days in fallback_days:
+        start_date, end_date = recent_date_range(days)
+        ranked_items = rank_items(fetch_india_window(path, media_type, start_date, end_date), start_date, end_date)
+        if len(ranked_items) > len(best_items):
+            best_items = ranked_items
+        if len(ranked_items) >= MIN_FALLBACK_ITEMS:
+            return normalize_collection(ranked_items, media_type)
+
+    return normalize_collection(best_items, media_type)
+
+
+def fetch_india_window(path, media_type, start_date, end_date):
     raw_items = []
     seen = set()
     for language in LANGUAGES:
-        for page in range(1, 4):
+        for page in range(1, MAX_PAGES + 1):
             payload = tmdb_get(
                 path,
                 {
@@ -117,7 +173,7 @@ def fetch_india_collection(path, *, media_type, days):
                     continue
                 seen.add(tmdb_id)
                 raw_items.append(raw_item)
-    return normalize_collection(rank_items(raw_items, start_date, end_date), media_type)
+    return raw_items
 
 
 def recent_discover_params(media_type, start_date, end_date):
@@ -166,39 +222,60 @@ def fetch_trailer_url(media_type, tmdb_id):
     if not tmdb_id:
         return None
 
-    try:
-        payload = tmdb_get(f"/{media_type}/{tmdb_id}/videos", {"language": "en-US"})
-    except Exception:
-        return None
+    videos = []
+    for language in TRAILER_LANGUAGES:
+        try:
+            payload = tmdb_get(f"/{media_type}/{tmdb_id}/videos", {"language": language})
+        except Exception:
+            continue
 
-    videos = payload.get("results", [])
-    if not isinstance(videos, list):
-        return None
+        results = payload.get("results", [])
+        if isinstance(results, list):
+            videos.extend(results)
 
-    trailer = next(
-        (
-            video for video in videos
-            if isinstance(video, dict)
-            and video.get("site") == "YouTube"
-            and video.get("type") == "Trailer"
-            and video.get("key")
-        ),
-        None,
-    )
-    if trailer is None:
-        trailer = next(
-            (
-                video for video in videos
-                if isinstance(video, dict)
-                and video.get("site") == "YouTube"
-                and video.get("key")
-            ),
-            None,
-        )
-    if trailer is None:
+    trailer = best_trailer(videos)
+    if not trailer:
         return None
 
     return f"https://www.youtube.com/watch?v={trailer['key']}"
+
+
+def best_trailer(videos):
+    candidates = [
+        video for video in videos
+        if isinstance(video, dict)
+        and video.get("site") == "YouTube"
+        and video.get("type") == "Trailer"
+        and video.get("official") is True
+        and video.get("key")
+        and not has_bad_trailer_title(video)
+    ]
+    if not candidates:
+        return None
+
+    return sorted(
+        candidates,
+        key=lambda video: (
+            trailer_language_score(video),
+            "official trailer" in (video.get("name") or "").lower(),
+            video.get("published_at") or "",
+        ),
+        reverse=True,
+    )[0]
+
+
+def has_bad_trailer_title(video):
+    name = (video.get("name") or "").lower()
+    return any(word in name for word in BAD_TRAILER_WORDS)
+
+
+def trailer_language_score(video):
+    language = video.get("iso_639_1")
+    if language == "en":
+        return 2
+    if language == "hi":
+        return 1
+    return 0
 
 
 def write_json(payload):
@@ -211,28 +288,33 @@ def write_json(payload):
 
 
 def main():
-    movie_start, movie_end = recent_date_range(RECENT_MOVIE_DAYS)
-    tv_start, tv_end = recent_date_range(RECENT_TV_DAYS)
     payload = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "global_movies": fetch_collection(
             "/movie/now_playing",
             media_type="movie",
             params={"region": "US", "include_adult": "false"},
-            days=RECENT_MOVIE_DAYS,
+            fallback_days=MOVIE_FALLBACK_DAYS,
         ),
-        "global_series": fetch_collection(
+        "global_series": fetch_discover_collection(
             "/discover/tv",
             media_type="tv",
-            params={
-                **recent_discover_params("tv", tv_start, tv_end),
+            base_params={
                 "with_status": "0",
                 "include_adult": "false",
             },
-            days=RECENT_TV_DAYS,
+            fallback_days=TV_FALLBACK_DAYS,
         ),
-        "india_movies": fetch_india_collection("/discover/movie", media_type="movie", days=RECENT_MOVIE_DAYS),
-        "india_series": fetch_india_collection("/discover/tv", media_type="tv", days=RECENT_TV_DAYS),
+        "india_movies": fetch_india_collection(
+            "/discover/movie",
+            media_type="movie",
+            fallback_days=MOVIE_FALLBACK_DAYS,
+        ),
+        "india_series": fetch_india_collection(
+            "/discover/tv",
+            media_type="tv",
+            fallback_days=TV_FALLBACK_DAYS,
+        ),
     }
     write_json(payload)
     print(f"Wrote {OUTPUT_PATH}")

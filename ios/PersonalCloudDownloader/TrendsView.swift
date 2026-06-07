@@ -1,4 +1,5 @@
 import Foundation
+import SafariServices
 import SwiftUI
 import UIKit
 
@@ -220,8 +221,11 @@ struct TrendsView: View {
 private struct TrendCard: View {
     let item: TrendItem
 
+    @State private var trailerSheet: TrailerSheet?
+
     private let cardWidth: CGFloat = 154
     private let posterHeight: CGFloat = 231
+    private let contentHeight: CGFloat = 142
     private let muted = Color(red: 0.62, green: 0.68, blue: 0.80)
 
     var body: some View {
@@ -250,19 +254,31 @@ private struct TrendCard: View {
 
                 if let trailerURL = item.trailerURL {
                     Button {
-                        UIApplication.shared.open(trailerURL)
+                        trailerSheet = TrailerSheet(url: trailerURL)
                     } label: {
-                        Label("Trailer", systemImage: "play.fill")
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 11, weight: .heavy))
+                            Text("Trailer")
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.86)
+                        }
                             .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Color.mint)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
+                            .frame(height: 34)
+                            .background(Color.mint.opacity(0.11), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.mint.opacity(0.36), lineWidth: 1)
+                            }
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.mint)
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.bottom, 12)
+            .padding(.bottom, 14)
+            .frame(height: contentHeight, alignment: .top)
         }
         .frame(width: cardWidth, alignment: .top)
         .background(Color(red: 0.055, green: 0.105, blue: 0.175), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -271,6 +287,10 @@ private struct TrendCard: View {
                 .stroke(Color.white.opacity(0.10), lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(0.20), radius: 12, y: 8)
+        .sheet(item: $trailerSheet) { sheet in
+            SafariView(url: sheet.url)
+                .ignoresSafeArea()
+        }
     }
 
     @ViewBuilder
@@ -325,6 +345,24 @@ private struct TrendCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
+}
+
+private struct TrailerSheet: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let controller = SFSafariViewController(url: url)
+        controller.preferredBarTintColor = UIColor(red: 0.015, green: 0.035, blue: 0.075, alpha: 1.0)
+        controller.preferredControlTintColor = UIColor.systemMint
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
 @MainActor
