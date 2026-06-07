@@ -56,37 +56,43 @@ struct TrendsView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("TMDB metadata only")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(Color.mint.opacity(0.90))
-                .textCase(.uppercase)
-                .tracking(1.0)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Fresh picks")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
 
-            Text("Trends")
-                .font(.system(size: 42, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
+                Spacer(minLength: 12)
 
-            Text("Global and India shelves from the CloudBox backend.")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(muted)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let updatedAt = viewModel.trends?.updatedAt {
-                Text("Updated \(updatedAt)")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(muted.opacity(0.86))
-                    .padding(.top, 2)
+                Text("Trends")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.mint.opacity(0.90))
+                    .textCase(.uppercase)
+                    .tracking(0.8)
             }
+
+            HStack(spacing: 8) {
+                Label("Updated every 6 hours", systemImage: "clock")
+                if let updatedAt = viewModel.trends?.updatedAt {
+                    Text("•")
+                        .foregroundStyle(muted.opacity(0.58))
+                    Text("Last \(formattedUpdatedAt(updatedAt))")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                }
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(muted.opacity(0.92))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
         .background(
             LinearGradient(
                 colors: [
-                    Color.mint.opacity(0.16),
+                    Color.mint.opacity(0.10),
                     Color(red: 0.035, green: 0.105, blue: 0.205).opacity(0.90)
                 ],
                 startPoint: .topLeading,
@@ -98,6 +104,16 @@ struct TrendsView: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(Color.mint.opacity(0.34), lineWidth: 1.1)
         }
+    }
+
+    private func formattedUpdatedAt(_ value: String) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let date = parser.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        guard let date else { return "recently" }
+
+        return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
     }
 
     private func content(for trends: TrendsResponse) -> some View {

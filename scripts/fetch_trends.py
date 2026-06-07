@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -23,8 +23,11 @@ API_BASE_URL = "https://api.themoviedb.org/3"
 IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 OUTPUT_PATH = Path("/tmp/trends.json")
 TIMEOUT_SECONDS = 20
-ITEM_LIMIT = 18
+ITEM_LIMIT = 15
 LANGUAGES = ("hi", "en")
+RECENT_MOVIE_DAYS = 120
+RECENT_TV_DAYS = 90
+MIN_VOTES = 5
 
 
 def tmdb_get(path, params=None):
@@ -40,51 +43,105 @@ def tmdb_get(path, params=None):
         return json.loads(response.read().decode("utf-8"))
 
 
-def fetch_collection(path, *, media_type, params=None):
-    payload = tmdb_get(path, params)
-    results = payload.get("results", [])
-    if not isinstance(results, list):
-        return []
+def recent_date_range(days):
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=days)
+    return start.isoformat(), today.isoformat()
 
+
+def item_date(raw_item):
+    value = raw_item.get("release_date") or raw_item.get("first_air_date") or ""
+    return value if isinstance(value, str) else ""
+
+
+def is_recent(raw_item, start_date, end_date):
+    value = item_date(raw_item)
+    return bool(value) and start_date <= value <= end_date
+
+
+def rank_items(raw_items, start_date, end_date):
+    filtered = [
+        item for item in raw_items
+        if isinstance(item, dict)
+        and is_recent(item, start_date, end_date)
+        and (item.get("vote_count") or 0) >= MIN_VOTES
+    ]
+    return sorted(
+        filtered,
+        key=lambda item: (
+            item_date(item),
+            item.get("popularity") or 0,
+            item.get("vote_average") or 0,
+        ),
+        reverse=True,
+    )
+
+
+def fetch_collection(path, *, media_type, params=None, days=RECENT_MOVIE_DAYS):
+    start_date, end_date = recent_date_range(days)
+    raw_items = []
+    for page in range(1, 4):
+        payload = tmdb_get(path, {**(params or {}), "page": page})
+        results = payload.get("results", [])
+        if isinstance(results, list):
+            raw_items.extend(results)
+
+    return normalize_collection(rank_items(raw_items, start_date, end_date), media_type)
+
+
+def fetch_india_collection(path, *, media_type, days):
+    start_date, end_date = recent_date_range(days)
+    raw_items = []
+    seen = set()
+    for language in LANGUAGES:
+        for page in range(1, 4):
+            payload = tmdb_get(
+                path,
+                {
+                    **recent_discover_params(media_type, start_date, end_date),
+                    "page": page,
+                    "region": "IN",
+                    "with_origin_country": "IN",
+                    "with_original_language": language,
+                    "include_adult": "false",
+                },
+            )
+            results = payload.get("results", [])
+            if not isinstance(results, list):
+                continue
+            for raw_item in results:
+                if not isinstance(raw_item, dict):
+                    continue
+                tmdb_id = raw_item.get("id")
+                if tmdb_id in seen:
+                    continue
+                seen.add(tmdb_id)
+                raw_items.append(raw_item)
+    return normalize_collection(rank_items(raw_items, start_date, end_date), media_type)
+
+
+def recent_discover_params(media_type, start_date, end_date):
+    if media_type == "movie":
+        return {
+            "sort_by": "primary_release_date.desc",
+            "primary_release_date.gte": start_date,
+            "primary_release_date.lte": end_date,
+            "vote_count.gte": MIN_VOTES,
+        }
+    return {
+        "sort_by": "first_air_date.desc",
+        "first_air_date.gte": start_date,
+        "first_air_date.lte": end_date,
+        "vote_count.gte": MIN_VOTES,
+    }
+
+
+def normalize_collection(raw_items, media_type):
     items = []
-    for raw_item in results[:ITEM_LIMIT]:
-        if not isinstance(raw_item, dict):
-            continue
+    for raw_item in raw_items[:ITEM_LIMIT]:
         item = normalize_item(raw_item, media_type)
         item["trailer_url"] = fetch_trailer_url(media_type, raw_item.get("id"))
         items.append(item)
-    return items
-
-
-def fetch_india_collection(path, *, media_type):
-    items = []
-    seen = set()
-    for language in LANGUAGES:
-        payload = tmdb_get(
-            path,
-            {
-                "sort_by": "popularity.desc",
-                "region": "IN",
-                "with_origin_country": "IN",
-                "with_original_language": language,
-                "include_adult": "false",
-            },
-        )
-        results = payload.get("results", [])
-        if not isinstance(results, list):
-            continue
-        for raw_item in results:
-            if not isinstance(raw_item, dict):
-                continue
-            tmdb_id = raw_item.get("id")
-            if tmdb_id in seen:
-                continue
-            seen.add(tmdb_id)
-            item = normalize_item(raw_item, media_type)
-            item["trailer_url"] = fetch_trailer_url(media_type, tmdb_id)
-            items.append(item)
-            if len(items) >= ITEM_LIMIT:
-                return items
     return items
 
 
@@ -154,12 +211,28 @@ def write_json(payload):
 
 
 def main():
+    movie_start, movie_end = recent_date_range(RECENT_MOVIE_DAYS)
+    tv_start, tv_end = recent_date_range(RECENT_TV_DAYS)
     payload = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "global_movies": fetch_collection("/trending/movie/week", media_type="movie"),
-        "global_series": fetch_collection("/trending/tv/week", media_type="tv"),
-        "india_movies": fetch_india_collection("/discover/movie", media_type="movie"),
-        "india_series": fetch_india_collection("/discover/tv", media_type="tv"),
+        "global_movies": fetch_collection(
+            "/movie/now_playing",
+            media_type="movie",
+            params={"region": "US", "include_adult": "false"},
+            days=RECENT_MOVIE_DAYS,
+        ),
+        "global_series": fetch_collection(
+            "/discover/tv",
+            media_type="tv",
+            params={
+                **recent_discover_params("tv", tv_start, tv_end),
+                "with_status": "0",
+                "include_adult": "false",
+            },
+            days=RECENT_TV_DAYS,
+        ),
+        "india_movies": fetch_india_collection("/discover/movie", media_type="movie", days=RECENT_MOVIE_DAYS),
+        "india_series": fetch_india_collection("/discover/tv", media_type="tv", days=RECENT_TV_DAYS),
     }
     write_json(payload)
     print(f"Wrote {OUTPUT_PATH}")
