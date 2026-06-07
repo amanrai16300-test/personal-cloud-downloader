@@ -1416,7 +1416,7 @@ private struct SubtitleOverlay: View {
             video: CompletedFile(
                 name: "Sample/Big Buck Bunny.mp4",
                 path: "/data/Sample/Big Buck Bunny.mp4",
-                url: "http://100.92.146.101:8090/files/Sample/Big%20Buck%20Bunny.mp4",
+                url: "http://100.95.39.107:8090/files/Sample/Big%20Buck%20Bunny.mp4",
                 modifiedAt: nil
             )
         )
@@ -1429,7 +1429,7 @@ private struct SubtitleOverlay: View {
             video: CompletedFile(
                 name: "Sample/Movie.mkv",
                 path: "/data/Sample/Movie.mkv",
-                url: "http://100.92.146.101:8090/files/Sample/Movie.mkv",
+                url: "http://100.95.39.107:8090/files/Sample/Movie.mkv",
                 modifiedAt: nil
             )
         )

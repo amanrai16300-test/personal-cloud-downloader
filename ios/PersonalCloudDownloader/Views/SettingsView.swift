@@ -3,10 +3,10 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.openURL) private var openURL
 
-    private let tailscaleIP = "100.92.146.101"
-    private let downloaderURL = "http://100.92.146.101:8090/app/"
-    private let qbittorrentURL = "http://100.92.146.101:8080"
-    private let filesURL = "http://100.92.146.101:8090/files/"
+    private let tailscaleIP = "100.95.39.107"
+    private let downloaderURL = "http://100.95.39.107:8090/app/"
+    private let qbittorrentURL = "http://100.95.39.107:8080"
+    private let filesURL = "http://100.95.39.107:8090/files/"
 
     var body: some View {
         NavigationStack {

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 struct HomeView: View {
-    private let serverIP = "100.92.146.101"
+    private let serverIP = "100.95.39.107"
     private let backendBaseURL = CompletedFilesAPI.baseURL
     private let refreshInterval: UInt64 = 12_000_000_000
     private let screenBackground = Color(red: 0.015, green: 0.035, blue: 0.075)
