@@ -115,6 +115,18 @@ private struct MoreView: View {
                             .buttonStyle(MorePressStyle())
 
                             NavigationLink {
+                                TrendsView()
+                            } label: {
+                                moreRow(
+                                    title: "Trends",
+                                    subtitle: "TMDB movies and series",
+                                    systemImage: "chart.line.uptrend.xyaxis",
+                                    tint: .mint
+                                )
+                            }
+                            .buttonStyle(MorePressStyle())
+
+                            NavigationLink {
                                 SettingsView()
                             } label: {
                                 moreRow(
