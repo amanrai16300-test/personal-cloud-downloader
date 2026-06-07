@@ -1426,6 +1426,94 @@ http://100.92.146.101:8080
   - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
   - branch: usually `feature/tmdb-trends` for current Trends work
 
+## Oracle CloudBox Storage Migration Completed Status
+
+- Old Oracle VM `personal-cloud-downloader` was terminated.
+- Old 100GB boot volume was permanently deleted.
+- New Oracle VM is now the active CloudBox server.
+- New VM name: `cloudbox-migration-50gb`
+- New hostname: `personal-cloud-downloader-vcn`
+- Region: `ap-tokyo-1`
+- OS: Ubuntu 24.04
+- Shape: Ampere A1 Flex
+- Final CPU/RAM: 2 OCPU / 4GB RAM
+- Swap: 2GB
+- New public IP: `161.33.181.237`
+- New Tailscale IP: `100.95.39.107`
+- New private IP: `10.0.0.129`
+
+### Final Storage Layout
+
+- Boot disk: `/dev/sda`, 50GB
+- Root filesystem: `/`, about 48GB usable
+- Separate data disk: `/dev/sdb`, 100GB
+- Data mount path: `/srv/personal-cloud`
+- Usable data size: about 97.9 GiB
+- Final Oracle block storage total: 150GB
+- Target remains inside Oracle Always Free 200GB block storage limit.
+
+### Current CloudBox Live URLs
+
+- Backend: `http://100.95.39.107:8000`
+- Web app: `http://100.95.39.107:8090/app/`
+- qBittorrent: `http://100.95.39.107:8080`
+- Files: `http://100.95.39.107:8090/files/`
+
+### Current Firewall and Services
+
+- UFW is active.
+- Default incoming traffic is denied.
+- Only `tailscale0` allows ports `22`, `8000`, `8080`, and `8090`.
+- qBittorrent, FastAPI, and Nginx remain private through Tailscale.
+- `nginx` is enabled and active.
+- `qbittorrent-nox.service` is enabled and active.
+- `personal-downloader-api.service` is enabled and active.
+- Reboot test passed.
+- `/api/health` returns OK.
+- `/api/qbittorrent/test` returns OK.
+- `/app/` and `/files/` return `200 OK`.
+
+### Backup and Data Migration Notes
+
+- Final app-only backup was downloaded to PC:
+  - `cloudbox-newvm-final-app-backup-20260607-1929.tar.gz`
+- Backup excludes video/download files.
+- Old downloaded files were intentionally not copied.
+- `/srv/personal-cloud/downloads` starts clean on the new 100GB data volume.
+- If the VM breaks in the future but `/dev/sdb` survives, the 100GB data volume can be attached to a replacement VM and mounted again at `/srv/personal-cloud`.
+
+### iOS Migration Update
+
+- iOS app server references were updated from `100.92.146.101` to `100.95.39.107`.
+- Changed files:
+  - `ios/PersonalCloudDownloader/Services/CompletedFilesAPI.swift`
+  - `ios/PersonalCloudDownloader/Views/DownloaderView.swift`
+  - `ios/PersonalCloudDownloader/Views/FilesView.swift`
+  - `ios/PersonalCloudDownloader/Views/HomeView.swift`
+  - `ios/PersonalCloudDownloader/Views/PlayerView.swift`
+  - `ios/PersonalCloudDownloader/Views/QBittorrentView.swift`
+  - `ios/PersonalCloudDownloader/Views/SettingsView.swift`
+- New IPA must be built/installed for iPhone to use the new server.
+
+### Network Storage Follow-Up
+
+- `backend/main.py` was updated so `/api/network-usage` reports storage for `/srv/personal-cloud`, not `/`.
+- Network page now shows the 100GB data disk, about 97.9 GiB total, instead of the 50GB boot disk.
+- Network traffic calculation was not changed.
+
+### Oracle Budget Status
+
+- `personal-cloud-budget` is active.
+- Budget target: `amandevil163 (root)` compartment.
+- Amount: JP¥1 monthly.
+- Current spent: JP¥0.
+- Current forecast: JP¥0.
+- Alert rules exist:
+  - 50% Actual Spend
+  - 100% Actual Spend
+  - 100% Forecast Spend
+- Budget alerts are warning-only and do not stop resources automatically.
+
 ## Deployment Notes
 
 - Current verified Oracle layout:
