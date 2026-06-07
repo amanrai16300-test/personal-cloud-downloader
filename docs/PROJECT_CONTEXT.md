@@ -497,11 +497,12 @@ http://100.92.146.101:8090/app/
 - Real `/files/` root confirmed:
   - `/srv/personal-cloud/downloads/complete/`
 - Real Downloader web UI path confirmed:
-  - `/var/www/personal-cloud/app/app.js`
+  - historical old path: `/var/www/personal-cloud/app/app.js`
+  - verified current path: `/home/ubuntu/personal-cloud-downloader/backend/app.js`
 - Important deployment note:
   - Web Downloader changes:
     - local file: `frontend/app.js`
-    - live Oracle path: `/var/www/personal-cloud/app/app.js`
+    - live Oracle path: `/home/ubuntu/personal-cloud-downloader/backend/app.js`
     - requires manual copy/deploy to Oracle
   - Backend changes:
     - local file: `backend/main.py`
@@ -509,10 +510,10 @@ http://100.92.146.101:8090/app/
     - requires manual deploy and `sudo systemctl restart personal-downloader-api.service`
   - iOS native changes:
     - require new IPA build/install
-    - currently blocked until GitHub Actions budget issue is resolved
-  - GitHub Actions macOS IPA builds are currently blocked by GitHub Actions budget/spending limit.
+    - use the manual GitHub Actions IPA workflow when needed
+  - GitHub Actions macOS IPA builds are manual-only and should be run only when needed.
   - Web and backend fixes can still be deployed manually to Oracle.
-  - Native iOS fixes still require a new IPA after Actions billing/budget is available again.
+  - Native iOS fixes still require a new IPA build/install.
 - Downloader queue ordering work:
   - file: `frontend/app.js`
   - `renderTorrents(torrents)` is the real visible render path
@@ -521,7 +522,7 @@ http://100.92.146.101:8090/app/
   - if not visible, verify the served JS with `/app/app.js`, because wrong deploy path caused earlier confusion
 - Downloader custom delete confirmation modal is complete.
 - It uses an in-page DOM modal, not `window.confirm()`, so it works in PC browser and iOS WKWebView.
-- `frontend/app.js` changes must be manually deployed to `/var/www/personal-cloud/app/app.js`.
+- `frontend/app.js` changes must be manually deployed to `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
 
 ## 15. Next Steps
 
@@ -932,7 +933,7 @@ Full docs:
 - Old orphan folders were manually cleaned once through SSH.
 - Downloader queue ordering is verified working.
 - Downloader custom delete confirmation modal is verified working.
-- Subtitle cleanup was handled server-side because GitHub Actions budget currently blocks new IPA builds.
+- Subtitle cleanup was handled server-side and did not require a new IPA.
 - Backend sanitizes active `.srt` / `.vtt` sidecar files under the completed downloads root.
 - Sanitizer removes:
   - HTML-style tags like `<i>`, `</i>`, `<b>`, `</b>`, `<u>`, `</u>`
@@ -949,13 +950,13 @@ Full docs:
   - subtitles no longer show raw `<i>` text
   - subtitles no longer show raw `{\an8}` text
 - No new IPA was required for this subtitle cleanup because it was handled by backend subtitle file sanitization.
-- GitHub Actions macOS IPA builds are currently blocked by GitHub Actions budget/spending limit.
+- GitHub Actions macOS IPA builds are manual-only and should be run only when needed.
 - Web and backend fixes can still be deployed manually to Oracle.
-- Native iOS fixes still require a new IPA after Actions billing/budget is available again.
+- Native iOS fixes still require a new IPA build/install.
 - Deployment notes:
   - Web Downloader changes:
     - local file: `frontend/app.js`
-    - live Oracle path: `/var/www/personal-cloud/app/app.js`
+    - live Oracle path: `/home/ubuntu/personal-cloud-downloader/backend/app.js`
     - requires manual copy/deploy to Oracle
   - Backend changes:
     - local file: `backend/main.py`
@@ -963,7 +964,7 @@ Full docs:
     - requires manual deploy and `sudo systemctl restart personal-downloader-api.service`
   - iOS native changes:
     - require new IPA build/install
-    - currently blocked until GitHub Actions budget issue is resolved
+    - use the manual GitHub Actions IPA workflow when needed
 - qBittorrent WebView issue was later fixed enough for the page to load in app.
 
 ## Latest CloudBox UI + Thumbnail Progress
@@ -1047,6 +1048,73 @@ Full docs:
   - backend deploy to Oracle for thumbnail generation and `thumbnail_url`
   - new IPA build/install for iOS thumbnail display.
 
+## Network Dashboard Update
+
+- New native iOS `Network` tab was added.
+- Bottom tabs are now:
+  - Home
+  - Downloader
+  - Videos
+  - Network
+  - More
+- qBittorrent was moved into `More`.
+- qBittorrent WebView behavior and URL remain unchanged:
+
+```text
+http://100.92.146.101:8080
+```
+
+- Backend endpoint added:
+  - `GET /api/network-usage`
+- Backend uses fixed safe commands only:
+  - `vnstat -i enp0s6 --json`
+  - fallback: `vnstat -i enp0s6`
+  - storage: `df -B1 /`
+  - optional completed downloads path: `df -B1 /srv/personal-cloud/downloads/complete`
+- No client command input is accepted.
+- Network tab shows:
+  - monthly outgoing / TX upload usage
+  - estimated monthly total
+  - today's RX / TX / total / average rate
+  - daily usage list
+- Monthly summary card now focuses on TX/upload/outgoing usage only.
+- The label is now `Monthly Outgoing` / `TX this month`.
+- Today and daily usage sections still show normal usage data.
+- Daily usage list now shows newest dates first.
+- Daily usage list is limited to latest 10 records.
+- Storage card added in Network tab:
+  - Used
+  - Total
+  - Available
+  - Percentage
+  - progress bar
+- Network tab auto-refresh behavior:
+  - network and storage refresh together every 12 seconds while visible
+  - refreshes when app becomes active
+  - stops refresh timer when leaving the tab
+  - avoids overlapping refresh requests
+- Pull-to-refresh still works.
+- Reload error behavior fixed:
+  - old successful data stays visible during refresh
+  - failed refresh with old data shows only small warning
+  - full error appears only when no data has loaded yet
+- Verified on real iPhone:
+  - Network tab works
+  - Storage card works
+  - live refresh works
+  - daily list newest-first works
+  - max 10 daily rows works
+  - qBittorrent works from More
+- Deployment notes:
+  - Backend changes require deploying `backend/main.py` to Oracle and restarting:
+
+```bash
+sudo systemctl restart personal-downloader-api.service
+```
+
+  - iOS Network tab changes require new IPA build/install.
+  - GitHub Actions IPA workflow remains manual-only.
+
 ## qBittorrent WebView Status
 
 - qBittorrent URL remains:
@@ -1067,14 +1135,316 @@ http://100.92.146.101:8080
   - true auto-login is not implemented
   - no qB username/password is hardcoded in the app
 
+## VLC Audio Track Selector Update
+
+- VLC player now supports multi-audio track selection for videos such as MKV, AVI, and WEBM.
+- Audio tracks are detected from MobileVLCKit real audio track indexes/names.
+- No fake audio tracks are added.
+- Audio icon appears next to the subtitle icon in fullscreen VLC controls.
+- Audio icon is hidden when there is only one or no selectable audio track.
+- Selecting a track applies it through VLC player audio track index.
+- Verified working on real iPhone with a multi-audio video.
+- Subtitle behavior, playback, fullscreen, Fit/Cover, gestures, resume, and progress behavior remain unchanged.
+- Changed files for this milestone:
+  - `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`
+  - `ios/PersonalCloudDownloader/Views/PlayerView.swift`
+
+## CloudBox UI Polish Update
+
+- Emil Kowalski design-engineering skill was used as a micro-polish guide.
+- Taste Skill and Impeccable remain part of the design workflow.
+- Goal was to make CloudBox feel more handcrafted, premium, and non-generic.
+- UI polish was applied screen by screen, not as a full app redesign.
+- Network tab was polished:
+  - dark CloudBox background
+  - stronger header hierarchy
+  - premium metric/storage cards
+  - clearer storage progress bar
+  - cleaner daily usage rows
+  - refined loading, error, and refresh-failed states
+- Videos screen was polished:
+  - removed inert search/filter icons
+  - improved folder cards
+  - improved loose video cards
+  - improved folder-detail header and rows
+  - improved thumbnail alignment, dividers, loading, empty, and error states
+  - added subtle 120ms press feedback
+- More tab was polished:
+  - custom CloudBox dark background
+  - premium More hero/header panel
+  - card-style rows
+  - aligned icons
+  - softer chevrons
+  - subtle press feedback
+- Player controls were polished:
+  - subtle 120ms press feedback on fullscreen, replay, skip/play, close, and Fit/Cover controls
+  - refined playback failure card
+  - refined invalid stream URL state
+- Additional visible polish:
+  - Home hero/status/action area made more visually distinct
+  - Network daily usage pills wrap better on narrow screens
+  - bottom tab accent tint unified to CloudBox blue
+  - bottom tab bar now uses native `UITabBarAppearance` with a darker CloudBox surface, stronger selected tint, muted inactive tabs, and custom label weights
+- Behavior stayed unchanged:
+  - APIs
+  - navigation destinations
+  - downloader behavior
+  - qBittorrent behavior
+  - playback
+  - subtitles
+  - audio selector
+  - thumbnails
+  - progress saving
+
+## TMDB Trends Backend and Script Update
+
+- A legal TMDB-only Trends feature was added.
+- No torrent scraping is used.
+- No 1337x or torrent index is used.
+- No magnet links, info hashes, seeds, leechers, torrent links, or download links are shown.
+- Backend endpoint added:
+  - `GET /api/trends`
+- Endpoint behavior:
+  - reads only `/tmp/trends.json`
+  - does not call TMDB directly
+  - returns `{ "error": "data not available" }` if the file is missing or malformed
+- Trends script added:
+  - `scripts/fetch_trends.py`
+- Script reads:
+  - `TMDB_API_KEY`
+- Script writes:
+  - `/tmp/trends.json`
+- `/tmp/trends.json` format:
+  - `updated_at`
+  - `global_movies`
+  - `global_series`
+  - `india_movies`
+  - `india_series`
+- Each item includes:
+  - `title`
+  - `poster_url`
+  - `rating`
+  - `release_year`
+  - `trailer_url`
+  - `media_type`
+  - `language`
+- Rating comes from TMDB `vote_average` and is shown directly on cards.
+- Trailer links are YouTube URLs only when a safe official trailer is found.
+- Trailer lookup prefers:
+  - `site == YouTube`
+  - `official == true`
+  - `type == Trailer`
+  - English/Hindi when available
+- Reviews, clips, featurettes, teasers, reactions, interviews, songs, and promos are avoided where possible.
+- If no good official trailer exists, `trailer_url` is `null`.
+
+## TMDB Trends Source and Filtering Logic
+
+- Global Movies merge multiple TMDB sources:
+  - `/trending/movie/week`
+  - `/movie/now_playing`
+  - `/movie/popular`
+  - `/discover/movie`
+- Global Series merge multiple TMDB sources:
+  - `/trending/tv/week`
+  - `/tv/on_the_air`
+  - `/tv/popular`
+  - `/discover/tv`
+- Results are deduplicated by TMDB `id`.
+- Scoring prefers:
+  - TMDB popularity
+  - vote count
+  - rating
+  - recency
+  - weekly trending source bonus
+- Global Movies freshness rule:
+  - dated titles older than 730 days are excluded
+  - missing-date titles may still be allowed when date is unavailable
+- Global Series freshness rule:
+  - old series are excluded unless TMDB provides recent activity such as `last_air_date`, `next_episode_to_air.air_date`, or `last_episode_to_air.air_date`
+  - old popular/trending series no longer pass by popularity alone
+- India Movies and India Series:
+  - use TMDB discover
+  - use `with_origin_country=IN`
+  - allow Hindi and English originals only
+  - exclude Tamil, Telugu, Malayalam, Kannada, Bengali, and other regional-language originals
+  - use fallback date windows when the first range returns too few items
+- India fallback examples:
+  - Movies: 120, 180, then 365 days
+  - TV: 90, 180, then 365 days
+- Current verified section sizes after latest script run:
+  - `global_movies`: 15
+  - `global_series`: 15
+  - `india_movies`: 12
+  - `india_series`: 12
+
+## TMDB Trends Cron and Reboot Safety
+
+- TMDB API key is stored on Oracle in:
+  - `/home/ubuntu/.config/cloudbox/tmdb.env`
+- The env file uses:
+  - `export TMDB_API_KEY="..."`
+- The key must not be committed to Git.
+- Trends cron is installed with:
+  - 6-hour update
+  - reboot recreation
+  - 300-second timeout protection
+- Current cron lines:
+
+```cron
+0 */6 * * * cd /home/ubuntu/personal-cloud-downloader && . /home/ubuntu/.config/cloudbox/tmdb.env && /usr/bin/timeout 300 /usr/bin/python3 scripts/fetch_trends.py >> /tmp/cloudbox-trends.log 2>&1
+@reboot sleep 60 && cd /home/ubuntu/personal-cloud-downloader && . /home/ubuntu/.config/cloudbox/tmdb.env && /usr/bin/timeout 300 /usr/bin/python3 scripts/fetch_trends.py >> /tmp/cloudbox-trends.log 2>&1
+```
+
+- The `@reboot` job recreates `/tmp/trends.json` after server restart.
+- The `timeout 300` wrapper prevents TMDB requests from hanging forever.
+- Verified checks:
+  - `python3 scripts/fetch_trends.py` writes `/tmp/trends.json`
+  - `/tmp/cloudbox-trends.log` shows `Wrote /tmp/trends.json`
+  - `GET /api/trends` returns JSON
+  - no `fetch_trends.py` process remains stuck after a run
+
+## iOS Native Trends Update
+
+- Native iOS Trends screen was added.
+- Trends is placed inside the `More` tab.
+- Bottom tabs remain:
+  - Home
+  - Downloader
+  - Videos
+  - Network
+  - More
+- More destinations now include:
+  - Trends
+  - qBittorrent
+  - Files
+  - Settings
+- iOS endpoint used:
+  - `\(CompletedFilesAPI.baseURL)/api/trends`
+- iOS calls backend only.
+- No TMDB API key is stored in iOS.
+- No TMDB API calls are made directly from iOS.
+- iOS Trends models/services added inside:
+  - `ios/PersonalCloudDownloader/TrendsView.swift`
+- Model/service names:
+  - `TrendsView`
+  - `TrendsViewModel`
+  - `TrendsAPI`
+  - `TrendsResponse`
+  - `TrendItem`
+  - `TrendsErrorResponse`
+  - `TrendsAPIError`
+- Trends shows four sections:
+  - Global Movies
+  - Global Series
+  - India Movies
+  - India Series
+- Each card shows:
+  - poster or placeholder
+  - title
+  - TMDB rating directly on card
+  - release year
+  - Trailer button when available
+- The large technical header was replaced with a compact CloudBox-style header.
+- Header now shows:
+  - `Fresh picks`
+  - `Updated every 6 hours`
+  - formatted last update time
+- Raw ISO timestamp is no longer shown.
+- `TMDB metadata only` was removed from visual focus.
+- Trailer button layout was fixed:
+  - fixed-height custom control
+  - enough bottom padding
+  - title max 2 lines
+  - safe on small iPhone
+- Trailer opening behavior:
+  - no `UIApplication.shared.open`
+  - no forced YouTube app opening
+  - trailer opens inside app using `SFSafariViewController` sheet
+  - Video Lite custom scheme was not guessed
+- Pull-to-refresh, loading, error, and empty states remain.
+- CloudBox dark premium style is preserved.
+- Changed iOS files:
+  - `ios/PersonalCloudDownloader/RootTabView.swift`
+  - `ios/PersonalCloudDownloader/TrendsView.swift`
+- Native Trends changes require new IPA build/install.
+- Latest IPA build should use branch:
+  - `feature/tmdb-trends`
+
+## Web Trends Update
+
+- Web Trends feature was added to the existing web app.
+- Local file:
+  - `frontend/app.js`
+- Live Oracle frontend file:
+  - `/home/ubuntu/personal-cloud-downloader/backend/app.js`
+- Web Trends functions include:
+  - `installTrendsHomeEntry`
+  - `installTrendsStyles`
+  - `openTrendsView`
+  - `closeTrendsView`
+  - `loadTrends`
+  - `renderTrendsView`
+  - `renderTrendSection`
+  - `renderTrendCard`
+  - `formatTrendRating`
+- Web Trends shows:
+  - Global Movies
+  - Global Series
+  - India Movies
+  - India Series
+- Web Trends uses `/api/trends`.
+- Existing downloader UI and behavior remain unchanged.
+
+## Branch and Deployment Status
+
+- Current Trends branch:
+  - `feature/tmdb-trends`
+- `feature/ios-trends` was not created/pushed as a remote branch and should not be used for deployment.
+- Use `feature/tmdb-trends` for:
+  - Trends script deploy
+  - iOS Trends IPA build
+- Oracle project folder:
+  - `/home/ubuntu/personal-cloud-downloader`
+- This Oracle folder is not a Git repository.
+- For Oracle deploys, use clone-copy method from `/tmp`.
+- Script-only deploy requires:
+  - copy `scripts/fetch_trends.py`
+  - run `python3 -m py_compile scripts/fetch_trends.py`
+  - run script with TMDB env
+  - no backend restart
+  - no IPA unless iOS files changed
+- Backend deploy requires:
+  - copy `backend/main.py`
+  - restart `personal-downloader-api.service`
+- Web frontend deploy requires:
+  - copy `frontend/app.js` to `/home/ubuntu/personal-cloud-downloader/backend/app.js`
+- iOS native changes require:
+  - manual GitHub Actions IPA build
+  - install with Sideloadly
+- Manual IPA build path:
+  - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
+  - branch: usually `feature/tmdb-trends` for current Trends work
+
 ## Deployment Notes
 
-- Backend thumbnail fixes require deploying `backend/main.py` to Oracle and restarting:
+- Current verified Oracle layout:
+  - local backend file: `backend/main.py`
+  - live Oracle backend file: `/home/ubuntu/personal-cloud-downloader/backend/main.py`
+  - local web frontend file: `frontend/app.js`
+  - live Oracle web frontend file: `/home/ubuntu/personal-cloud-downloader/backend/app.js`
+  - local Trends script: `scripts/fetch_trends.py`
+  - live Oracle Trends script: `/home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py`
+  - generated Trends data: `/tmp/trends.json`
+  - TMDB env file: `/home/ubuntu/.config/cloudbox/tmdb.env`
+- Backend changes require deploying `backend/main.py` to Oracle and restarting:
 
 ```bash
 sudo systemctl restart personal-downloader-api.service
 ```
 
+- Web frontend changes require copying `frontend/app.js` to `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
+- Trends script-only changes require copying `scripts/fetch_trends.py`, running `python3 -m py_compile scripts/fetch_trends.py`, and running the script with the TMDB env.
 - iOS UI/model/WebView changes require new IPA build/install.
 - GitHub Actions IPA workflow is manual-only now, so backend/frontend/docs pushes do not automatically create IPA builds.
 - Manual IPA build path:
