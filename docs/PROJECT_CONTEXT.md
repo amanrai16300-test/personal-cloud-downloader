@@ -1473,6 +1473,18 @@ http://100.92.146.101:8080
 - `/api/qbittorrent/test` returns OK.
 - `/app/` and `/files/` return `200 OK`.
 
+### Latest TMDB Trends Cron Fix
+
+- After migration reboot, Trends initially failed because `/tmp/trends.json` was missing.
+- Manual run confirmed TMDB env and `scripts/fetch_trends.py` work.
+- TMDB env path: `/home/ubuntu/.config/cloudbox/tmdb.env`
+- Trends script path: `/home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py`
+- Cache currently writes to `/tmp/trends.json`.
+- New cron file: `/etc/cron.d/cloudbox-trends`
+- Cron runs `fetch_trends.py` at reboot after 90 seconds and every 2 hours.
+- Manual test passed and `/api/trends` returned trend data.
+- Current limitation: cache is still in `/tmp`; cron recreates it after reboot. A future cleanup can move cache to a persistent path.
+
 ### Backup and Data Migration Notes
 
 - Final app-only backup was downloaded to PC:
