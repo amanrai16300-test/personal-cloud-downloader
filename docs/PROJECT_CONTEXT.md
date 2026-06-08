@@ -1485,6 +1485,24 @@ http://100.92.146.101:8080
 - Manual test passed and `/api/trends` returned trend data.
 - Current limitation: cache is still in `/tmp`; cron recreates it after reboot. A future cleanup can move cache to a persistent path.
 
+### Latest OCI Object Storage App Backup Setup
+
+- OCI Object Storage bucket created: `cloudbox-app-backups`.
+- Purpose: S3-style app-only backup for the CloudBox app brain.
+- Backup script added: `scripts/backup_cloudbox_app.sh`.
+- Backup excludes video/download files and runtime-heavy media files.
+- Backup includes CloudBox app code, configs, Nginx config, systemd service files, qBittorrent settings, cron config, `/var/www/personal-cloud`, `/var/lib/cloudbox` if present, package list, and systemd unit list.
+- OCI CLI is installed and configured on the Oracle VM; namespace test passed with `oci os ns get`.
+- Manual backup upload succeeded.
+- Daily cron template added: `scripts/cloudbox-app-backup.cron`.
+- Installed on Oracle VM as `/etc/cron.d/cloudbox-app-backup`.
+- Cron schedule: daily at `03:30 UTC`.
+- Backup target: bucket `cloudbox-app-backups`, prefix `daily/`.
+- Manual cron-style test succeeded as `ubuntu`.
+- Confirmed uploaded object: `daily/cloudbox-app-backup-20260608-1253.tar.gz`.
+- Local tarball is deleted after successful daily upload.
+- Current restore strategy: restore app brain from OCI Object Storage if the app/instance fails; if the VM fails but data disk survives, attach the 100GB `/srv/personal-cloud` block volume to a replacement VM; video files are intentionally not backed up.
+
 ### Backup and Data Migration Notes
 
 - Final app-only backup was downloaded to PC:
