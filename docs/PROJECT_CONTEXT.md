@@ -1525,6 +1525,20 @@ http://100.92.146.101:8080
   - `ios/PersonalCloudDownloader/Views/SettingsView.swift`
 - New IPA must be built/installed for iPhone to use the new server.
 
+### Latest iOS Foreground Reconnect Fix
+
+- iOS app sometimes showed disconnected after being minimized/backgrounded and reopened.
+- Server and Safari links were working, so the issue was iOS app foreground reconnect behavior, not Oracle, Tailscale, or server availability.
+- Fixed iOS foreground reconnect behavior.
+- Changed files: `ios/PersonalCloudDownloader/Views/HomeView.swift`, `ios/PersonalCloudDownloader/Views/VideosView.swift`, `ios/PersonalCloudDownloader/Views/NetworkUsageView.swift`, `ios/PersonalCloudDownloader/TrendsView.swift`.
+- Home now shows reconnecting/checking state, waits briefly, retries `/api/health` 3 times with short delay, and marks offline only after retries fail.
+- Videos, Network, and Trends refresh after app foreground with a short delay.
+- WebViews were not changed to avoid reload loops.
+- Build initially failed because `HomeView.swift` had a missing `return` in the `serverStatusText` getter.
+- Fixed build error by adding the missing `return`.
+- New IPA was built, installed, and tested working.
+- Foreground reopen behavior now works better.
+
 ### Network Storage Follow-Up
 
 - `backend/main.py` was updated so `/api/network-usage` reports storage for `/srv/personal-cloud`, not `/`.
