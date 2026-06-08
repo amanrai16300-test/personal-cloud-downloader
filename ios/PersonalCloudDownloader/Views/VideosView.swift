@@ -2,9 +2,11 @@ import Foundation
 import SwiftUI
 
 struct VideosView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var videos: [CompletedFile] = []
     @State private var progressByPath: [String: VideoProgress] = [:]
     @State private var phase: LoadPhase = .loading
+    @State private var isVisible = false
     private let background = Color(red: 0.015, green: 0.035, blue: 0.075)
     private let panel = Color(red: 0.025, green: 0.075, blue: 0.145)
     private let elevatedPanel = Color(red: 0.035, green: 0.105, blue: 0.205)
@@ -35,6 +37,21 @@ struct VideosView: View {
                 }
         }
         .task { await load() }
+        .onAppear {
+            isVisible = true
+        }
+        .onDisappear {
+            isVisible = false
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active && isVisible {
+                Task {
+                    try? await Task.sleep(nanoseconds: 750_000_000)
+                    guard !Task.isCancelled else { return }
+                    await load()
+                }
+            }
+        }
     }
 
     @ViewBuilder

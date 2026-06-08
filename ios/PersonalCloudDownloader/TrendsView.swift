@@ -4,7 +4,9 @@ import SwiftUI
 import UIKit
 
 struct TrendsView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = TrendsViewModel()
+    @State private var isVisible = false
 
     private let background = Color(red: 0.015, green: 0.035, blue: 0.075)
     private let muted = Color(red: 0.62, green: 0.68, blue: 0.80)
@@ -37,6 +39,21 @@ struct TrendsView: View {
         }
         .refreshable {
             await viewModel.refresh()
+        }
+        .onAppear {
+            isVisible = true
+        }
+        .onDisappear {
+            isVisible = false
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active && isVisible {
+                Task {
+                    try? await Task.sleep(nanoseconds: 750_000_000)
+                    guard !Task.isCancelled else { return }
+                    await viewModel.refresh()
+                }
+            }
         }
     }
 

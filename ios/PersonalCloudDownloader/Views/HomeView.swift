@@ -46,7 +46,7 @@ struct HomeView: View {
             }
             .onChange(of: scenePhase) { phase in
                 if phase == .active {
-                    startRefreshLoop()
+                    startRefreshLoop(foregroundReconnect: dashboard.hasLoaded)
                 } else {
                     stopRefreshLoop()
                 }
@@ -508,10 +508,14 @@ struct HomeView: View {
     }
 
     private func startRefreshLoop() {
+        startRefreshLoop(foregroundReconnect: false)
+    }
+
+    private func startRefreshLoop(foregroundReconnect: Bool) {
         refreshTask?.cancel()
         refreshGeneration += 1
         refreshTask = Task {
-            await refreshDashboard()
+            await refreshDashboard(foregroundReconnect: foregroundReconnect)
 
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: refreshInterval)
@@ -528,16 +532,26 @@ struct HomeView: View {
     }
 
     private func refreshDashboard() async {
+        await refreshDashboard(foregroundReconnect: false)
+    }
+
+    private func refreshDashboard(foregroundReconnect: Bool) async {
         let generation = await MainActor.run {
             refreshGeneration += 1
             dashboard.isRefreshing = true
-            if !dashboard.hasLoaded {
+            dashboard.isReconnecting = foregroundReconnect
+            if !dashboard.hasLoaded || foregroundReconnect {
                 dashboard.serverStatus = .loading
             }
             return refreshGeneration
         }
 
-        async let health = fetchHealth()
+        if foregroundReconnect {
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard !Task.isCancelled else { return }
+        }
+
+        async let health = fetchHealth(foregroundReconnect: foregroundReconnect)
         async let torrents = fetchJSONArrayCount(path: "/api/torrents")
         async let completed = fetchJSONArrayCount(path: "/api/completed-files")
 
@@ -551,13 +565,36 @@ struct HomeView: View {
             completedFileCount: completedFileCount,
             lastUpdated: Date(),
             isRefreshing: false,
+            isReconnecting: false,
             hasLoaded: true
         )
 
         await MainActor.run {
             guard generation == refreshGeneration else { return }
+            dashboard.isReconnecting = false
             dashboard = nextState
         }
+    }
+
+    private func fetchHealth(foregroundReconnect: Bool) async -> Bool {
+        if foregroundReconnect {
+            return await fetchHealthWithRetries()
+        }
+        return await fetchHealth()
+    }
+
+    private func fetchHealthWithRetries() async -> Bool {
+        for attempt in 1...3 {
+            if await fetchHealth() {
+                return true
+            }
+            guard attempt < 3 else { break }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled {
+                return false
+            }
+        }
+        return false
     }
 
     private func fetchHealth() async -> Bool {
@@ -618,6 +655,7 @@ private struct HomeDashboardState {
     var completedFileCount: Int?
     var lastUpdated: Date?
     var isRefreshing = false
+    var isReconnecting = false
     var hasLoaded = false
 
     var torrentCountText: String {
@@ -645,6 +683,10 @@ private struct HomeDashboardState {
     }
 
     var headerSubtitle: String {
+        if isReconnecting {
+            return "Reconnecting to the private shelf"
+        }
+
         if isCheckingUnknownServer {
             return "Checking the private shelf"
         }
@@ -660,6 +702,9 @@ private struct HomeDashboardState {
     }
 
     var lastUpdatedText: String {
+        if isReconnecting {
+            return "Reconnecting"
+        }
         if isRefreshing {
             return "Refreshing"
         }
@@ -668,11 +713,14 @@ private struct HomeDashboardState {
     }
 
     var serverStatusText: String {
+        if isReconnecting {
+            return "Reconnecting"
+        }
         isCheckingUnknownServer ? "Checking" : serverStatus.label
     }
 
     var isCheckingUnknownServer: Bool {
-        isRefreshing && serverStatus != .online
+        (isRefreshing || isReconnecting) && serverStatus != .online
     }
 }
 

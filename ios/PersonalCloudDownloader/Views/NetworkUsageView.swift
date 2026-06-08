@@ -45,6 +45,8 @@ struct NetworkUsageView: View {
             .onChange(of: scenePhase) { phase in
                 if phase == .active && isVisible {
                     Task {
+                        try? await Task.sleep(nanoseconds: 750_000_000)
+                        guard !Task.isCancelled else { return }
                         await loadUsage()
                     }
                 }
