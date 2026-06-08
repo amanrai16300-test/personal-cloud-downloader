@@ -1,0 +1,9 @@
+# Install on the Oracle VM as:
+# sudo install -m 0644 scripts/cloudbox-app-backup.cron /etc/cron.d/cloudbox-app-backup
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/bin
+
+# Daily CloudBox app-only backup to OCI Object Storage. Video/download files are
+# excluded by scripts/backup_cloudbox_app.sh.
+30 3 * * * ubuntu cd /home/ubuntu/personal-cloud-downloader && CLOUDBOX_BACKUP_BUCKET=cloudbox-app-backups CLOUDBOX_BACKUP_PREFIX=daily CLOUDBOX_BACKUP_KEEP_LOCAL=false /usr/bin/env bash scripts/backup_cloudbox_app.sh >> /tmp/cloudbox-backup.log 2>&1
