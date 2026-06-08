@@ -716,7 +716,7 @@ private struct HomeDashboardState {
         if isReconnecting {
             return "Reconnecting"
         }
-        isCheckingUnknownServer ? "Checking" : serverStatus.label
+        return isCheckingUnknownServer ? "Checking" : serverStatus.label
     }
 
     var isCheckingUnknownServer: Bool {
