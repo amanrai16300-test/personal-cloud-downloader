@@ -95,8 +95,7 @@ struct MarkdownConverterView: View {
 
     private var markdownPreview: some View {
         ScrollView {
-            Text(markdown.isEmpty ? "Markdown preview will appear here." : markdown)
-                .font(.system(.body, design: .monospaced))
+            Text(previewText)
                 .foregroundStyle(markdown.isEmpty ? .secondary : .primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -108,6 +107,13 @@ struct MarkdownConverterView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(.secondary.opacity(0.2), lineWidth: 1)
         }
+    }
+
+    private var previewText: AttributedString {
+        if markdown.isEmpty {
+            return AttributedString("Markdown preview will appear here.")
+        }
+        return (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
     }
 
     private var actionBar: some View {
