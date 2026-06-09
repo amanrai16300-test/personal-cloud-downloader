@@ -7,6 +7,7 @@ struct MarkdownConverterView: View {
     @State private var selectedFile: PickedDocument?
     @State private var markdown = ""
     @State private var errorMessage: String?
+    @State private var emptyResultMessage: String?
     @State private var isConverting = false
     @State private var isPickerPresented = false
     @State private var isSharePresented = false
@@ -56,6 +57,13 @@ struct MarkdownConverterView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                if let emptyResultMessage {
+                    Label(emptyResultMessage, systemImage: "doc.text.magnifyingglass")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 markdownPreview
 
                 actionBar
@@ -66,6 +74,7 @@ struct MarkdownConverterView: View {
                 DocumentPicker { document in
                     selectedFile = document
                     errorMessage = nil
+                    emptyResultMessage = nil
                 }
             }
             .sheet(isPresented: $isSharePresented) {
@@ -103,20 +112,19 @@ struct MarkdownConverterView: View {
 
     private var actionBar: some View {
         HStack {
-            Button("Copy", systemImage: "doc.on.doc") {
-                UIPasteboard.general.string = markdown
-            }
-            .disabled(markdown.isEmpty)
+            if hasMarkdown {
+                Button("Copy", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = markdown
+                }
 
-            Button("Share", systemImage: "square.and.arrow.up") {
-                isSharePresented = true
-            }
-            .disabled(markdown.isEmpty)
+                Button("Share", systemImage: "square.and.arrow.up") {
+                    isSharePresented = true
+                }
 
-            Button("Save", systemImage: "square.and.arrow.down") {
-                isSavePresented = true
+                Button("Save", systemImage: "square.and.arrow.down") {
+                    isSavePresented = true
+                }
             }
-            .disabled(markdown.isEmpty)
 
             Spacer()
 
@@ -129,9 +137,14 @@ struct MarkdownConverterView: View {
                 selectedFile = nil
                 markdown = ""
                 errorMessage = nil
+                emptyResultMessage = nil
             }
         }
         .buttonStyle(.bordered)
+    }
+
+    private var hasMarkdown: Bool {
+        !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var outputFilename: String {
@@ -143,11 +156,15 @@ struct MarkdownConverterView: View {
         guard let selectedFile else { return }
         isConverting = true
         errorMessage = nil
+        emptyResultMessage = nil
         defer { isConverting = false }
 
         do {
             let response = try await MarkdownConverterAPI.convert(file: selectedFile)
             markdown = response.markdown
+            if !hasMarkdown {
+                emptyResultMessage = "Conversion finished, but no Markdown text was extracted from this file. This can happen with scanned PDFs or PDFs with broken text encoding."
+            }
         } catch let error as MarkdownConverterAPIError {
             errorMessage = error.friendlyMessage
         } catch {
