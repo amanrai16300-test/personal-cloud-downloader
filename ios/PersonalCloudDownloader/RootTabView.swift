@@ -127,6 +127,18 @@ private struct MoreView: View {
                             .buttonStyle(MorePressStyle())
 
                             NavigationLink {
+                                MarkdownConverterView()
+                            } label: {
+                                moreRow(
+                                    title: "Markdown Converter",
+                                    subtitle: "Convert documents to Markdown",
+                                    systemImage: "doc.plaintext",
+                                    tint: .cyan
+                                )
+                            }
+                            .buttonStyle(MorePressStyle())
+
+                            NavigationLink {
                                 SettingsView()
                             } label: {
                                 moreRow(
