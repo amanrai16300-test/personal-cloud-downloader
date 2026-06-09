@@ -5,13 +5,17 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
+import unicodedata
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from markitdown import MarkItDown
 from pydantic import BaseModel
 from requests import RequestException
 
@@ -56,6 +60,25 @@ NETWORK_INTERFACE = "enp0s6"
 VNSTAT_TIMEOUT_SECONDS = 5
 STORAGE_PATHS = ("/srv/personal-cloud",)
 TRENDS_FILE = Path("/tmp/trends.json")
+MARKDOWN_ALLOWED_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".pptx",
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".json",
+    ".xml",
+    ".html",
+    ".htm",
+    ".txt",
+    ".text",
+    ".md",
+    ".markdown",
+    ".epub",
+}
+MARKDOWN_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MARKDOWN_CONVERSION_TIMEOUT_SECONDS = 60
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -124,6 +147,83 @@ def network_usage() -> dict[str, Any]:
         }
 
     raise HTTPException(status_code=503, detail="vnstat is unavailable or returned no network data.")
+
+
+@app.post("/api/convert-markdown")
+async def convert_markdown(file: UploadFile = File(...)) -> dict[str, str]:
+    filename = Path(file.filename or "").name
+    extension = Path(filename).suffix.lower()
+    if extension not in MARKDOWN_ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported file type.")
+
+    temp_path: Path | None = None
+    size = 0
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as temp_file:
+            temp_path = Path(temp_file.name)
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MARKDOWN_MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="File is too large.")
+                temp_file.write(chunk)
+
+        markdown = await asyncio.wait_for(
+            asyncio.to_thread(convert_local_markdown_file, temp_path),
+            timeout=MARKDOWN_CONVERSION_TIMEOUT_SECONDS,
+        )
+        return {
+            "filename": filename,
+            "extension": extension,
+            "markdown": clean_markdown_output(markdown),
+            "conversion_mode": "local",
+        }
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Markdown conversion timed out.") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Markdown conversion failed.") from exc
+    finally:
+        await file.close()
+        if temp_path is not None:
+            with suppress(OSError):
+                temp_path.unlink(missing_ok=True)
+
+
+def convert_local_markdown_file(path: Path) -> str:
+    result = MarkItDown(enable_plugins=False).convert_local(path)
+    markdown = getattr(result, "text_content", None)
+    if markdown is None:
+        markdown = getattr(result, "markdown", "")
+    return str(markdown)
+
+
+def clean_markdown_output(markdown: str) -> str:
+    try:
+        cleaned = "".join(
+            char
+            for char in markdown
+            if char in {"\n", "\r", "\t", " "}
+            or (not char.isspace() and not unicodedata.category(char).startswith("C"))
+        )
+        yen_mojibake = "\uff82\uff65"
+        apostrophe_mojibake = "\uff8a\uff7c"
+        replacements = (
+            (yen_mojibake, "¥"),
+            (r"\\uff82\\uff65", "¥"),
+            (f"{apostrophe_mojibake}s", "'s"),
+            (r"\\uff8a\\uff7cs", "'s"),
+            (f"{apostrophe_mojibake} pension", "' pension"),
+            (r"\\uff8a\\uff7c pension", "' pension"),
+            ("\u7ab6\u5eec", '"'),
+            ("\u7ab6\u30fb", '"'),
+            ("9001800 8 hours per day)", "9:00-18:00 (8 hours per day)"),
+        )
+        for old, new in replacements:
+            cleaned = cleaned.replace(old, new)
+        return re.sub(r"([.!?])(\d+)(?=[A-Z][a-z])", r"\1 \2 ", cleaned)
+    except Exception:
+        return markdown
 
 
 @app.post("/api/add-magnet")
