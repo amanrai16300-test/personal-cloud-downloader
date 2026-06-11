@@ -90,7 +90,7 @@ struct MarkdownConverterView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("CloudBox Convert")
-                .font(.system(size: 30, weight: .800, design: .rounded))
+                .font(.system(size: 30, weight: .heavy, design: .rounded))
                 .foregroundStyle(Color(red: 0.92, green: 0.96, blue: 1.0))
 
             Text("File, photo, or webpage into clean Markdown.")
@@ -107,13 +107,13 @@ struct MarkdownConverterView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Source")
-                    .font(.headline.weight(.700))
+                    .font(.headline.weight(.bold))
                     .foregroundStyle(Color(red: 0.9, green: 0.95, blue: 1.0))
 
                 Spacer()
 
                 Text(sourceCaption)
-                    .font(.caption.weight(.700))
+                    .font(.caption.weight(.bold))
                     .foregroundStyle(Color(red: 0.54, green: 0.72, blue: 1.0))
                     .lineLimit(1)
             }
@@ -148,7 +148,7 @@ struct MarkdownConverterView: View {
 
             if let selectedFile {
                 Label(selectedFile.filename, systemImage: "paperclip")
-                    .font(.caption.weight(.600))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(Color(red: 0.72, green: 0.80, blue: 0.91))
                     .lineLimit(1)
             }
@@ -156,7 +156,7 @@ struct MarkdownConverterView: View {
             HStack(spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "link")
-                        .font(.callout.weight(.700))
+                        .font(.callout.weight(.bold))
                         .foregroundStyle(Color(red: 0.48, green: 0.68, blue: 1.0))
 
                     TextField("https://example.com/page", text: $urlText)
@@ -184,7 +184,7 @@ struct MarkdownConverterView: View {
                     Task { await convertURL() }
                 } label: {
                     Image(systemName: "arrow.right")
-                        .font(.headline.weight(.800))
+                        .font(.headline.weight(.heavy))
                         .frame(width: 42, height: 42)
                 }
                 .buttonStyle(ConverterIconButtonStyle(tint: Color(red: 0.20, green: 0.50, blue: 1.0)))
@@ -209,25 +209,25 @@ struct MarkdownConverterView: View {
         VStack(alignment: .leading, spacing: 8) {
             if isConverting {
                 Label("Converting...", systemImage: "sparkles")
-                    .font(.callout.weight(.700))
+                    .font(.callout.weight(.bold))
                     .foregroundStyle(Color(red: 0.68, green: 0.82, blue: 1.0))
             }
 
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout.weight(.650))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.38))
             }
 
             if let emptyResultMessage {
                 Label(emptyResultMessage, systemImage: "doc.text.magnifyingglass")
-                    .font(.callout.weight(.600))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(Color(red: 0.70, green: 0.76, blue: 0.86))
             }
 
             if let convertedURL {
                 Label(convertedURL, systemImage: "checkmark.seal.fill")
-                    .font(.caption.weight(.650))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(Color(red: 0.46, green: 0.72, blue: 1.0))
                     .lineLimit(2)
             }
@@ -239,14 +239,14 @@ struct MarkdownConverterView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Preview")
-                    .font(.headline.weight(.750))
+                    .font(.headline.weight(.bold))
                     .foregroundStyle(Color(red: 0.91, green: 0.96, blue: 1.0))
 
                 Spacer()
 
                 if hasMarkdown {
                     Text("\(markdown.count) chars")
-                        .font(.caption.monospacedDigit().weight(.700))
+                        .font(.caption.monospacedDigit().weight(.bold))
                         .foregroundStyle(Color(red: 0.56, green: 0.68, blue: 0.84))
                 }
             }
@@ -619,7 +619,7 @@ private struct ConverterPillStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.subheadline.weight(.750))
+            .font(.subheadline.weight(.bold))
             .foregroundStyle(Color(red: 0.92, green: 0.97, blue: 1.0))
             .labelStyle(.titleAndIcon)
             .padding(.horizontal, 12)
@@ -662,7 +662,7 @@ private struct ConverterActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.caption.weight(.800))
+            .font(.caption.weight(.heavy))
             .labelStyle(.titleAndIcon)
             .foregroundStyle(isDestructive ? Color(red: 1.0, green: 0.72, blue: 0.64) : Color(red: 0.86, green: 0.92, blue: 1.0))
             .padding(.horizontal, 12)
