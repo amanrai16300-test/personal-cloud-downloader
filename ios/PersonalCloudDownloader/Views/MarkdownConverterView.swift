@@ -1,4 +1,5 @@
 import Foundation
+import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
@@ -30,6 +31,12 @@ struct MarkdownConverterView: View {
                             isPickerPresented = true
                         } label: {
                             Label("Choose File", systemImage: "doc.badge.plus")
+                        }
+
+                        if #available(iOS 16.0, *) {
+                            PhotoPickerButton(isDisabled: isConverting) { result in
+                                await loadSelectedPhoto(result)
+                            }
                         }
 
                         Button {
@@ -177,12 +184,76 @@ struct MarkdownConverterView: View {
             errorMessage = "Could not reach CloudBox. Check Tailscale and try again."
         }
     }
+
+    private func loadSelectedPhoto(_ result: Result<Data, Error>) async {
+        errorMessage = nil
+        emptyResultMessage = nil
+
+        do {
+            let data = try result.get()
+            guard
+                let image = UIImage(data: data),
+                let uploadData = image.jpegData(compressionQuality: 0.9)
+            else {
+                throw MarkdownConverterAPIError.photoLoadFailed
+            }
+            selectedFile = PickedDocument(data: uploadData, filename: "photo.jpg", contentType: "image/jpeg")
+            markdown = ""
+        } catch let error as MarkdownConverterAPIError {
+            errorMessage = error.friendlyMessage
+        } catch {
+            errorMessage = MarkdownConverterAPIError.photoLoadFailed.friendlyMessage
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+private struct PhotoPickerButton: View {
+    let isDisabled: Bool
+    let onPick: (Result<Data, Error>) async -> Void
+    @State private var item: PhotosPickerItem?
+
+    var body: some View {
+        PhotosPicker(selection: $item, matching: .images) {
+            Label("Select Photo", systemImage: "photo")
+        }
+        .disabled(isDisabled)
+        .onChange(of: item) { newItem in
+            guard let newItem else { return }
+            Task {
+                do {
+                    guard let data = try await newItem.loadTransferable(type: Data.self) else {
+                        throw MarkdownConverterAPIError.photoLoadFailed
+                    }
+                    await onPick(.success(data))
+                } catch {
+                    await onPick(.failure(error))
+                }
+            }
+        }
+    }
 }
 
 private struct PickedDocument: Identifiable {
     let id = UUID()
-    let url: URL
+    let url: URL?
+    let data: Data?
     let filename: String
+    let contentType: String?
+
+    init(url: URL, filename: String) {
+        self.url = url
+        self.data = nil
+        self.filename = filename
+        self.contentType = nil
+    }
+
+    init(data: Data, filename: String, contentType: String) {
+        self.url = nil
+        self.data = data
+        self.filename = filename
+        self.contentType = contentType
+    }
 }
 
 private struct MarkdownConversionResponse: Decodable {
@@ -204,6 +275,7 @@ private enum MarkdownConverterAPIError: Error {
     case unsupportedFile
     case tooLarge
     case conversionFailed
+    case photoLoadFailed
 
     var friendlyMessage: String {
         switch self {
@@ -215,6 +287,8 @@ private enum MarkdownConverterAPIError: Error {
             return "This file is too large. Maximum size is 25 MB."
         case .conversionFailed:
             return "CloudBox could not convert this file."
+        case .photoLoadFailed:
+            return "Could not load this photo. Choose another photo and try again."
         }
     }
 }
@@ -253,12 +327,21 @@ private enum MarkdownConverterAPI {
     private static func multipartBody(for file: PickedDocument, boundary: String) throws -> Data {
         var body = Data()
         let filename = file.filename
-        let contentType = UTType(filenameExtension: file.url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let fileExtension = URL(fileURLWithPath: filename).pathExtension
+        let contentType = file.contentType ?? UTType(filenameExtension: fileExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let uploadData: Data
+        if let data = file.data {
+            uploadData = data
+        } else if let url = file.url {
+            uploadData = try Data(contentsOf: url)
+        } else {
+            throw MarkdownConverterAPIError.conversionFailed
+        }
 
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n")
         body.append("Content-Type: \(contentType)\r\n\r\n")
-        body.append(try Data(contentsOf: file.url))
+        body.append(uploadData)
         body.append("\r\n--\(boundary)--\r\n")
         return body
     }
