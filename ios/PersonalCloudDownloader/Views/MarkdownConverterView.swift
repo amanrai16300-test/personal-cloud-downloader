@@ -256,10 +256,10 @@ struct MarkdownConverterView: View {
                     .padding(16)
             }
             .frame(maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
-            .background(Color(red: 0.94, green: 0.97, blue: 1.0), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Color(red: 0.035, green: 0.055, blue: 0.085), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color(red: 0.58, green: 0.66, blue: 0.76).opacity(0.25), lineWidth: 1)
+                    .stroke(Color(red: 0.24, green: 0.34, blue: 0.48).opacity(0.78), lineWidth: 1)
             }
         }
         .padding(14)
@@ -449,7 +449,7 @@ private struct RenderedMarkdownPreview: View {
         VStack(alignment: .leading, spacing: 10) {
             if markdown.isEmpty {
                 Text("Markdown preview will appear here.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color(red: 0.58, green: 0.68, blue: 0.82))
             } else {
                 ForEach(renderedBlocks) { block in
                     blockView(block)
@@ -470,33 +470,41 @@ private struct RenderedMarkdownPreview: View {
         case .heading1:
             inlineText(block.text)
                 .font(.title2.bold())
+                .foregroundStyle(Color(red: 0.92, green: 0.97, blue: 1.0))
                 .padding(.bottom, 2)
         case .heading2:
             inlineText(block.text)
                 .font(.title3.bold())
+                .foregroundStyle(Color(red: 0.84, green: 0.92, blue: 1.0))
                 .padding(.top, 4)
         case .heading3:
             inlineText(block.text)
                 .font(.headline)
+                .foregroundStyle(Color(red: 0.76, green: 0.86, blue: 1.0))
         case .bullet:
             HStack(alignment: .top, spacing: 8) {
                 Text("•")
                     .font(.body.bold())
+                    .foregroundStyle(Color(red: 0.42, green: 0.66, blue: 1.0))
                 inlineText(block.text)
                     .font(.body)
+                    .foregroundStyle(Color(red: 0.82, green: 0.88, blue: 0.96))
                     .lineSpacing(3)
             }
         case .numbered:
             HStack(alignment: .top, spacing: 8) {
                 Text(block.marker ?? "")
                     .font(.body.monospacedDigit())
+                    .foregroundStyle(Color(red: 0.50, green: 0.70, blue: 1.0))
                 inlineText(block.text)
                     .font(.body)
+                    .foregroundStyle(Color(red: 0.82, green: 0.88, blue: 0.96))
                     .lineSpacing(3)
             }
         case .paragraph:
             inlineText(block.text)
                 .font(.body)
+                .foregroundStyle(Color(red: 0.82, green: 0.88, blue: 0.96))
                 .lineSpacing(4)
         }
     }
