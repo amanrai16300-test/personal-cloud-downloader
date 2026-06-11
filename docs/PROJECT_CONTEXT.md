@@ -173,12 +173,13 @@ ssh -i .\personal-cloud-downloader-key.pem ubuntu@100.125.15.118
 - Oracle A1 instance was successfully created.
 - Public IP: `138.2.31.123`
 - Private IP: `10.0.0.58`
-- Oracle Tailscale IP: `100.92.146.101`
+- Oracle Tailscale IP: `100.95.39.107`
+- Historical Oracle Tailscale IP: `100.92.146.101`
 - SSH user: `ubuntu`
 - Main private SSH through Tailscale:
 
 ```powershell
-ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.92.146.101
+ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
 ```
 
 ## 11. Oracle OCI CLI Retry Script Status
@@ -317,12 +318,13 @@ ls -la /srv/personal-cloud/downloads/complete
 - RAM: `4GB`
 - Public IP: `138.2.31.123`
 - Private IP: `10.0.0.58`
-- Oracle Tailscale IP: `100.92.146.101`
+- Oracle Tailscale IP: `100.95.39.107`
+- Historical Oracle Tailscale IP: `100.92.146.101`
 - SSH user: `ubuntu`
 - Main private SSH works through Tailscale:
 
 ```powershell
-ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.92.146.101
+ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
 ```
 
 ### Completed Oracle Setup
@@ -337,7 +339,7 @@ ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.9
 - qBittorrent Web UI works privately:
 
 ```text
-http://100.92.146.101:8080
+http://100.95.39.107:8080
 ```
 
 - qBittorrent password was changed from the temporary password.
@@ -353,7 +355,7 @@ Incomplete: /srv/personal-cloud/downloads/incomplete
 - Oracle Nginx file streaming works:
 
 ```text
-http://100.92.146.101:8090/files/
+http://100.95.39.107:8090/files/
 ```
 
 - UFW installed and enabled.
@@ -366,7 +368,7 @@ http://100.92.146.101:8090/files/
 - FastAPI backend was deployed on Oracle as a private systemd service:
 
 ```text
-http://100.92.146.101:8000
+http://100.95.39.107:8000
 ```
 
 - Oracle FastAPI backend end-to-end test passed.
@@ -420,25 +422,25 @@ http://100.92.146.101:8000
 - Oracle qBittorrent Web UI works privately through Tailscale:
 
 ```text
-http://100.92.146.101:8080
+http://100.95.39.107:8080
 ```
 
 - Oracle Nginx private file streaming works:
 
 ```text
-http://100.92.146.101:8090/files/
+http://100.95.39.107:8090/files/
 ```
 
 - Oracle FastAPI backend is live privately through Tailscale:
 
 ```text
-http://100.92.146.101:8000
+http://100.95.39.107:8000
 ```
 
 - Private frontend UI is live through Oracle Nginx:
 
 ```text
-http://100.92.146.101:8090/app/
+http://100.95.39.107:8090/app/
 ```
 
 - Downloads are stored under `/srv/personal-cloud/downloads`.
@@ -457,6 +459,16 @@ http://100.92.146.101:8090/app/
 - AWS was stopped to reduce cost.
 - Oracle migration backend testing is complete.
 - Simple Seedr-style UI MVP is live on Oracle.
+- File to Markdown works through `POST /api/convert-markdown`.
+- Image OCR works through the same Markdown Converter endpoint.
+- Files picker works for Markdown Converter uploads.
+- Photos picker works for Markdown Converter image OCR.
+- Rendered Markdown preview works in iOS.
+- Copy, Share, and Save `.md` use raw Markdown and work.
+- Empty-result handling works for blank/bad/scanned inputs.
+- Markdown Converter backend is deployed and tested on Oracle.
+- Remaining future improvement: URL-to-Markdown for job pages/web pages.
+- Remaining limitation: free OCR is not perfect and cannot fully organize complex webpage screenshots like ChatGPT or direct HTML parsing.
 
 ### 2026-06-03 CloudBox / Personal Cloud Downloader Progress Update
 
@@ -535,8 +547,8 @@ http://100.92.146.101:8090/app/
 - Keep local `backend/.env` pointed at Oracle values:
 
 ```env
-QB_URL=http://100.92.146.101:8080
-STREAM_BASE_URL=http://100.92.146.101:8090/files
+QB_URL=http://100.95.39.107:8080
+STREAM_BASE_URL=http://100.95.39.107:8090/files
 ```
 
 - Keep future backend access private through Tailscale, including any service on port `8000`.
@@ -606,9 +618,9 @@ Full docs:
 - Tabs exist for Home, Downloader, Videos, qBittorrent, Files, and Settings.
 - Reusable WKWebView support was added using `WebView` and `WebScreen`.
 - ATS HTTP loading support was added for private Tailscale URLs.
-- Downloader tab loads `http://100.92.146.101:8090/app/`.
-- qBittorrent tab loads `http://100.92.146.101:8080`.
-- Files tab loads `http://100.92.146.101:8090/files/`.
+- Downloader tab loads `http://100.95.39.107:8090/app/`.
+- qBittorrent tab loads `http://100.95.39.107:8080`.
+- Files tab loads `http://100.95.39.107:8090/files/`.
 - Home, Videos, and Settings are still placeholders.
 - No backend, frontend web app, Oracle server, Nginx, qBittorrent, or Tailscale behavior was changed.
 - Existing browser web downloader remains the main working app.
@@ -636,7 +648,7 @@ Full docs:
 ## iOS App Phase 2 Videos Library Status (native milestone)
 
 - Phase 2 native Videos library was added.
-- Videos tab fetches from `http://100.92.146.101:8000/api/completed-files`.
+- Videos tab fetches from `http://100.95.39.107:8000/api/completed-files`.
 - A `CompletedFile` model matches the real backend JSON keys:
   - `name`
   - `path`
@@ -661,7 +673,7 @@ Full docs:
 - `VideosView` now navigates to `PlayerView` using `NavigationLink` / `navigationDestination`.
 - `CompletedFile` now supports `Hashable` and `streamURL` resolution.
 - `backend/main.py` was read-only only to confirm `CompletedFile.url` is generated as a stream link; not modified.
-- Deployed `CompletedFile.url` is an absolute, percent-encoded Nginx `/files/` URL: `http://100.92.146.101:8090/files/...`.
+- Deployed `CompletedFile.url` is an absolute, percent-encoded Nginx `/files/` URL: `http://100.95.39.107:8090/files/...`.
 - AVPlayer / AVKit playback was added for `mp4`, `mov`, `m4v`.
 - MobileVLCKit dependency setup was added with CocoaPods:
   - `ios/Podfile`
@@ -1061,7 +1073,7 @@ Full docs:
 - qBittorrent WebView behavior and URL remain unchanged:
 
 ```text
-http://100.92.146.101:8080
+http://100.95.39.107:8080
 ```
 
 - Backend endpoint added:
@@ -1120,7 +1132,7 @@ sudo systemctl restart personal-downloader-api.service
 - qBittorrent URL remains:
 
 ```text
-http://100.92.146.101:8080
+http://100.95.39.107:8080
 ```
 
 - iPhone Safari can open qBittorrent successfully, confirming server/Tailscale is working.
@@ -1400,6 +1412,10 @@ http://100.92.146.101:8080
 
 - Current Trends branch:
   - `feature/tmdb-trends`
+- File-to-Markdown branch:
+  - `feature/markdown-converter-v1`
+- Latest Markdown/image OCR branch:
+  - `feature/markdown-image-ocr-v1`
 - `feature/ios-trends` was not created/pushed as a remote branch and should not be used for deployment.
 - Use `feature/tmdb-trends` for:
   - Trends script deploy
@@ -1407,7 +1423,7 @@ http://100.92.146.101:8080
 - Oracle project folder:
   - `/home/ubuntu/personal-cloud-downloader`
 - This Oracle folder is not a Git repository.
-- For Oracle deploys, use clone-copy method from `/tmp`.
+- For Oracle deploys, use manual copy/deploy or clone-copy from `/tmp`; do not run `git pull` inside the Oracle app folder.
 - Script-only deploy requires:
   - copy `scripts/fetch_trends.py`
   - run `python3 -m py_compile scripts/fetch_trends.py`
@@ -1416,15 +1432,17 @@ http://100.92.146.101:8080
   - no IPA unless iOS files changed
 - Backend deploy requires:
   - copy `backend/main.py`
-  - restart `personal-downloader-api.service`
+  - run `sudo systemctl restart personal-downloader-api.service`
+  - no new IPA unless iOS files changed
 - Web frontend deploy requires:
   - copy `frontend/app.js` to `/home/ubuntu/personal-cloud-downloader/backend/app.js`
 - iOS native changes require:
   - manual GitHub Actions IPA build
   - install with Sideloadly
+  - no Oracle deploy unless backend/web files changed
 - Manual IPA build path:
   - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
-  - branch: usually `feature/tmdb-trends` for current Trends work
+  - branch should match the current feature being tested
 
 ## Oracle CloudBox Storage Migration Completed Status
 
@@ -1458,6 +1476,11 @@ http://100.92.146.101:8080
 - Web app: `http://100.95.39.107:8090/app/`
 - qBittorrent: `http://100.95.39.107:8080`
 - Files: `http://100.95.39.107:8090/files/`
+- SSH:
+
+```powershell
+ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
+```
 
 ### Current Firewall and Services
 
@@ -1545,6 +1568,116 @@ http://100.92.146.101:8080
 - Network page now shows the 100GB data disk, about 97.9 GiB total, instead of the 50GB boot disk.
 - Network traffic calculation was not changed.
 
+## CloudBox Markdown Converter Status
+
+- File converter branch: `feature/markdown-converter-v1`.
+- Image OCR branch: `feature/markdown-image-ocr-v1`.
+- Backend endpoint: `POST /api/convert-markdown`.
+- Request format: `multipart/form-data` with field name `file`.
+- Response fields:
+  - `filename`
+  - `extension`
+  - `markdown`
+  - `conversion_mode`
+- Upload limit: 25 MB.
+- Uploads use temp files only.
+- No permanent uploaded file storage is created.
+- No automatic Markdown storage is created.
+- Document content, image content, and OCR text are not logged.
+- Backend was deployed to Oracle and tested.
+- Windows-to-Oracle curl test passed.
+- Oracle local curl test passed.
+- Unsupported file rejection works.
+- Supported document/text formats:
+  - `.pdf`
+  - `.docx`
+  - `.pptx`
+  - `.xlsx`
+  - `.xls`
+  - `.csv`
+  - `.json`
+  - `.xml`
+  - `.html`
+  - `.htm`
+  - `.txt`
+  - `.text`
+  - `.md`
+  - `.markdown`
+  - `.epub`
+- MarkItDown dependency is installed on Oracle.
+- `python-multipart` is installed.
+
+### iOS Markdown Converter
+
+- iOS screen: `MarkdownConverterView.swift`.
+- More tab entry was added.
+- Uses the existing CloudBox backend base URL pattern.
+- Supports file picker from the Files app.
+- Shows rendered Markdown preview.
+- Uses a custom visual Markdown renderer for headings, bullets, numbered rows, paragraphs, and readable links.
+- Copy, Share, and Save use raw Markdown.
+- Save as `.md` works.
+- Clear and Retry work.
+- Empty-result message exists for scanned, bad, or blank files.
+- Problem PDFs with broken text encoding may return empty or messy text; this is accepted for V1.
+
+### Markdown Converter Image OCR
+
+- Image upload support was added to the same endpoint: `POST /api/convert-markdown`.
+- Supported image formats:
+  - `.jpg`
+  - `.jpeg`
+  - `.png`
+  - `.webp`
+- iOS supports `Select Photo` through `PhotosPicker`.
+- iOS still supports the Files picker.
+- Backend uses free local Tesseract OCR, not paid AI.
+- No OpenAI, Azure, LLM, or external API is used for OCR.
+- Oracle system packages installed:
+  - `tesseract-ocr`
+  - `tesseract-ocr-eng`
+  - `tesseract-ocr-jpn`
+- Python dependencies added:
+  - `pytesseract`
+  - `Pillow`
+- OCR was tested on Oracle with a generated image.
+- English OCR test returned clean text after larger-font test.
+- Japanese OCR language data is installed.
+- OCR image preprocessing was added:
+  - EXIF transpose
+  - RGB/grayscale handling
+  - white alpha background
+  - upscaling small images
+  - autocontrast
+  - contrast/sharpness adjustment
+- Tesseract config was improved:
+  - `--oem 3 --psm 6`
+  - preserve interword spaces
+  - use `eng+jpn` when available
+- OCR output cleanup/organization was added:
+  - trims spaces
+  - collapses repeated blanks
+  - joins safe broken lines
+  - preserves bullets, numbers, prices, dates, times, URLs, phone-like lines, and Japanese text
+  - adds Markdown title/section formatting when safe
+  - groups paragraphs
+  - removes only obvious OCR garbage lines
+- Free OCR quality is improved but not perfect.
+- For full webpage screenshots or job pages, URL-to-Markdown is recommended next because screenshot OCR is weak for tiny/tall pages.
+
+### Current Markdown Converter Final Status
+
+- File to Markdown works.
+- Image OCR works.
+- Files picker works.
+- Photos picker works.
+- Rendered Markdown preview works.
+- Copy, Share, and Save `.md` work.
+- Empty-result handling works.
+- Oracle backend is deployed and tested.
+- Remaining future improvement: URL-to-Markdown for job pages/web pages.
+- Remaining limitation: free OCR is not perfect and cannot fully organize complex webpage screenshots like ChatGPT or direct HTML parsing.
+
 ### Oracle Budget Status
 
 - `personal-cloud-budget` is active.
@@ -1561,6 +1694,8 @@ http://100.92.146.101:8080
 ## Deployment Notes
 
 - Current verified Oracle layout:
+  - Oracle project folder: `/home/ubuntu/personal-cloud-downloader`
+  - Oracle project folder is not a Git repository
   - local backend file: `backend/main.py`
   - live Oracle backend file: `/home/ubuntu/personal-cloud-downloader/backend/main.py`
   - local web frontend file: `frontend/app.js`
@@ -1569,6 +1704,7 @@ http://100.92.146.101:8080
   - live Oracle Trends script: `/home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py`
   - generated Trends data: `/tmp/trends.json`
   - TMDB env file: `/home/ubuntu/.config/cloudbox/tmdb.env`
+- Use manual copy/deploy for Oracle changes; do not run `git pull` inside `/home/ubuntu/personal-cloud-downloader`.
 - Backend changes require deploying `backend/main.py` to Oracle and restarting:
 
 ```bash
@@ -1578,6 +1714,9 @@ sudo systemctl restart personal-downloader-api.service
 - Web frontend changes require copying `frontend/app.js` to `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
 - Trends script-only changes require copying `scripts/fetch_trends.py`, running `python3 -m py_compile scripts/fetch_trends.py`, and running the script with the TMDB env.
 - iOS UI/model/WebView changes require new IPA build/install.
+- Backend-only changes do not require a new IPA.
+- iOS-only changes require a new IPA but no Oracle deploy.
 - GitHub Actions IPA workflow is manual-only now, so backend/frontend/docs pushes do not automatically create IPA builds.
 - Manual IPA build path:
   - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
+  - branch should match the current feature being tested
