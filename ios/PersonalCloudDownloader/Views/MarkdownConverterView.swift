@@ -16,104 +16,54 @@ struct MarkdownConverterView: View {
     @State private var isPickerPresented = false
     @State private var isSharePresented = false
     @State private var isSavePresented = false
+    @FocusState private var isURLFocused: Bool
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Selected File")
-                        .font(.headline)
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.035, green: 0.055, blue: 0.09),
+                        Color(red: 0.06, green: 0.085, blue: 0.13),
+                        Color(red: 0.025, green: 0.035, blue: 0.055),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+                .onTapGesture {
+                    dismissKeyboard()
+                }
 
-                    Text(selectedFile?.filename ?? "No file selected")
-                        .font(.callout)
-                        .foregroundStyle(selectedFile == nil ? .secondary : .primary)
-                        .lineLimit(2)
-
-                    HStack {
-                        Button {
-                            isPickerPresented = true
-                        } label: {
-                            Label("Choose File", systemImage: "doc.badge.plus")
+                VStack(spacing: 12) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            header
+                            sourcePanel
+                            statusLine
+                            markdownPreview
                         }
-
-                        if #available(iOS 16.0, *) {
-                            PhotoPickerButton(isDisabled: isConverting) { result in
-                                await loadSelectedPhoto(result)
-                            }
-                        }
-
-                        Button {
-                            Task { await convertSelectedFile() }
-                        } label: {
-                            Label("Convert", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        .disabled(selectedFile == nil || isConverting)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 8)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .scrollDismissesKeyboard(.interactively)
+
+                    actionBar
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Paste URL")
-                        .font(.headline)
-
-                    TextField("https://example.com/page", text: $urlText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .textContentType(.URL)
-                        .submitLabel(.go)
-                        .onSubmit {
-                            Task { await convertURL() }
-                        }
-
-                    Button {
-                        Task { await convertURL() }
-                    } label: {
-                        Label("Convert URL", systemImage: "link")
-                    }
-                    .disabled(trimmedURL.isEmpty || isConverting)
-                    .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                if isConverting {
-                    ProgressView("Converting...")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let emptyResultMessage {
-                    Label(emptyResultMessage, systemImage: "doc.text.magnifyingglass")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let convertedURL {
-                    Text("Converted: \(convertedURL)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                markdownPreview
-
-                actionBar
             }
-            .padding()
             .navigationTitle("Markdown Converter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        dismissKeyboard()
+                    }
+                }
+            }
             .sheet(isPresented: $isPickerPresented) {
                 DocumentPicker { document in
                     selectedFile = document
@@ -137,53 +87,227 @@ struct MarkdownConverterView: View {
         }
     }
 
-    private var markdownPreview: some View {
-        ScrollView {
-            RenderedMarkdownPreview(markdown: markdown)
-                .padding()
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("CloudBox Convert")
+                .font(.system(size: 30, weight: .800, design: .rounded))
+                .foregroundStyle(Color(red: 0.92, green: 0.96, blue: 1.0))
+
+            Text("File, photo, or webpage into clean Markdown.")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color(red: 0.62, green: 0.70, blue: 0.82))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onTapGesture {
+            dismissKeyboard()
+        }
+    }
+
+    private var sourcePanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Source")
+                    .font(.headline.weight(.700))
+                    .foregroundStyle(Color(red: 0.9, green: 0.95, blue: 1.0))
+
+                Spacer()
+
+                Text(sourceCaption)
+                    .font(.caption.weight(.700))
+                    .foregroundStyle(Color(red: 0.54, green: 0.72, blue: 1.0))
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    dismissKeyboard()
+                    isPickerPresented = true
+                } label: {
+                    Label("File", systemImage: "doc.badge.plus")
+                }
+                .buttonStyle(ConverterPillStyle(tint: Color(red: 0.18, green: 0.47, blue: 1.0), isProminent: true))
+
+                if #available(iOS 16.0, *) {
+                    PhotoPickerButton(isDisabled: isConverting) { result in
+                        await loadSelectedPhoto(result)
+                    }
+                    .buttonStyle(ConverterPillStyle(tint: Color(red: 0.34, green: 0.62, blue: 1.0), isProminent: false))
+                }
+
+                Button {
+                    dismissKeyboard()
+                    Task { await convertSelectedFile() }
+                } label: {
+                    Label("Convert", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(ConverterPillStyle(tint: Color(red: 0.24, green: 0.74, blue: 0.94), isProminent: selectedFile != nil))
+                .disabled(selectedFile == nil || isConverting)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.86)
+
+            if let selectedFile {
+                Label(selectedFile.filename, systemImage: "paperclip")
+                    .font(.caption.weight(.600))
+                    .foregroundStyle(Color(red: 0.72, green: 0.80, blue: 0.91))
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "link")
+                        .font(.callout.weight(.700))
+                        .foregroundStyle(Color(red: 0.48, green: 0.68, blue: 1.0))
+
+                    TextField("https://example.com/page", text: $urlText)
+                        .focused($isURLFocused)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .submitLabel(.go)
+                        .foregroundStyle(Color(red: 0.93, green: 0.97, blue: 1.0))
+                        .tint(Color(red: 0.40, green: 0.64, blue: 1.0))
+                        .onSubmit {
+                            Task { await convertURL() }
+                        }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 46)
+                .background(Color(red: 0.09, green: 0.13, blue: 0.19), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(isURLFocused ? Color(red: 0.33, green: 0.58, blue: 1.0) : Color(red: 0.25, green: 0.32, blue: 0.42), lineWidth: 1)
+                }
+
+                Button {
+                    Task { await convertURL() }
+                } label: {
+                    Image(systemName: "arrow.right")
+                        .font(.headline.weight(.800))
+                        .frame(width: 42, height: 42)
+                }
+                .buttonStyle(ConverterIconButtonStyle(tint: Color(red: 0.20, green: 0.50, blue: 1.0)))
+                .disabled(trimmedURL.isEmpty || isConverting)
+                .accessibilityLabel("Convert URL")
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color(red: 0.075, green: 0.105, blue: 0.155).opacity(0.96))
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(.secondary.opacity(0.2), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color(red: 0.26, green: 0.34, blue: 0.46).opacity(0.75), lineWidth: 1)
+        }
+        .shadow(color: Color(red: 0.01, green: 0.02, blue: 0.04).opacity(0.34), radius: 18, y: 10)
+    }
+
+    @ViewBuilder
+    private var statusLine: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isConverting {
+                Label("Converting...", systemImage: "sparkles")
+                    .font(.callout.weight(.700))
+                    .foregroundStyle(Color(red: 0.68, green: 0.82, blue: 1.0))
+            }
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout.weight(.650))
+                    .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.38))
+            }
+
+            if let emptyResultMessage {
+                Label(emptyResultMessage, systemImage: "doc.text.magnifyingglass")
+                    .font(.callout.weight(.600))
+                    .foregroundStyle(Color(red: 0.70, green: 0.76, blue: 0.86))
+            }
+
+            if let convertedURL {
+                Label(convertedURL, systemImage: "checkmark.seal.fill")
+                    .font(.caption.weight(.650))
+                    .foregroundStyle(Color(red: 0.46, green: 0.72, blue: 1.0))
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var markdownPreview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Preview")
+                    .font(.headline.weight(.750))
+                    .foregroundStyle(Color(red: 0.91, green: 0.96, blue: 1.0))
+
+                Spacer()
+
+                if hasMarkdown {
+                    Text("\(markdown.count) chars")
+                        .font(.caption.monospacedDigit().weight(.700))
+                        .foregroundStyle(Color(red: 0.56, green: 0.68, blue: 0.84))
+                }
+            }
+
+            ScrollView {
+                RenderedMarkdownPreview(markdown: markdown)
+                    .padding(16)
+            }
+            .frame(maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
+            .background(Color(red: 0.94, green: 0.97, blue: 1.0), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color(red: 0.58, green: 0.66, blue: 0.76).opacity(0.25), lineWidth: 1)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(red: 0.065, green: 0.09, blue: 0.135), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .onTapGesture {
+            dismissKeyboard()
         }
     }
 
     private var actionBar: some View {
-        HStack {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
             if hasMarkdown {
                 Button("Copy", systemImage: "doc.on.doc") {
                     UIPasteboard.general.string = markdown
                 }
+                .buttonStyle(ConverterActionButtonStyle())
 
                 Button("Share", systemImage: "square.and.arrow.up") {
                     isSharePresented = true
                 }
+                .buttonStyle(ConverterActionButtonStyle())
 
                 Button("Save", systemImage: "square.and.arrow.down") {
                     isSavePresented = true
                 }
+                .buttonStyle(ConverterActionButtonStyle())
             }
-
-            Spacer()
 
             Button("Retry", systemImage: "arrow.clockwise") {
                 Task { await retryLastConversion() }
             }
             .disabled((lastConversion == nil && selectedFile == nil) || isConverting)
+            .buttonStyle(ConverterActionButtonStyle())
 
             Button("Clear", systemImage: "xmark.circle") {
-                selectedFile = nil
-                urlText = ""
-                convertedURL = nil
-                lastConversion = nil
-                markdown = ""
-                errorMessage = nil
-                emptyResultMessage = nil
+                clearAll()
             }
+            .buttonStyle(ConverterActionButtonStyle(isDestructive: true))
         }
-        .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(Color(red: 0.055, green: 0.075, blue: 0.11).opacity(0.98), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onTapGesture {
+            dismissKeyboard()
+        }
     }
 
     private var hasMarkdown: Bool {
@@ -194,9 +318,41 @@ struct MarkdownConverterView: View {
         urlText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var sourceCaption: String {
+        if isConverting {
+            return "Working"
+        }
+        if convertedURL != nil {
+            return "URL converted"
+        }
+        if selectedFile != nil {
+            return "File ready"
+        }
+        if !trimmedURL.isEmpty {
+            return "URL ready"
+        }
+        return "Choose one"
+    }
+
     private var outputFilename: String {
         let stem = selectedFile.map { URL(fileURLWithPath: $0.filename).deletingPathExtension().lastPathComponent } ?? URL(string: convertedURL ?? "")?.host
         return (stem?.isEmpty == false ? stem! : "converted") + ".md"
+    }
+
+    private func clearAll() {
+        dismissKeyboard()
+        selectedFile = nil
+        urlText = ""
+        convertedURL = nil
+        lastConversion = nil
+        markdown = ""
+        errorMessage = nil
+        emptyResultMessage = nil
+    }
+
+    private func dismissKeyboard() {
+        isURLFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     private func convertSelectedFile() async {
@@ -228,6 +384,7 @@ struct MarkdownConverterView: View {
             return
         }
 
+        dismissKeyboard()
         lastConversion = .url
         isConverting = true
         errorMessage = nil
@@ -436,7 +593,7 @@ private struct PhotoPickerButton: View {
 
     var body: some View {
         PhotosPicker(selection: $item, matching: .images) {
-            Label("Select Photo", systemImage: "photo")
+            Label("Photo", systemImage: "photo")
         }
         .disabled(isDisabled)
         .onChange(of: item) { newItem in
@@ -452,6 +609,72 @@ private struct PhotoPickerButton: View {
                 }
             }
         }
+    }
+}
+
+private struct ConverterPillStyle: ButtonStyle {
+    let tint: Color
+    var isProminent = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.750))
+            .foregroundStyle(Color(red: 0.92, green: 0.97, blue: 1.0))
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 12)
+            .frame(height: 42)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isProminent ? tint.opacity(0.95) : Color(red: 0.105, green: 0.145, blue: 0.205))
+            )
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(tint.opacity(isProminent ? 0.15 : 0.55), lineWidth: 1)
+            }
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(!isEnabled ? 0.42 : (configuration.isPressed ? 0.82 : 1))
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+private struct ConverterIconButtonStyle: ButtonStyle {
+    let tint: Color
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Color(red: 0.95, green: 0.98, blue: 1.0))
+            .background(tint, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(Color(red: 0.70, green: 0.82, blue: 1.0).opacity(0.28), lineWidth: 1)
+            }
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .opacity(!isEnabled ? 0.42 : (configuration.isPressed ? 0.82 : 1))
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+private struct ConverterActionButtonStyle: ButtonStyle {
+    var isDestructive = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption.weight(.800))
+            .labelStyle(.titleAndIcon)
+            .foregroundStyle(isDestructive ? Color(red: 1.0, green: 0.72, blue: 0.64) : Color(red: 0.86, green: 0.92, blue: 1.0))
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+            .background(Color(red: 0.10, green: 0.135, blue: 0.19), in: Capsule(style: .continuous))
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(isDestructive ? Color(red: 1.0, green: 0.45, blue: 0.35).opacity(0.35) : Color(red: 0.36, green: 0.48, blue: 0.64).opacity(0.55), lineWidth: 1)
+            }
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(!isEnabled ? 0.42 : (configuration.isPressed ? 0.78 : 1))
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
