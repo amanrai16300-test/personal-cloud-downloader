@@ -77,6 +77,8 @@ MARKDOWN_ALLOWED_EXTENSIONS = {
     ".markdown",
     ".epub",
 }
+MARKDOWN_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+MARKDOWN_ALLOWED_EXTENSIONS = MARKDOWN_ALLOWED_EXTENSIONS | MARKDOWN_IMAGE_EXTENSIONS
 MARKDOWN_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MARKDOWN_CONVERSION_TIMEOUT_SECONDS = 60
 
@@ -167,8 +169,9 @@ async def convert_markdown(file: UploadFile = File(...)) -> dict[str, str]:
                     raise HTTPException(status_code=413, detail="File is too large.")
                 temp_file.write(chunk)
 
+        converter = convert_local_image_to_markdown if extension in MARKDOWN_IMAGE_EXTENSIONS else convert_local_markdown_file
         markdown = await asyncio.wait_for(
-            asyncio.to_thread(convert_local_markdown_file, temp_path),
+            asyncio.to_thread(converter, temp_path),
             timeout=MARKDOWN_CONVERSION_TIMEOUT_SECONDS,
         )
         return {
@@ -196,6 +199,21 @@ def convert_local_markdown_file(path: Path) -> str:
     if markdown is None:
         markdown = getattr(result, "markdown", "")
     return str(markdown)
+
+
+def convert_local_image_to_markdown(path: Path) -> str:
+    if shutil.which("tesseract") is None:
+        raise HTTPException(status_code=503, detail="OCR engine is not installed on this server.")
+
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="OCR support is not installed on this server.") from exc
+
+    with Image.open(path) as image:
+        text = pytesseract.image_to_string(image)
+    return text or ""
 
 
 def clean_markdown_output(markdown: str) -> str:

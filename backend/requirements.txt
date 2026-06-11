@@ -5,3 +5,5 @@ python-dotenv
 pydantic
 python-multipart
 markitdown[pdf,docx,pptx,xlsx,xls]
+pytesseract
+Pillow
