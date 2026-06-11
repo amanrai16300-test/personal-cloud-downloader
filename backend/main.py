@@ -207,13 +207,209 @@ def convert_local_image_to_markdown(path: Path) -> str:
 
     try:
         import pytesseract
-        from PIL import Image
+        from PIL import Image, ImageEnhance, ImageOps
     except ImportError as exc:
         raise HTTPException(status_code=503, detail="OCR support is not installed on this server.") from exc
 
-    with Image.open(path) as image:
-        text = pytesseract.image_to_string(image)
-    return text or ""
+    processed_path: Path | None = None
+    try:
+        with Image.open(path) as image:
+            processed_image = preprocess_ocr_image(image, Image, ImageEnhance, ImageOps)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
+                processed_path = Path(temp_file.name)
+            processed_image.save(processed_path, format="PNG", optimize=True)
+
+        languages = set(pytesseract.get_languages(config=""))
+        lang = "+".join(language for language in ("eng", "jpn") if language in languages) or None
+        config = "--oem 3 --psm 6 -c preserve_interword_spaces=1"
+        text = pytesseract.image_to_string(str(processed_path), lang=lang, config=config)
+        return clean_ocr_markdown_output(text)
+    finally:
+        if processed_path is not None:
+            with suppress(OSError):
+                processed_path.unlink(missing_ok=True)
+
+
+def preprocess_ocr_image(image: Any, image_module: Any, image_enhance: Any, image_ops: Any) -> Any:
+    image = image_ops.exif_transpose(image)
+    if image.mode in {"RGBA", "LA"}:
+        background = image_module.new("RGB", image.size, "white")
+        background.paste(image, mask=image.getchannel("A"))
+        image = background
+    elif image.mode != "RGB":
+        image = image.convert("RGB")
+
+    max_dimension = max(image.size)
+    if max_dimension < 1600:
+        scale = 1600 / max_dimension
+        size = (int(image.width * scale), int(image.height * scale))
+        image = image.resize(size, image_module.Resampling.LANCZOS)
+
+    image = image.convert("L")
+    image = image_ops.autocontrast(image)
+    image = image_enhance.Contrast(image).enhance(1.35)
+    return image_enhance.Sharpness(image).enhance(1.25)
+
+
+def clean_ocr_markdown_output(markdown: str) -> str:
+    raw_lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines: list[str] = []
+    for raw_line in raw_lines:
+        line = re.sub(r"[ \t]+", " ", raw_line.strip())
+        if line and not is_ocr_garbage_line(line):
+            lines.append(line)
+        elif lines and lines[-1] != "":
+            lines.append("")
+
+    if not any(lines):
+        return ""
+
+    blocks: list[str] = []
+    paragraph: list[str] = []
+
+    def flush_paragraph() -> None:
+        if not paragraph:
+            return
+        blocks.append(join_ocr_paragraph(paragraph))
+        paragraph.clear()
+
+    seen_content = False
+    content_lines = [line for line in lines if line]
+    first_content = content_lines[0] if content_lines else ""
+
+    for index, line in enumerate(lines):
+        if not line:
+            flush_paragraph()
+            continue
+
+        next_line = next((candidate for candidate in lines[index + 1 :] if candidate), "")
+        bullet_text = ocr_bullet_text(line)
+        if bullet_text is not None:
+            flush_paragraph()
+            blocks.append(f"- {bullet_text}")
+            seen_content = True
+            continue
+
+        if is_ocr_numbered_line(line):
+            flush_paragraph()
+            blocks.append(line)
+            seen_content = True
+            continue
+
+        if not seen_content and line == first_content and is_ocr_title_line(line, next_line):
+            flush_paragraph()
+            blocks.append(f"# {line.rstrip(':')}")
+            seen_content = True
+            continue
+
+        if is_ocr_section_line(line, next_line):
+            flush_paragraph()
+            blocks.append(f"## {line.rstrip(':')}")
+            seen_content = True
+            continue
+
+        paragraph.append(line)
+        seen_content = True
+
+    flush_paragraph()
+    return re.sub(r"\n{3,}", "\n\n", "\n\n".join(block for block in blocks if block).strip())
+
+
+def is_ocr_garbage_line(line: str) -> bool:
+    if re.search(r"[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]", line):
+        return False
+    if re.search(r"[¥$€£:/@.-]", line):
+        return False
+    return len(line) <= 6 or bool(re.fullmatch(r"([^\w\s])\1{2,}", line))
+
+
+def ocr_bullet_text(line: str) -> str | None:
+    match = re.match(r"^([*+\-•‣・●○▪▫]|[oO])\s+(.+)$", line)
+    if not match:
+        return None
+    text = match.group(2).strip()
+    return text or None
+
+
+def is_ocr_numbered_line(line: str) -> bool:
+    return bool(re.match(r"^\d{1,3}[\.)]\s+\S+", line))
+
+
+def is_ocr_title_line(line: str, next_line: str) -> bool:
+    if not next_line or is_ocr_data_line(line) or ocr_bullet_text(line) is not None:
+        return False
+    if len(line) > 80 or re.search(r"[.!?。！？,，、;；]$", line):
+        return False
+    if has_cjk(line):
+        return len(line) <= 40
+    words = re.findall(r"[A-Za-z]+", line)
+    if not words or len(words) > 12:
+        return False
+    uppercase_words = sum(1 for word in words if word.isupper())
+    title_words = sum(1 for word in words if word[:1].isupper())
+    return uppercase_words == len(words) or title_words >= max(1, len(words) - 1)
+
+
+def is_ocr_section_line(line: str, next_line: str) -> bool:
+    if not next_line or is_ocr_data_line(line) or ocr_bullet_text(line) is not None or is_ocr_numbered_line(line):
+        return False
+    if len(line) > 56 or re.search(r"[.!?。！？,，、;；]$", line):
+        return False
+    if line.endswith(":"):
+        return True
+    if has_cjk(line):
+        return len(line) <= 24
+    words = re.findall(r"[A-Za-z]+", line)
+    if not words or len(words) > 8:
+        return False
+    uppercase_words = sum(1 for word in words if word.isupper())
+    title_words = sum(1 for word in words if word[:1].isupper())
+    return uppercase_words == len(words) or title_words >= max(1, len(words) - 1)
+
+
+def is_ocr_data_line(line: str) -> bool:
+    return bool(
+        re.search(r"https?://|www\.|[\w.+-]+@[\w.-]+|[@¥$€£]|\d{1,2}[:/.-]\d{1,2}|\d{2,}", line)
+    )
+
+
+def join_ocr_paragraph(lines: list[str]) -> str:
+    joined: list[str] = []
+    for line in lines:
+        if joined and should_join_ocr_lines(joined[-1], line):
+            joined[-1] = join_ocr_lines(joined[-1], line)
+        else:
+            joined.append(line)
+    return "\n".join(joined)
+
+
+def should_join_ocr_lines(previous: str, current: str) -> bool:
+    if not previous or not current:
+        return False
+    if previous.startswith("#") or current.startswith("#"):
+        return False
+    if ocr_bullet_text(previous) is not None or ocr_bullet_text(current) is not None:
+        return False
+    if is_ocr_numbered_line(previous) or is_ocr_numbered_line(current):
+        return False
+    if re.search(r"[.!?。！？:：]$", previous):
+        return False
+    if is_ocr_data_line(previous) or is_ocr_data_line(current):
+        return False
+    return bool(
+        re.search(r"[,，、;；\-]$", previous)
+        or re.match(r"^[a-z)\]}]", current)
+        or (has_cjk(previous[-1:]) and has_cjk(current[:1]))
+    )
+
+
+def join_ocr_lines(previous: str, current: str) -> str:
+    separator = "" if has_cjk(previous[-1:]) and has_cjk(current[:1]) else " "
+    return previous.rstrip() + separator + current.lstrip()
+
+
+def has_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u3040-\u30ff\u3400-\u9fff]", text))
 
 
 def clean_markdown_output(markdown: str) -> str:
