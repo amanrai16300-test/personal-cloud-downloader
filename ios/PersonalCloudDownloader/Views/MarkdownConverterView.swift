@@ -102,10 +102,7 @@ struct MarkdownConverterView: View {
 
     private var markdownPreview: some View {
         ScrollView {
-            Text(previewText)
-                .foregroundStyle(markdown.isEmpty ? .secondary : .primary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+            RenderedMarkdownPreview(markdown: markdown)
                 .padding()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -114,13 +111,6 @@ struct MarkdownConverterView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(.secondary.opacity(0.2), lineWidth: 1)
         }
-    }
-
-    private var previewText: AttributedString {
-        if markdown.isEmpty {
-            return AttributedString("Markdown preview will appear here.")
-        }
-        return (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
     }
 
     private var actionBar: some View {
@@ -204,6 +194,149 @@ struct MarkdownConverterView: View {
         } catch {
             errorMessage = MarkdownConverterAPIError.photoLoadFailed.friendlyMessage
         }
+    }
+}
+
+private struct RenderedMarkdownPreview: View {
+    let markdown: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if markdown.isEmpty {
+                Text("Markdown preview will appear here.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(renderedBlocks) { block in
+                    blockView(block)
+                }
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var renderedBlocks: [MarkdownPreviewBlock] {
+        MarkdownPreviewBlock.parse(markdown)
+    }
+
+    @ViewBuilder
+    private func blockView(_ block: MarkdownPreviewBlock) -> some View {
+        switch block.kind {
+        case .heading1:
+            inlineText(block.text)
+                .font(.title2.bold())
+                .padding(.bottom, 2)
+        case .heading2:
+            inlineText(block.text)
+                .font(.title3.bold())
+                .padding(.top, 4)
+        case .heading3:
+            inlineText(block.text)
+                .font(.headline)
+        case .bullet:
+            HStack(alignment: .top, spacing: 8) {
+                Text("•")
+                    .font(.body.bold())
+                inlineText(block.text)
+                    .font(.body)
+                    .lineSpacing(3)
+            }
+        case .numbered:
+            HStack(alignment: .top, spacing: 8) {
+                Text(block.marker ?? "")
+                    .font(.body.monospacedDigit())
+                inlineText(block.text)
+                    .font(.body)
+                    .lineSpacing(3)
+            }
+        case .paragraph:
+            inlineText(block.text)
+                .font(.body)
+                .lineSpacing(4)
+        }
+    }
+
+    private func inlineText(_ text: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(attributed)
+        }
+        return Text(text)
+    }
+}
+
+private struct MarkdownPreviewBlock: Identifiable {
+    enum Kind {
+        case heading1
+        case heading2
+        case heading3
+        case bullet
+        case numbered
+        case paragraph
+    }
+
+    let id: Int
+    let kind: Kind
+    let text: String
+    let marker: String?
+
+    static func parse(_ markdown: String) -> [MarkdownPreviewBlock] {
+        var blocks: [MarkdownPreviewBlock] = []
+        var paragraph: [String] = []
+
+        func append(_ kind: Kind, _ text: String, marker: String? = nil) {
+            blocks.append(MarkdownPreviewBlock(id: blocks.count, kind: kind, text: text, marker: marker))
+        }
+
+        func flushParagraph() {
+            guard !paragraph.isEmpty else { return }
+            append(.paragraph, paragraph.joined(separator: " "))
+            paragraph.removeAll()
+        }
+
+        for rawLine in markdown.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty {
+                flushParagraph()
+                continue
+            }
+
+            if line.hasPrefix("### ") {
+                flushParagraph()
+                append(.heading3, String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces))
+            } else if line.hasPrefix("## ") {
+                flushParagraph()
+                append(.heading2, String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces))
+            } else if line.hasPrefix("# ") {
+                flushParagraph()
+                append(.heading1, String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces))
+            } else if let bullet = bulletText(from: line) {
+                flushParagraph()
+                append(.bullet, bullet)
+            } else if let numbered = numberedText(from: line) {
+                flushParagraph()
+                append(.numbered, numbered.text, marker: numbered.marker)
+            } else {
+                paragraph.append(line)
+            }
+        }
+
+        flushParagraph()
+        return blocks
+    }
+
+    private static func bulletText(from line: String) -> String? {
+        guard line.hasPrefix("- ") || line.hasPrefix("* ") else { return nil }
+        return String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func numberedText(from line: String) -> (marker: String, text: String)? {
+        guard let match = line.range(of: #"^\d+[\.)]\s+"#, options: .regularExpression) else { return nil }
+        let marker = String(line[match]).trimmingCharacters(in: .whitespaces)
+        let text = String(line[match.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return (marker, text)
     }
 }
 
