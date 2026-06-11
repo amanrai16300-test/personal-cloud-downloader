@@ -9,6 +9,9 @@ struct MarkdownConverterView: View {
     @State private var markdown = ""
     @State private var errorMessage: String?
     @State private var emptyResultMessage: String?
+    @State private var urlText = ""
+    @State private var convertedURL: String?
+    @State private var lastConversion: MarkdownConversionKind?
     @State private var isConverting = false
     @State private var isPickerPresented = false
     @State private var isSharePresented = false
@@ -52,6 +55,32 @@ struct MarkdownConverterView: View {
                 .padding()
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Paste URL")
+                        .font(.headline)
+
+                    TextField("https://example.com/page", text: $urlText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .submitLabel(.go)
+                        .onSubmit {
+                            Task { await convertURL() }
+                        }
+
+                    Button {
+                        Task { await convertURL() }
+                    } label: {
+                        Label("Convert URL", systemImage: "link")
+                    }
+                    .disabled(trimmedURL.isEmpty || isConverting)
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
                 if isConverting {
                     ProgressView("Converting...")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -68,6 +97,14 @@ struct MarkdownConverterView: View {
                     Label(emptyResultMessage, systemImage: "doc.text.magnifyingglass")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let convertedURL {
+                    Text("Converted: \(convertedURL)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -132,12 +169,15 @@ struct MarkdownConverterView: View {
             Spacer()
 
             Button("Retry", systemImage: "arrow.clockwise") {
-                Task { await convertSelectedFile() }
+                Task { await retryLastConversion() }
             }
-            .disabled(selectedFile == nil || isConverting)
+            .disabled((lastConversion == nil && selectedFile == nil) || isConverting)
 
             Button("Clear", systemImage: "xmark.circle") {
                 selectedFile = nil
+                urlText = ""
+                convertedURL = nil
+                lastConversion = nil
                 markdown = ""
                 errorMessage = nil
                 emptyResultMessage = nil
@@ -150,13 +190,18 @@ struct MarkdownConverterView: View {
         !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var trimmedURL: String {
+        urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var outputFilename: String {
-        let stem = selectedFile.map { URL(fileURLWithPath: $0.filename).deletingPathExtension().lastPathComponent }
+        let stem = selectedFile.map { URL(fileURLWithPath: $0.filename).deletingPathExtension().lastPathComponent } ?? URL(string: convertedURL ?? "")?.host
         return (stem?.isEmpty == false ? stem! : "converted") + ".md"
     }
 
     private func convertSelectedFile() async {
         guard let selectedFile else { return }
+        lastConversion = .file
         isConverting = true
         errorMessage = nil
         emptyResultMessage = nil
@@ -165,6 +210,7 @@ struct MarkdownConverterView: View {
         do {
             let response = try await MarkdownConverterAPI.convert(file: selectedFile)
             markdown = response.markdown
+            convertedURL = nil
             if !hasMarkdown {
                 emptyResultMessage = "Conversion finished, but no Markdown text was extracted from this file. This can happen with scanned PDFs or PDFs with broken text encoding."
             }
@@ -172,6 +218,46 @@ struct MarkdownConverterView: View {
             errorMessage = error.friendlyMessage
         } catch {
             errorMessage = "Could not reach CloudBox. Check Tailscale and try again."
+        }
+    }
+
+    private func convertURL() async {
+        let url = trimmedURL
+        guard !url.isEmpty else {
+            errorMessage = MarkdownConverterAPIError.invalidURL.friendlyMessage
+            return
+        }
+
+        lastConversion = .url
+        isConverting = true
+        errorMessage = nil
+        emptyResultMessage = nil
+        convertedURL = nil
+        defer { isConverting = false }
+
+        do {
+            let response = try await MarkdownConverterAPI.convert(url: url)
+            markdown = response.markdown
+            convertedURL = response.url
+            lastConversion = .url
+            if !hasMarkdown {
+                emptyResultMessage = "Conversion finished, but no Markdown text was extracted from this page."
+            }
+        } catch let error as MarkdownConverterAPIError {
+            errorMessage = error.friendlyMessage
+        } catch {
+            errorMessage = "Could not reach CloudBox. Check Tailscale and try again."
+        }
+    }
+
+    private func retryLastConversion() async {
+        switch lastConversion {
+        case .file:
+            await convertSelectedFile()
+        case .url:
+            await convertURL()
+        case nil:
+            await convertSelectedFile()
         }
     }
 
@@ -189,6 +275,8 @@ struct MarkdownConverterView: View {
             }
             selectedFile = PickedDocument(data: uploadData, filename: "photo.jpg", contentType: "image/jpeg")
             markdown = ""
+            convertedURL = nil
+            lastConversion = nil
         } catch let error as MarkdownConverterAPIError {
             errorMessage = error.friendlyMessage
         } catch {
@@ -389,6 +477,11 @@ private struct PickedDocument: Identifiable {
     }
 }
 
+private enum MarkdownConversionKind {
+    case file
+    case url
+}
+
 private struct MarkdownConversionResponse: Decodable {
     let filename: String
     let `extension`: String
@@ -403,11 +496,34 @@ private struct MarkdownConversionResponse: Decodable {
     }
 }
 
+private struct MarkdownURLConversionResponse: Decodable {
+    let url: String
+    let markdown: String
+    let conversionMode: String
+
+    private enum CodingKeys: String, CodingKey {
+        case url
+        case markdown
+        case conversionMode = "conversion_mode"
+    }
+}
+
+private struct MarkdownConverterErrorResponse: Decodable {
+    let detail: String?
+}
+
 private enum MarkdownConverterAPIError: Error {
     case backendOffline
     case unsupportedFile
+    case invalidURL
+    case privateURL
+    case urlTimeout
+    case unreachableURL
+    case unsupportedURLContent
     case tooLarge
+    case urlTooLarge
     case conversionFailed
+    case urlConversionFailed
     case photoLoadFailed
 
     var friendlyMessage: String {
@@ -416,10 +532,24 @@ private enum MarkdownConverterAPIError: Error {
             return "CloudBox is offline. Check Tailscale and try again."
         case .unsupportedFile:
             return "This file type is not supported."
+        case .invalidURL:
+            return "Enter a valid http:// or https:// webpage URL."
+        case .privateURL:
+            return "Private, local, or internal URLs are not allowed."
+        case .urlTimeout:
+            return "The webpage took too long to respond. Try again later."
+        case .unreachableURL:
+            return "CloudBox could not reach that webpage."
+        case .unsupportedURLContent:
+            return "This URL is not a supported webpage."
         case .tooLarge:
             return "This file is too large. Maximum size is 25 MB."
+        case .urlTooLarge:
+            return "This webpage is too large to convert."
         case .conversionFailed:
             return "CloudBox could not convert this file."
+        case .urlConversionFailed:
+            return "CloudBox could not convert this webpage."
         case .photoLoadFailed:
             return "Could not load this photo. Choose another photo and try again."
         }
@@ -455,6 +585,67 @@ private enum MarkdownConverterAPI {
         default:
             throw MarkdownConverterAPIError.backendOffline
         }
+    }
+
+    static func convert(url rawURL: String) async throws -> MarkdownURLConversionResponse {
+        guard isValidWebURL(rawURL) else {
+            throw MarkdownConverterAPIError.invalidURL
+        }
+        guard let endpoint = URL(string: "\(CompletedFilesAPI.baseURL)/api/convert-markdown-url") else {
+            throw MarkdownConverterAPIError.backendOffline
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["url": rawURL])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw MarkdownConverterAPIError.backendOffline
+        }
+
+        switch http.statusCode {
+        case 200...299:
+            return try JSONDecoder().decode(MarkdownURLConversionResponse.self, from: data)
+        case 400:
+            throw urlBadRequestError(from: data)
+        case 413:
+            throw MarkdownConverterAPIError.urlTooLarge
+        case 415:
+            throw MarkdownConverterAPIError.unsupportedURLContent
+        case 422:
+            throw MarkdownConverterAPIError.urlConversionFailed
+        case 504:
+            throw MarkdownConverterAPIError.urlTimeout
+        case 502:
+            throw MarkdownConverterAPIError.unreachableURL
+        default:
+            throw MarkdownConverterAPIError.backendOffline
+        }
+    }
+
+    private static func isValidWebURL(_ rawURL: String) -> Bool {
+        guard
+            let components = URLComponents(string: rawURL),
+            let scheme = components.scheme?.lowercased(),
+            ["http", "https"].contains(scheme),
+            components.host?.isEmpty == false
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func urlBadRequestError(from data: Data) -> MarkdownConverterAPIError {
+        let detail = (try? JSONDecoder().decode(MarkdownConverterErrorResponse.self, from: data).detail)?.lowercased() ?? ""
+        if detail.contains("private") || detail.contains("internal") || detail.contains("local") {
+            return .privateURL
+        }
+        if detail.contains("resolved") {
+            return .unreachableURL
+        }
+        return .invalidURL
     }
 
     private static func multipartBody(for file: PickedDocument, boundary: String) throws -> Data {
