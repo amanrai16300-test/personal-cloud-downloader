@@ -1,22 +1,26 @@
 import asyncio
 import calendar
 import hashlib
+import ipaddress
 import json
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import unicodedata
+from io import BytesIO
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from markitdown import MarkItDown
 from pydantic import BaseModel
+import requests
 from requests import RequestException
 
 from qb_client import QBittorrentClient
@@ -52,6 +56,10 @@ class VideoProgressRequest(BaseModel):
     durationMs: int
 
 
+class ConvertMarkdownURLRequest(BaseModel):
+    url: str
+
+
 VIDEO_PROGRESS_FILE = settings.download_complete_dir.parent / "video_progress.json"
 THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
 THUMBNAIL_TIMESTAMPS_SECONDS = (10, 30, 60, 1)
@@ -81,6 +89,9 @@ MARKDOWN_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MARKDOWN_ALLOWED_EXTENSIONS = MARKDOWN_ALLOWED_EXTENSIONS | MARKDOWN_IMAGE_EXTENSIONS
 MARKDOWN_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MARKDOWN_CONVERSION_TIMEOUT_SECONDS = 60
+MARKDOWN_URL_MAX_BYTES = 5 * 1024 * 1024
+MARKDOWN_URL_TIMEOUT_SECONDS = 10
+MARKDOWN_URL_MAX_REDIRECTS = 5
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -193,12 +204,152 @@ async def convert_markdown(file: UploadFile = File(...)) -> dict[str, str]:
                 temp_path.unlink(missing_ok=True)
 
 
+@app.post("/api/convert-markdown-url")
+async def convert_markdown_url(payload: ConvertMarkdownURLRequest) -> dict[str, str]:
+    url = normalize_public_url(payload.url)
+    try:
+        html = await asyncio.wait_for(
+            asyncio.to_thread(download_public_html, url),
+            timeout=MARKDOWN_CONVERSION_TIMEOUT_SECONDS,
+        )
+        markdown = await asyncio.wait_for(
+            asyncio.to_thread(convert_html_bytes_to_markdown, html, url),
+            timeout=MARKDOWN_CONVERSION_TIMEOUT_SECONDS,
+        )
+        return {
+            "url": url,
+            "markdown": clean_markdown_output(markdown),
+            "conversion_mode": "url",
+        }
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="URL download or Markdown conversion timed out.") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="URL Markdown conversion failed.") from exc
+
+
 def convert_local_markdown_file(path: Path) -> str:
     result = MarkItDown(enable_plugins=False).convert_local(path)
     markdown = getattr(result, "text_content", None)
     if markdown is None:
         markdown = getattr(result, "markdown", "")
     return str(markdown)
+
+
+def normalize_public_url(raw_url: str) -> str:
+    url = raw_url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required.")
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Only valid http:// and https:// URLs are accepted.")
+
+    reject_private_url(parsed)
+    return url
+
+
+def reject_private_url(parsed_url: Any) -> None:
+    hostname = (parsed_url.hostname or "").strip().lower().rstrip(".")
+    if not hostname:
+        raise HTTPException(status_code=400, detail="URL host is required.")
+    if hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal")):
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
+    if "." not in hostname and not hostname.replace(":", "").replace("[", "").replace("]", "").isdigit():
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
+
+    try:
+        ip_addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            addr_info = socket.getaddrinfo(hostname, parsed_url.port or default_port(parsed_url.scheme), type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise HTTPException(status_code=400, detail="URL host could not be resolved.") from exc
+        ip_addresses = list({ipaddress.ip_address(item[4][0]) for item in addr_info})
+
+    if not ip_addresses or any(is_blocked_ip(address) for address in ip_addresses):
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
+
+
+def default_port(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def is_blocked_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+def download_public_html(url: str) -> bytes:
+    session = requests.Session()
+    current_url = url
+    for _ in range(MARKDOWN_URL_MAX_REDIRECTS + 1):
+        try:
+            response = session.get(
+                current_url,
+                timeout=MARKDOWN_URL_TIMEOUT_SECONDS,
+                stream=True,
+                allow_redirects=False,
+                headers={"User-Agent": "CloudBox Markdown Converter/1.0"},
+            )
+        except requests.Timeout as exc:
+            raise HTTPException(status_code=504, detail="URL request timed out.") from exc
+        except RequestException as exc:
+            raise HTTPException(status_code=502, detail="URL is unreachable.") from exc
+
+        if response.is_redirect:
+            location = response.headers.get("Location")
+            if not location:
+                raise HTTPException(status_code=502, detail="URL redirect is invalid.")
+            current_url = normalize_public_url(urljoin(current_url, location))
+            continue
+
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="URL returned an error.")
+
+        content_type = response.headers.get("content-type", "").lower()
+        if content_type and not any(kind in content_type for kind in ("text/html", "application/xhtml+xml")):
+            raise HTTPException(status_code=415, detail="URL content is not a supported HTML page.")
+
+        content_length = response.headers.get("content-length")
+        if content_length:
+            with suppress(ValueError):
+                if int(content_length) > MARKDOWN_URL_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="URL content is too large.")
+
+        chunks: list[bytes] = []
+        size = 0
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > MARKDOWN_URL_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="URL content is too large.")
+                chunks.append(chunk)
+        except RequestException as exc:
+            raise HTTPException(status_code=502, detail="URL download failed.") from exc
+        return b"".join(chunks)
+
+    raise HTTPException(status_code=502, detail="URL has too many redirects.")
+
+
+def convert_html_bytes_to_markdown(html: bytes, url: str) -> str:
+    result = MarkItDown(enable_plugins=False).convert_stream(BytesIO(html), file_extension=".html", url=url)
+    markdown = getattr(result, "text_content", None)
+    if markdown is None:
+        markdown = getattr(result, "markdown", "")
+    markdown_text = str(markdown)
+    if not markdown_text.strip():
+        raise HTTPException(status_code=422, detail="URL Markdown conversion produced no content.")
+    return markdown_text
 
 
 def convert_local_image_to_markdown(path: Path) -> str:
