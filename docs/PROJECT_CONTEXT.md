@@ -1667,15 +1667,30 @@ ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.9
 
 ### Current Markdown Converter Final Status
 
+- Branch: `feature/markdown-url-converter-v1`.
 - File to Markdown works.
 - Image OCR works.
+- URL-to-Markdown works for normal public web pages.
 - Files picker works.
 - Photos picker works.
+- iOS Markdown Converter now has Paste URL input and Convert URL button.
+- iOS calls `/api/convert-markdown-url` and reuses rendered preview, Copy, Share, Save, Clear, and Retry.
 - Rendered Markdown preview works.
 - Copy, Share, and Save `.md` work.
 - Empty-result handling works.
 - Oracle backend is deployed and tested.
-- Remaining future improvement: URL-to-Markdown for job pages/web pages.
+- Backend endpoint added: `POST /api/convert-markdown-url`.
+- Request JSON: `{"url":"https://example.com/page"}`.
+- Response fields: `url`, `markdown`, `conversion_mode`.
+- Backend accepts only public `http://` and `https://` URLs.
+- Backend blocks empty URLs, invalid schemes, localhost, loopback, private IPs, link-local, and internal hosts.
+- Server-side download uses timeout and 5 MB content limit.
+- Downloaded HTML and converted Markdown are not stored.
+- URL conversion was tested locally with `https://example.com`.
+- Safety tests passed for empty URL, `ftp://`, localhost, `127.0.0.1`, and private IP.
+- Backend was deployed to Oracle and tested successfully on `http://127.0.0.1:8000/api/convert-markdown-url`.
+- Current limitation: URL conversion does not support login-only pages, JavaScript-rendered pages, browser automation, LinkedIn scraping, or AI cleanup.
+- Current decision: generic page-cleanup improvement is not added yet because current output is usable; test more real links first.
 - Remaining limitation: free OCR is not perfect and cannot fully organize complex webpage screenshots like ChatGPT or direct HTML parsing.
 
 ### Oracle Budget Status
