@@ -1161,6 +1161,26 @@ http://100.95.39.107:8080
   - `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`
   - `ios/PersonalCloudDownloader/Views/PlayerView.swift`
 
+## Real Landscape Player Status
+
+- Branch: `feature/real-landscape-player`.
+- Real fullscreen landscape now works on iPhone.
+- Fake VLC landscape was removed.
+- Fullscreen player now uses real iOS landscape via `UIWindowScene.requestGeometryUpdate`.
+- Normal app screens remain portrait-locked through app-level orientation lock.
+- Player fullscreen sets orientation mask to landscape only.
+- Closing/dismissing player restores portrait.
+- Orientation updates target the topmost presented view controller because fullscreen uses `fullScreenCover`.
+- `project.yml` allows Portrait, LandscapeLeft, and LandscapeRight.
+- Existing player controls were preserved: timeline, brightness/volume gestures, subtitles, Fit/Cover, audio selector, close button, and resume behavior.
+- Previous warning/freeze rule about no new fullscreen features before real landscape is resolved.
+- Changed files:
+  - `ios/PersonalCloudDownloader/Support/OrientationHelper.swift`
+  - `ios/PersonalCloudDownloader/PersonalCloudDownloaderApp.swift`
+  - `ios/project.yml`
+  - `ios/PersonalCloudDownloader/Views/PlayerView.swift`
+  - `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`
+
 ## CloudBox UI Polish Update
 
 - Emil Kowalski design-engineering skill was used as a micro-polish guide.
