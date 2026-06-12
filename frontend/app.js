@@ -1,6 +1,6 @@
 const API_BASE_URL = "http://100.92.146.101:8000";
 const POLL_MS = 5000;
-const APP_JS_VERSION = "trends-2026-06-07";
+const APP_JS_VERSION = "cloudbox-theme-2026-06-12";
 
 console.info(`Personal Cloud Downloader app.js ${APP_JS_VERSION}`);
 
@@ -119,6 +119,222 @@ function emptyCard(title, text) {
   `;
 }
 
+// CloudBox theme, self-contained in app.js (only this file deploys to Oracle).
+// Injected AFTER style.css loads, so equal-specificity rules here win the
+// cascade and the var-driven base sheet re-skins through :root overrides.
+// Visual only — no markup, logic, or API behavior changes.
+function installCloudBoxTheme() {
+  if (document.querySelector("#cloudboxTheme")) return;
+
+  const styles = document.createElement("style");
+  styles.id = "cloudboxTheme";
+  styles.textContent = `
+    /* ---- CloudBox tokens (mirrors the iOS app palette) ---- */
+    :root {
+      color-scheme: dark;
+      --page: #02060E;
+      --ink: #F2F6FF;
+      --surface: #091120;
+      --surface-strong: rgba(255, 255, 255, .10);
+      --panel: #091120;
+      --panel-soft: #0E182D;
+      --panel-ink: #F2F6FF;
+      --line: rgba(255, 255, 255, .08);
+      --muted: #8FA3C7;
+      --accent: #4D96FF;
+      --accent-strong: #6FAAFF;
+      --accent-soft: rgba(77, 150, 255, .14);
+      --danger: #F87171;
+      --danger-soft: rgba(248, 113, 113, .12);
+      --ok-soft: rgba(74, 222, 128, .15);
+      --wait-soft: rgba(143, 163, 199, .14);
+      --radius: 20px;
+      --shadow: none;
+      background: var(--page);
+      color: var(--ink);
+    }
+
+    /* Deep navy + ONE corner bloom — same background recipe as the app. */
+    body {
+      background:
+        radial-gradient(circle at 90% -5%, rgba(77, 150, 255, .13), transparent 24rem),
+        var(--page);
+      color: var(--ink);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    /* ---- Top bar ---- */
+    .brand-mark {
+      background: linear-gradient(135deg, #4D96FF, #123A8C);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, .22);
+      box-shadow: 0 10px 26px rgba(77, 150, 255, .30);
+    }
+    .eyebrow {
+      color: var(--accent);
+      letter-spacing: .14em;
+    }
+    h1, h2, h3 {
+      color: var(--ink);
+    }
+
+    /* ---- Panels: flat raised surfaces, hairline strokes, no glow ---- */
+    .command-panel,
+    .content-section {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      box-shadow: none;
+    }
+    .command-panel {
+      background: #0E182D;
+      border-color: rgba(77, 150, 255, .26);
+    }
+    .command-panel .section-heading p,
+    .command-panel .panel-kicker,
+    .command-panel .status-line {
+      color: var(--muted);
+    }
+    .command-panel .panel-kicker {
+      color: var(--accent);
+    }
+    .panel-kicker {
+      color: var(--accent);
+      letter-spacing: .14em;
+    }
+
+    /* ---- Magnet input: technical, monospaced ---- */
+    textarea {
+      background: #060D1C;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .88rem;
+    }
+    textarea::placeholder {
+      color: rgba(143, 163, 199, .55);
+    }
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(77, 150, 255, .22);
+    }
+
+    /* ---- Buttons ---- */
+    .primary-button {
+      background: var(--accent);
+      color: #051023;
+      border-radius: 14px;
+      box-shadow: none;
+    }
+    .primary-button:hover {
+      background: var(--accent-strong);
+    }
+    .ghost-button {
+      background: var(--surface);
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    .ghost-button:hover {
+      border-color: rgba(77, 150, 255, .40);
+    }
+    .action-button {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(77, 150, 255, .30);
+      border-radius: 12px;
+      font-weight: 750;
+    }
+    .action-button.danger {
+      background: transparent;
+      color: var(--danger);
+      border: 1px solid rgba(248, 113, 113, .34);
+    }
+
+    /* Press feedback: a slight settle, motion-safe only. */
+    @media (prefers-reduced-motion: no-preference) {
+      .primary-button,
+      .ghost-button,
+      .action-button,
+      .trends-open-button,
+      .trends-back-button,
+      .trailer-button {
+        transition: transform 120ms ease, opacity 120ms ease,
+          background 150ms ease, border-color 150ms ease;
+      }
+      .primary-button:active,
+      .ghost-button:active,
+      .action-button:active,
+      .trends-open-button:active,
+      .trends-back-button:active,
+      .trailer-button:active {
+        transform: scale(.985);
+        opacity: .9;
+      }
+    }
+
+    /* ---- Cards ---- */
+    .download-card,
+    .file-card,
+    .empty-card {
+      background: #0E182D;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+    .empty-card {
+      background: var(--surface);
+    }
+    .meta,
+    .last-updated,
+    .status-line,
+    .section-heading p,
+    .empty,
+    .empty-card p {
+      color: var(--muted);
+    }
+    .last-updated,
+    .progress-value {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .status-line.error {
+      color: #FCA5A5;
+    }
+
+    /* ---- Status pills ---- */
+    .pill {
+      background: var(--wait-soft);
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+    .pill.downloading {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: rgba(77, 150, 255, .30);
+    }
+    .pill.completed {
+      background: var(--ok-soft);
+      color: #4ADE80;
+      border-color: rgba(74, 222, 128, .30);
+    }
+    .pill.failed {
+      background: var(--danger-soft);
+      color: var(--danger);
+      border-color: rgba(248, 113, 113, .30);
+    }
+
+    /* ---- Progress: flat blue fill, no gradient ---- */
+    .progress-track {
+      height: 8px;
+      background: rgba(255, 255, 255, .10);
+    }
+    .progress-fill {
+      background: var(--accent);
+    }
+    .progress-value {
+      color: var(--ink);
+    }
+  `;
+  document.head.appendChild(styles);
+}
+
 function installTrendsHomeEntry() {
   installTrendsStyles();
 
@@ -165,10 +381,10 @@ function installTrendsStyles() {
       align-items: center;
       margin: 22px 0;
       padding: 20px;
-      border: 1px solid rgba(245, 245, 239, .12);
+      border: 1px solid rgba(77, 150, 255, .26);
       border-radius: 18px;
-      background: color-mix(in srgb, #111827 88%, #2dd4bf 12%);
-      box-shadow: 0 18px 55px rgba(0, 0, 0, .22);
+      background: #0E182D;
+      box-shadow: none;
     }
     .trends-entry-copy h2 {
       margin: 4px 0 8px;
@@ -183,20 +399,20 @@ function installTrendsStyles() {
       max-width: 58ch;
     }
     .trends-kicker {
-      color: #5eead4 !important;
+      color: #4D96FF !important;
       font-size: .78rem;
       font-weight: 700;
-      letter-spacing: .08em;
+      letter-spacing: .14em;
       text-transform: uppercase;
     }
     .trends-open-button,
     .trends-back-button,
     .trailer-button {
       min-height: 42px;
-      border: 1px solid rgba(245, 245, 239, .14);
-      border-radius: 999px;
-      background: #f5f5ef;
-      color: #111827;
+      border: 1px solid rgba(77, 150, 255, .30);
+      border-radius: 14px;
+      background: rgba(77, 150, 255, .14);
+      color: #4D96FF;
       font-weight: 750;
       padding: 0 16px;
       cursor: pointer;
@@ -211,15 +427,15 @@ function installTrendsStyles() {
     .trends-back-button:hover,
     .trailer-button:hover {
       transform: translateY(-1px);
-      border-color: rgba(94, 234, 212, .55);
+      border-color: rgba(77, 150, 255, .55);
     }
     .trends-view {
       margin: 24px 0;
       padding: 22px;
-      border: 1px solid rgba(245, 245, 239, .10);
-      border-radius: 22px;
-      background: #0f1724;
-      color: #f5f5ef;
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-radius: 20px;
+      background: #091120;
+      color: #F2F6FF;
     }
     .trends-view[hidden] {
       display: none;
@@ -245,7 +461,8 @@ function installTrendsStyles() {
     }
     .trends-back-button {
       background: transparent;
-      color: #f5f5ef;
+      color: #F2F6FF;
+      border-color: rgba(255, 255, 255, .14);
     }
     .trends-sections {
       display: grid;
@@ -274,16 +491,16 @@ function installTrendsStyles() {
     }
     .trend-card {
       min-width: 0;
-      border: 1px solid rgba(245, 245, 239, .10);
+      border: 1px solid rgba(255, 255, 255, .08);
       border-radius: 14px;
-      background: #141e2d;
+      background: #0E182D;
       overflow: hidden;
       transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
     }
     .trend-card:hover {
       transform: translateY(-3px);
-      border-color: rgba(94, 234, 212, .34);
-      background: #172235;
+      border-color: rgba(77, 150, 255, .34);
+      background: #122036;
     }
     .trend-poster,
     .trend-placeholder {
@@ -291,7 +508,7 @@ function installTrendsStyles() {
       aspect-ratio: 2 / 3;
       display: block;
       object-fit: cover;
-      background: #1d293b;
+      background: #060D1C;
     }
     .trend-placeholder {
       display: grid;
@@ -327,15 +544,15 @@ function installTrendsStyles() {
     .trailer-button {
       min-height: 34px;
       width: 100%;
-      background: transparent;
-      color: #f5f5ef;
+      background: rgba(77, 150, 255, .13);
+      color: #4D96FF;
       border-radius: 10px;
     }
     .trend-message {
       padding: 20px;
-      border: 1px solid rgba(245, 245, 239, .10);
+      border: 1px solid rgba(255, 255, 255, .08);
       border-radius: 14px;
-      background: #141e2d;
+      background: #0E182D;
     }
     @media (max-width: 720px) {
       .trends-home-entry,
@@ -668,12 +885,12 @@ function showDeleteConfirmation(hash) {
     modal = document.createElement("div");
     modal.id = "deleteConfirmModal";
     modal.innerHTML = `
-      <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9998;"></div>
-      <section role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9999;width:min(92vw,420px);background:#111827;color:white;border:1px solid rgba(255,255,255,.16);border-radius:14px;padding:18px;box-shadow:0 18px 60px rgba(0,0,0,.45);">
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9998;"></div>
+      <section role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9999;width:min(92vw,420px);background:#0E182D;color:#F2F6FF;border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:18px;box-shadow:0 18px 60px rgba(0,0,0,.55);">
         <h3 id="deleteConfirmTitle" style="margin:0 0 8px;font-size:18px;">Delete download?</h3>
-        <p id="deleteConfirmName" style="margin:0 0 16px;color:#d1d5db;line-height:1.35;word-break:break-word;"></p>
+        <p id="deleteConfirmName" style="margin:0 0 16px;color:#8FA3C7;line-height:1.35;word-break:break-word;"></p>
         <div style="display:flex;gap:10px;justify-content:flex-end;">
-          <button type="button" data-delete-cancel style="border:1px solid rgba(255,255,255,.18);background:transparent;color:white;border-radius:10px;padding:10px 14px;">Cancel</button>
+          <button type="button" data-delete-cancel style="border:1px solid rgba(255,255,255,.14);background:transparent;color:#F2F6FF;border-radius:10px;padding:10px 14px;">Cancel</button>
           <button type="button" data-delete-confirm style="border:0;background:#dc2626;color:white;border-radius:10px;padding:10px 14px;">Delete</button>
         </div>
       </section>
@@ -808,6 +1025,7 @@ completedFiles.addEventListener("click", (event) => {
   copyVlcLink(Number(button.dataset.copyIndex)).catch((error) => setStatus(error.message, true));
 });
 
+installCloudBoxTheme();
 installTrendsHomeEntry();
 refreshAll();
 window.setInterval(() => refreshAll({ quiet: true }), POLL_MS);
