@@ -2,69 +2,182 @@ import SwiftUI
 import UIKit
 
 struct RootTabView: View {
-    init() {
-        Self.configureTabBarAppearance()
+    /// The five top-level destinations, unchanged from the system tab bar this
+    /// shell replaces. Order here is the on-screen order.
+    enum Tab: String, CaseIterable, Identifiable {
+        case home
+        case downloader
+        case videos
+        case network
+        case more
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .home: return "Home"
+            case .downloader: return "Downloader"
+            case .videos: return "Videos"
+            case .network: return "Network"
+            case .more: return "More"
+            }
+        }
+
+        /// Outline icon for the resting state…
+        var icon: String {
+            switch self {
+            case .home: return "house"
+            case .downloader: return "arrow.down.circle"
+            case .videos: return "play.rectangle"
+            case .network: return "antenna.radiowaves.left.and.right"
+            case .more: return "ellipsis.circle"
+            }
+        }
+
+        /// …and its filled counterpart for the selected state. The antenna
+        /// symbol has no fill variant, so it stays the same.
+        var selectedIcon: String {
+            switch self {
+            case .home: return "house.fill"
+            case .downloader: return "arrow.down.circle.fill"
+            case .videos: return "play.rectangle.fill"
+            case .network: return "antenna.radiowaves.left.and.right"
+            case .more: return "ellipsis.circle.fill"
+            }
+        }
     }
 
+    @State private var selection: Tab = .home
+
     var body: some View {
-        TabView {
+        TabView(selection: $selection) {
             HomeView()
-                .tabItem {
-                    Label("Home", systemImage: "house")
-                }
+                .tag(Tab.home)
+                .toolbar(.hidden, for: .tabBar)
 
             DownloaderView()
-                .tabItem {
-                    Label("Downloader", systemImage: "arrow.down.circle")
-                }
+                .tag(Tab.downloader)
+                .toolbar(.hidden, for: .tabBar)
 
             VideosView()
-                .tabItem {
-                    Label("Videos", systemImage: "play.rectangle")
-                }
+                .tag(Tab.videos)
+                .toolbar(.hidden, for: .tabBar)
 
             NetworkUsageView()
-                .tabItem {
-                    Label("Network", systemImage: "antenna.radiowaves.left.and.right")
-                }
+                .tag(Tab.network)
+                .toolbar(.hidden, for: .tabBar)
 
             MoreView()
-                .tabItem {
-                    Label("More", systemImage: "ellipsis.circle")
-                }
+                .tag(Tab.more)
+                .toolbar(.hidden, for: .tabBar)
+        }
+        // The custom bar lives in the bottom safe-area inset, so every tab's
+        // content (scroll views and web views alike) is automatically laid out
+        // above it — nothing hides behind the bar, and the bar itself sits
+        // clear of the home indicator.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CloudBoxTabBar(selection: $selection)
         }
         .tint(Color(red: 0.42, green: 0.76, blue: 1.0))
     }
+}
 
-    private static func configureTabBarAppearance() {
-        let appearance = UITabBarAppearance()
-        appearance.configureWithOpaqueBackground()
-        appearance.backgroundColor = UIColor(red: 0.012, green: 0.028, blue: 0.060, alpha: 0.98)
-        appearance.shadowColor = UIColor(red: 0.12, green: 0.24, blue: 0.42, alpha: 0.75)
+/// CloudBox's custom navigation shell: a floating pill bar in the same visual
+/// language as the Home dashboard — flat raised navy, hairline stroke, one
+/// blue accent. The selected tab gets a tinted chip that slides between items;
+/// unselected tabs stay quiet but always keep icon + label for clarity.
+private struct CloudBoxTabBar: View {
+    @Binding var selection: RootTabView.Tab
 
-        let selected = UIColor(red: 0.72, green: 0.88, blue: 1.0, alpha: 1)
-        let normal = UIColor(red: 0.46, green: 0.54, blue: 0.68, alpha: 1)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var chipNamespace
 
-        configureTabItem(appearance.stackedLayoutAppearance, selected: selected, normal: normal)
-        configureTabItem(appearance.inlineLayoutAppearance, selected: selected, normal: normal)
-        configureTabItem(appearance.compactInlineLayoutAppearance, selected: selected, normal: normal)
+    // Tokens mirrored from the Home redesign so shell + content read as one.
+    private let surfaceRaised = Color(red: 0.055, green: 0.095, blue: 0.175)
+    private let hairline = Color.white.opacity(0.08)
+    private let mutedText = Color(red: 0.50, green: 0.58, blue: 0.72)
+    private let premiumBlue = Color(red: 0.30, green: 0.59, blue: 1.0)
+    private let selectedText = Color(red: 0.72, green: 0.88, blue: 1.0)
 
-        UITabBar.appearance().standardAppearance = appearance
-        UITabBar.appearance().scrollEdgeAppearance = appearance
-        UITabBar.appearance().isTranslucent = false
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(RootTabView.Tab.allCases) { tab in
+                tabButton(tab)
+            }
+        }
+        .padding(6)
+        .background {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(surfaceRaised.opacity(0.98))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(hairline, lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
     }
 
-    private static func configureTabItem(_ item: UITabBarItemAppearance, selected: UIColor, normal: UIColor) {
-        item.selected.iconColor = selected
-        item.selected.titleTextAttributes = [
-            .foregroundColor: selected,
-            .font: UIFont.systemFont(ofSize: 11, weight: .semibold)
-        ]
-        item.normal.iconColor = normal
-        item.normal.titleTextAttributes = [
-            .foregroundColor: normal,
-            .font: UIFont.systemFont(ofSize: 11, weight: .medium)
-        ]
+    private func tabButton(_ tab: RootTabView.Tab) -> some View {
+        let isSelected = selection == tab
+
+        return Button {
+            select(tab)
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: isSelected ? tab.selectedIcon : tab.icon)
+                    .font(.system(size: 18, weight: .semibold))
+
+                Text(tab.title)
+                    .font(.system(size: 9.5, weight: isSelected ? .bold : .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(isSelected ? selectedText : mutedText)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(premiumBlue.opacity(0.16))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(premiumBlue.opacity(0.28), lineWidth: 1)
+                        }
+                        .matchedGeometryEffect(id: "selectedChip", in: chipNamespace)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(TabPressStyle())
+        .accessibilityLabel(tab.title)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    /// Switch tabs with a light selection haptic and a short spring that
+    /// slides the chip. Reduce Motion drops the animation, never the switch.
+    private func select(_ tab: RootTabView.Tab) {
+        guard tab != selection else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        if reduceMotion {
+            selection = tab
+        } else {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+                selection = tab
+            }
+        }
+    }
+}
+
+/// Press feedback for tab items: a slight settle, consistent with the press
+/// styles used across CloudBox screens.
+private struct TabPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
