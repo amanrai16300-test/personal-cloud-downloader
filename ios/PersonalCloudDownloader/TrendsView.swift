@@ -8,8 +8,12 @@ struct TrendsView: View {
     @StateObject private var viewModel = TrendsViewModel()
     @State private var isVisible = false
 
-    private let background = Color(red: 0.015, green: 0.035, blue: 0.075)
-    private let muted = Color(red: 0.62, green: 0.68, blue: 0.80)
+    // Palette mirrored from the Home redesign tokens.
+    private let background = Color(red: 0.008, green: 0.022, blue: 0.055)
+    private let surface = Color(red: 0.035, green: 0.065, blue: 0.125)
+    private let hairline = Color.white.opacity(0.08)
+    private let muted = Color(red: 0.56, green: 0.64, blue: 0.78)
+    private let premiumBlue = Color(red: 0.30, green: 0.59, blue: 1.0)
 
     var body: some View {
         ScrollView {
@@ -60,67 +64,95 @@ struct TrendsView: View {
     private var trendsBackground: some View {
         ZStack {
             background.ignoresSafeArea()
-            LinearGradient(
-                colors: [
-                    Color(red: 0.025, green: 0.10, blue: 0.18),
-                    background,
-                    Color(red: 0.0, green: 0.01, blue: 0.025)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+            RadialGradient(
+                colors: [premiumBlue.opacity(0.12), .clear],
+                center: .init(x: 0.9, y: -0.05),
+                startRadius: 10,
+                endRadius: 380
             )
             .ignoresSafeArea()
         }
     }
 
+    /// Discovery panel header: tracked tag, title, and a 6-hour cadence footer
+    /// with the monospaced last-update time — the same panel anatomy as the
+    /// Home server panel and Network monitor.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Fresh picks")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-
-                Spacer(minLength: 12)
-
-                Text("Trends")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.mint.opacity(0.90))
-                    .textCase(.uppercase)
-                    .tracking(0.8)
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Label("Updated every 6 hours", systemImage: "clock")
+                Text("DISCOVERY RADAR")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.6)
+                    .foregroundStyle(premiumBlue)
+
+                Spacer(minLength: 8)
+
+                Text("TMDB")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.0)
+                    .foregroundStyle(muted.opacity(0.85))
+            }
+            .padding(.bottom, 12)
+
+            Text("Fresh picks")
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .padding(.bottom, 12)
+
+            Rectangle()
+                .fill(hairline)
+                .frame(height: 1)
+                .padding(.bottom, 10)
+
+            HStack(spacing: 6) {
+                Image(systemName: "clock")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(muted)
+                    .accessibilityHidden(true)
+
+                Text("Updated every 6 hours")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(muted)
+
                 if let updatedAt = viewModel.trends?.updatedAt {
-                    Text("•")
-                        .foregroundStyle(muted.opacity(0.58))
-                    Text("Last \(formattedUpdatedAt(updatedAt))")
+                    Spacer(minLength: 8)
+
+                    Text(formattedUpdatedAt(updatedAt))
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.92))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.82)
+                        .minimumScaleFactor(0.8)
                 }
             }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(muted.opacity(0.92))
         }
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color.mint.opacity(0.10),
-                    Color(red: 0.035, green: 0.105, blue: 0.205).opacity(0.90)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-        )
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(surface)
+
+                RadialGradient(
+                    colors: [premiumBlue.opacity(0.14), .clear],
+                    center: .topTrailing,
+                    startRadius: 4,
+                    endRadius: 220
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
+        }
         .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.mint.opacity(0.34), lineWidth: 1.1)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [premiumBlue.opacity(0.40), hairline],
+                        startPoint: .topTrailing,
+                        endPoint: .bottomLeading
+                    ),
+                    lineWidth: 1
+                )
         }
     }
 
@@ -151,25 +183,35 @@ struct TrendsView: View {
     }
 
     private func trendSection(_ title: String, items: [TrendItem]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center) {
+                Text(title.uppercased())
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.6)
+                    .foregroundStyle(premiumBlue)
 
                 Spacer()
 
                 Text("\(items.count)")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(muted)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(surface, in: Capsule())
+                    .overlay(Capsule().stroke(hairline, lineWidth: 1))
             }
+            .padding(.horizontal, 2)
 
             if items.isEmpty {
                 Text("No titles available.")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(muted)
                     .frame(maxWidth: .infinity, minHeight: 84, alignment: .center)
-                    .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background(surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(hairline, lineWidth: 1)
+                    }
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 14) {
@@ -186,13 +228,17 @@ struct TrendsView: View {
     private var loadingState: some View {
         VStack(spacing: 14) {
             ProgressView()
-                .tint(.mint)
+                .tint(premiumBlue)
             Text("Loading trends...")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(muted)
         }
         .frame(maxWidth: .infinity, minHeight: 190)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(hairline, lineWidth: 1)
+        }
     }
 
     private func errorState(_ message: String) -> some View {
@@ -219,11 +265,15 @@ struct TrendsView: View {
                     .padding(.vertical, 10)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.mint)
+            .tint(premiumBlue)
         }
         .frame(maxWidth: .infinity, minHeight: 220)
         .padding(18)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(hairline, lineWidth: 1)
+        }
     }
 
     private var emptyState: some View {
@@ -231,7 +281,11 @@ struct TrendsView: View {
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(muted)
             .frame(maxWidth: .infinity, minHeight: 160)
-            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(hairline, lineWidth: 1)
+            }
     }
 }
 
@@ -243,7 +297,9 @@ private struct TrendCard: View {
     private let cardWidth: CGFloat = 154
     private let posterHeight: CGFloat = 231
     private let contentHeight: CGFloat = 142
-    private let muted = Color(red: 0.62, green: 0.68, blue: 0.80)
+    private let muted = Color(red: 0.56, green: 0.64, blue: 0.78)
+    private let premiumBlue = Color(red: 0.30, green: 0.59, blue: 1.0)
+    private let ratingGold = Color(red: 1.0, green: 0.84, blue: 0.36)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -259,13 +315,14 @@ private struct TrendCard: View {
 
                 HStack(spacing: 8) {
                     Text(item.ratingText)
-                        .font(.system(size: 13, weight: .heavy))
-                        .foregroundStyle(Color(red: 1.0, green: 0.84, blue: 0.36))
+                        .font(.system(size: 12.5, weight: .heavy))
+                        .monospacedDigit()
+                        .foregroundStyle(ratingGold)
 
                     Spacer(minLength: 4)
 
                     Text(item.releaseYear ?? "N/A")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(muted)
                 }
 
@@ -281,16 +338,17 @@ private struct TrendCard: View {
                                 .minimumScaleFactor(0.86)
                         }
                             .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(Color.mint)
+                            .foregroundStyle(premiumBlue)
                             .frame(maxWidth: .infinity)
                             .frame(height: 34)
-                            .background(Color.mint.opacity(0.11), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .background(premiumBlue.opacity(0.13), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color.mint.opacity(0.36), lineWidth: 1)
+                                    .stroke(premiumBlue.opacity(0.32), lineWidth: 1)
                             }
+                            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TrendPressStyle())
                 }
             }
             .padding(.horizontal, 10)
@@ -345,7 +403,7 @@ private struct TrendCard: View {
             LinearGradient(
                 colors: [
                     Color.white.opacity(0.08),
-                    Color.mint.opacity(0.12),
+                    premiumBlue.opacity(0.12),
                     Color.white.opacity(0.05)
                 ],
                 startPoint: .topLeading,
@@ -364,6 +422,17 @@ private struct TrendCard: View {
     }
 }
 
+/// Press feedback for the trailer action, consistent with the press styles
+/// used across the redesigned CloudBox screens.
+private struct TrendPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 private struct TrailerSheet: Identifiable {
     let id = UUID()
     let url: URL
@@ -374,8 +443,8 @@ private struct SafariView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> SFSafariViewController {
         let controller = SFSafariViewController(url: url)
-        controller.preferredBarTintColor = UIColor(red: 0.015, green: 0.035, blue: 0.075, alpha: 1.0)
-        controller.preferredControlTintColor = UIColor.systemMint
+        controller.preferredBarTintColor = UIColor(red: 0.008, green: 0.022, blue: 0.055, alpha: 1.0)
+        controller.preferredControlTintColor = UIColor(red: 0.30, green: 0.59, blue: 1.0, alpha: 1.0)
         return controller
     }
 
