@@ -23,6 +23,12 @@ targets:
       properties:
         CFBundleDisplayName: CloudBox
         UILaunchScreen: {}
+        # Portrait + landscape must be declared so the fullscreen player can
+        # rotate; the AppDelegate mask keeps every non-player screen portrait.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         # Private services are reached over HTTP through Tailscale only.

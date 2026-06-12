@@ -94,13 +94,9 @@ struct PlayerView: View {
             vlc.stop()
         }
         .fullScreenCover(isPresented: $isFullscreen, onDismiss: {
-            // Only AVPlayer asked the system to rotate (real landscape). VLC uses
-            // a whole-player fake-landscape rotation that never rotated the
-            // device — it works even with the iPhone rotation lock ON — so it has
-            // nothing to restore.
-            if video.isAVPlayerSupported {
-                OrientationHelper.restore(orientationBeforeFullscreen)
-            }
+            // Both engines rotated to real landscape on entry, so both restore
+            // portrait on the way out.
+            OrientationHelper.restore(orientationBeforeFullscreen)
             // Direct-open mode: the cover has finished dismissing and orientation
             // is restored, so now pop back to the Videos list. Popping here
             // (rather than at the close tap) avoids tearing the cover down
@@ -111,14 +107,11 @@ struct PlayerView: View {
         }) {
             if let streamURL = video.streamURL {
                 fullscreenContent(streamURL)
-                    // AVPlayer requests a real device landscape rotation. VLC does
-                    // NOT — it presents a rotated (fake-landscape) layout that
-                    // works even with the rotation lock on, so it must not request
-                    // a device rotation here.
+                    // Real device landscape for BOTH engines. The geometry
+                    // request works even with the iPhone rotation lock ON, which
+                    // is why the old fake 90° rotated layout is no longer needed.
                     .onAppear {
-                        if video.isAVPlayerSupported {
-                            OrientationHelper.lockLandscape()
-                        }
+                        OrientationHelper.lockLandscape()
                     }
             }
         }
@@ -157,39 +150,22 @@ struct PlayerView: View {
                 // `savedPositions` store. The close button lives inside it so it
                 // auto-hides with the controls.
                 //
-                // FAKE landscape (reliable with rotation lock ON): the device
-                // stays portrait and the user tilts the phone to watch. The WHOLE
-                // player — video AND chrome (top bar, clock, title, times, timeline,
-                // transport, subtitles, Fit/Cover, close) — is laid out in one
-                // landscape-shaped frame (portrait width/height swapped), then
-                // rotated 90° and centered to fill the portrait screen. One frame,
-                // one rotation, so everything reads horizontally to the tilted user
-                // — true landscape look without depending on a device rotation that
-                // the rotation lock would block.
+                // REAL landscape: the cover's `onAppear` requests a device
+                // rotation (works even with the rotation lock ON), so this view
+                // is laid out directly in the rotated screen's coordinates — no
+                // width/height swap, no 90° `rotationEffect`, no safe-inset
+                // remap. `geo.size` tracks the rotation, so the layout settles
+                // into the true landscape frame once the rotation completes.
                 GeometryReader { geo in
-                    // Landscape frame = portrait size swapped. Also the VLC
-                    // Fill/Cover drawable surface.
-                    let landscapeSize = CGSize(width: geo.size.height, height: geo.size.width)
                     VLCFullscreenView(
                         streamURL: streamURL,
                         resumeKey: video.path,
                         title: video.displayName,
-                        landscapeSize: landscapeSize,
-                        // Portrait safe-area insets remapped into the rotated
-                        // landscape frame: a 90° rotation sends portrait-top → the
-                        // landscape leading edge, portrait-bottom → trailing,
-                        // portrait-leading → bottom, portrait-trailing → top.
-                        safeInsets: EdgeInsets(
-                            top: geo.safeAreaInsets.trailing,
-                            leading: geo.safeAreaInsets.top,
-                            bottom: geo.safeAreaInsets.leading,
-                            trailing: geo.safeAreaInsets.bottom
-                        ),
+                        landscapeSize: geo.size,
+                        safeInsets: geo.safeAreaInsets,
                         onClose: { isFullscreen = false }
                     )
-                    .frame(width: landscapeSize.width, height: landscapeSize.height)
-                    .rotationEffect(.degrees(90))
-                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    .frame(width: geo.size.width, height: geo.size.height)
                 }
                 .ignoresSafeArea()
             }
@@ -636,13 +612,13 @@ private struct VLCFullscreenView: View {
     let resumeKey: String
     /// Clean video title shown centered in the top bar (e.g. the filename).
     let title: String
-    /// The landscape-shaped frame this whole view is laid out in (portrait
-    /// width/height swapped) BEFORE the wrapper rotates it 90°. Video + chrome
-    /// share this frame; it also doubles as the VLC Fill/Cover drawable surface.
+    /// The real landscape screen size this whole view is laid out in (the device
+    /// is rotated to true landscape while fullscreen). Video + chrome share this
+    /// frame; it also doubles as the VLC Fill/Cover drawable surface.
     let landscapeSize: CGSize
-    /// Safe-area insets already remapped into the landscape frame by the wrapper,
-    /// so the chrome keeps the close button and transport clear of the notch /
-    /// Dynamic Island / home indicator after the 90° rotation.
+    /// The screen's real landscape safe-area insets, so the chrome keeps the
+    /// close button and transport clear of the notch / Dynamic Island / home
+    /// indicator.
     let safeInsets: EdgeInsets
     /// Dismiss the fullscreen cover. Owned by `PlayerView`; the close button
     /// lives here so it fades in/out with the rest of the controls.
@@ -713,10 +689,9 @@ private struct VLCFullscreenView: View {
 
 
     var body: some View {
-        // Laid out in the LANDSCAPE frame (`landscapeSize`); the wrapper rotates
-        // this whole view 90° to fill the tilted phone. Video + chrome share one
-        // landscape coordinate space and one rotation, so bars/title/clock/times/
-        // timeline are all horizontal to the user — no per-element rotation. The
+        // Laid out directly in the REAL landscape screen frame (`landscapeSize`);
+        // the device itself is rotated while fullscreen, so video + chrome share
+        // one ordinary coordinate space — no rotation transforms anywhere. The
         // native status bar is hidden the whole time (see `.statusBarHidden`), so
         // the top bar carries its own clock.
         ZStack {

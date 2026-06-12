@@ -4,10 +4,17 @@ import UIKit
 /// iOS 16+ APIs (`UIWindowScene.requestGeometryUpdate`) — no private
 /// `UIDevice.setValue` orientation hacks.
 ///
-/// The app declares no `UISupportedInterfaceOrientations`, so the default mask
-/// (portrait + both landscapes) already permits the requests below; this just
-/// asks the active scene to rotate, then restores on the way out.
+/// `lockMask` is the app-wide source of truth read by the `AppDelegate`'s
+/// `supportedInterfaceOrientationsFor`: portrait everywhere by default, and
+/// landscape-only while the fullscreen player is up. The geometry request
+/// rotates the scene; the mask keeps it there (and keeps every other screen
+/// portrait).
 enum OrientationHelper {
+    /// Orientations currently allowed app-wide. The `AppDelegate` returns this
+    /// from `supportedInterfaceOrientationsFor`, so non-player screens stay
+    /// portrait and the fullscreen player is held in landscape.
+    static var lockMask: UIInterfaceOrientationMask = .portrait
+
     /// The active foreground window scene, if any. All requests target it.
     private static var activeScene: UIWindowScene? {
         UIApplication.shared.connectedScenes
@@ -24,30 +31,31 @@ enum OrientationHelper {
         activeScene?.interfaceOrientation ?? .portrait
     }
 
-    /// Request landscape for the fullscreen player. Defaults to landscape-right.
+    /// Lock to landscape-only for the fullscreen player, then request the
+    /// rotation. Defaults to landscape-right.
     static func lockLandscape() {
+        lockMask = .landscape
         request(.landscapeRight)
     }
 
-    /// Restore a previously-captured orientation, or portrait as a safe
-    /// fallback. Upside-down maps to portrait since it is not in the app mask.
+    /// Restore the portrait-only app default on fullscreen exit. The captured
+    /// pre-fullscreen orientation can only have been portrait (the app mask
+    /// forbids landscape outside the player), so everything maps to portrait.
     static func restore(_ orientation: UIInterfaceOrientation) {
-        switch orientation {
-        case .landscapeLeft:
-            request(.landscapeLeft)
-        case .landscapeRight:
-            request(.landscapeRight)
-        default:
-            request(.portrait)
-        }
+        lockMask = .portrait
+        request(.portrait)
     }
 
-    /// Issue the geometry update. Also nudges the root controller to re-evaluate
-    /// its supported orientations so the request is honored promptly.
+    /// Issue the geometry update. Also nudges the TOPMOST presented controller
+    /// (the `fullScreenCover` host when the player is up, else the root) to
+    /// re-evaluate its supported orientations so the request is honored promptly.
     private static func request(_ mask: UIInterfaceOrientationMask) {
         guard let scene = activeScene else { return }
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
-        scene.keyWindow?.rootViewController?
-            .setNeedsUpdateOfSupportedInterfaceOrientations()
+        var topmost = scene.keyWindow?.rootViewController
+        while let presented = topmost?.presentedViewController {
+            topmost = presented
+        }
+        topmost?.setNeedsUpdateOfSupportedInterfaceOrientations()
     }
 }

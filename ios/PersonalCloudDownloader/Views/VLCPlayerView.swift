@@ -530,9 +530,9 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// per-frame retry runs only until it succeeds once.
     private var aspectApplied = false
 
-    /// Toggle Fit ⇄ Cover and apply. `drawableSize` is the current fake-landscape
-    /// fullscreen surface (width/height already swapped by the caller), used as
-    /// the crop aspect for Cover. Called from the fullscreen ratio button.
+    /// Toggle Fit ⇄ Cover and apply. `drawableSize` is the current real-landscape
+    /// fullscreen surface size, used as the crop aspect for Cover. Called from
+    /// the fullscreen ratio button.
     func cycleAspect(drawableSize: CGSize) {
         aspectMode = aspectMode.next
         aspectApplied = false
