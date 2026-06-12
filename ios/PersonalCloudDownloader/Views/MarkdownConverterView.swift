@@ -18,19 +18,28 @@ struct MarkdownConverterView: View {
     @State private var isSavePresented = false
     @FocusState private var isURLFocused: Bool
 
+    // Palette mirrored from the Home redesign tokens.
+    private let screenBackground = Color(red: 0.008, green: 0.022, blue: 0.055)
+    private let surface = Color(red: 0.035, green: 0.065, blue: 0.125)
+    private let surfaceRaised = Color(red: 0.055, green: 0.095, blue: 0.175)
+    private let inputWell = Color(red: 0.022, green: 0.05, blue: 0.105)
+    private let hairline = Color.white.opacity(0.08)
+    private let mutedText = Color(red: 0.56, green: 0.64, blue: 0.78)
+    private let premiumBlue = Color(red: 0.30, green: 0.59, blue: 1.0)
+
     var body: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.035, green: 0.055, blue: 0.09),
-                        Color(red: 0.06, green: 0.085, blue: 0.13),
-                        Color(red: 0.025, green: 0.035, blue: 0.055),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+                ZStack {
+                    screenBackground.ignoresSafeArea()
+                    RadialGradient(
+                        colors: [premiumBlue.opacity(0.12), .clear],
+                        center: .init(x: 0.9, y: -0.05),
+                        startRadius: 10,
+                        endRadius: 380
+                    )
+                    .ignoresSafeArea()
+                }
                 .onTapGesture {
                     dismissKeyboard()
                 }
@@ -88,15 +97,21 @@ struct MarkdownConverterView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("DOCUMENT WORKBENCH")
+                .font(.system(size: 11, weight: .bold))
+                .tracking(1.6)
+                .foregroundStyle(premiumBlue)
+
             Text("CloudBox Convert")
-                .font(.system(size: 30, weight: .heavy, design: .rounded))
-                .foregroundStyle(Color(red: 0.92, green: 0.96, blue: 1.0))
+                .font(.system(size: 26, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white)
 
             Text("File, photo, or webpage into clean Markdown.")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(Color(red: 0.62, green: 0.70, blue: 0.82))
+                .font(.system(size: 13.5, weight: .medium))
+                .foregroundStyle(mutedText)
         }
+        .padding(.top, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onTapGesture {
             dismissKeyboard()
@@ -106,16 +121,18 @@ struct MarkdownConverterView: View {
     private var sourcePanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Source")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(Color(red: 0.9, green: 0.95, blue: 1.0))
+                Text("SOURCE")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.6)
+                    .foregroundStyle(premiumBlue)
 
                 Spacer()
 
                 Text(sourceCaption)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color(red: 0.54, green: 0.72, blue: 1.0))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(isConverting ? premiumBlue : mutedText)
                     .lineLimit(1)
+                    .contentTransition(.opacity)
             }
 
             HStack(spacing: 10) {
@@ -125,13 +142,13 @@ struct MarkdownConverterView: View {
                 } label: {
                     Label("File", systemImage: "doc.badge.plus")
                 }
-                .buttonStyle(ConverterPillStyle(tint: Color(red: 0.18, green: 0.47, blue: 1.0), isProminent: true))
+                .buttonStyle(ConverterPillStyle(tint: premiumBlue, isProminent: true))
 
                 if #available(iOS 16.0, *) {
                     PhotoPickerButton(isDisabled: isConverting) { result in
                         await loadSelectedPhoto(result)
                     }
-                    .buttonStyle(ConverterPillStyle(tint: Color(red: 0.34, green: 0.62, blue: 1.0), isProminent: false))
+                    .buttonStyle(ConverterPillStyle(tint: premiumBlue, isProminent: false))
                 }
 
                 Button {
@@ -140,7 +157,7 @@ struct MarkdownConverterView: View {
                 } label: {
                     Label("Convert", systemImage: "arrow.triangle.2.circlepath")
                 }
-                .buttonStyle(ConverterPillStyle(tint: Color(red: 0.24, green: 0.74, blue: 0.94), isProminent: selectedFile != nil))
+                .buttonStyle(ConverterPillStyle(tint: premiumBlue, isProminent: selectedFile != nil))
                 .disabled(selectedFile == nil || isConverting)
             }
             .lineLimit(1)
@@ -148,8 +165,8 @@ struct MarkdownConverterView: View {
 
             if let selectedFile {
                 Label(selectedFile.filename, systemImage: "paperclip")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color(red: 0.72, green: 0.80, blue: 0.91))
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(mutedText)
                     .lineLimit(1)
             }
 
@@ -157,7 +174,7 @@ struct MarkdownConverterView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "link")
                         .font(.callout.weight(.bold))
-                        .foregroundStyle(Color(red: 0.48, green: 0.68, blue: 1.0))
+                        .foregroundStyle(premiumBlue)
 
                     TextField("https://example.com/page", text: $urlText)
                         .focused($isURLFocused)
@@ -166,18 +183,19 @@ struct MarkdownConverterView: View {
                         .keyboardType(.URL)
                         .textContentType(.URL)
                         .submitLabel(.go)
-                        .foregroundStyle(Color(red: 0.93, green: 0.97, blue: 1.0))
-                        .tint(Color(red: 0.40, green: 0.64, blue: 1.0))
+                        .font(.system(size: 14, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.94))
+                        .tint(premiumBlue)
                         .onSubmit {
                             Task { await convertURL() }
                         }
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 46)
-                .background(Color(red: 0.09, green: 0.13, blue: 0.19), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(inputWell, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(isURLFocused ? Color(red: 0.33, green: 0.58, blue: 1.0) : Color(red: 0.25, green: 0.32, blue: 0.42), lineWidth: 1)
+                        .stroke(isURLFocused ? premiumBlue.opacity(0.7) : hairline, lineWidth: 1)
                 }
 
                 Button {
@@ -187,21 +205,36 @@ struct MarkdownConverterView: View {
                         .font(.headline.weight(.heavy))
                         .frame(width: 42, height: 42)
                 }
-                .buttonStyle(ConverterIconButtonStyle(tint: Color(red: 0.20, green: 0.50, blue: 1.0)))
+                .buttonStyle(ConverterIconButtonStyle(tint: premiumBlue))
                 .disabled(trimmedURL.isEmpty || isConverting)
                 .accessibilityLabel("Convert URL")
             }
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(red: 0.075, green: 0.105, blue: 0.155).opacity(0.96))
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color(red: 0.26, green: 0.34, blue: 0.46).opacity(0.75), lineWidth: 1)
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(surface)
+                .overlay(alignment: .top) {
+                    LinearGradient(
+                        colors: [premiumBlue.opacity(0.10), .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 50)
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                }
         }
-        .shadow(color: Color(red: 0.01, green: 0.02, blue: 0.04).opacity(0.34), radius: 18, y: 10)
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [premiumBlue.opacity(0.40), hairline],
+                        startPoint: .topTrailing,
+                        endPoint: .bottomLeading
+                    ),
+                    lineWidth: 1
+                )
+        }
     }
 
     @ViewBuilder
@@ -209,26 +242,26 @@ struct MarkdownConverterView: View {
         VStack(alignment: .leading, spacing: 8) {
             if isConverting {
                 Label("Converting...", systemImage: "sparkles")
-                    .font(.callout.weight(.bold))
-                    .foregroundStyle(Color(red: 0.68, green: 0.82, blue: 1.0))
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(premiumBlue)
             }
 
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.38))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(red: 1.0, green: 0.62, blue: 0.26))
             }
 
             if let emptyResultMessage {
                 Label(emptyResultMessage, systemImage: "doc.text.magnifyingglass")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(Color(red: 0.70, green: 0.76, blue: 0.86))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(mutedText)
             }
 
             if let convertedURL {
                 Label(convertedURL, systemImage: "checkmark.seal.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color(red: 0.46, green: 0.72, blue: 1.0))
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(premiumBlue)
                     .lineLimit(2)
             }
         }
@@ -238,16 +271,17 @@ struct MarkdownConverterView: View {
     private var markdownPreview: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Preview")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(Color(red: 0.91, green: 0.96, blue: 1.0))
+                Text("PREVIEW")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.6)
+                    .foregroundStyle(premiumBlue)
 
                 Spacer()
 
                 if hasMarkdown {
                     Text("\(markdown.count) chars")
-                        .font(.caption.monospacedDigit().weight(.bold))
-                        .foregroundStyle(Color(red: 0.56, green: 0.68, blue: 0.84))
+                        .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(mutedText)
                 }
             }
 
@@ -256,15 +290,19 @@ struct MarkdownConverterView: View {
                     .padding(16)
             }
             .frame(maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
-            .background(Color(red: 0.035, green: 0.055, blue: 0.085), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(inputWell, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color(red: 0.24, green: 0.34, blue: 0.48).opacity(0.78), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(hairline, lineWidth: 1)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(red: 0.065, green: 0.09, blue: 0.135), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(hairline, lineWidth: 1)
+        }
         .onTapGesture {
             dismissKeyboard()
         }
@@ -304,7 +342,11 @@ struct MarkdownConverterView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(10)
-        .background(Color(red: 0.055, green: 0.075, blue: 0.11).opacity(0.98), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(surfaceRaised.opacity(0.98), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(hairline, lineWidth: 1)
+        }
         .onTapGesture {
             dismissKeyboard()
         }
@@ -627,18 +669,18 @@ private struct ConverterPillStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.subheadline.weight(.bold))
-            .foregroundStyle(Color(red: 0.92, green: 0.97, blue: 1.0))
+            .font(.system(size: 14, weight: .bold, design: .rounded))
+            .foregroundStyle(isProminent ? Color.white : tint)
             .labelStyle(.titleAndIcon)
             .padding(.horizontal, 12)
             .frame(height: 42)
             .background(
-                Capsule(style: .continuous)
-                    .fill(isProminent ? tint.opacity(0.95) : Color(red: 0.105, green: 0.145, blue: 0.205))
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(isProminent ? tint : tint.opacity(0.14))
             )
             .overlay {
-                Capsule(style: .continuous)
-                    .stroke(tint.opacity(isProminent ? 0.15 : 0.55), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(isProminent ? Color.white.opacity(0.18) : tint.opacity(0.30), lineWidth: 1)
             }
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(!isEnabled ? 0.42 : (configuration.isPressed ? 0.82 : 1))
@@ -670,15 +712,21 @@ private struct ConverterActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.caption.weight(.heavy))
+            .font(.system(size: 12, weight: .bold, design: .rounded))
             .labelStyle(.titleAndIcon)
-            .foregroundStyle(isDestructive ? Color(red: 1.0, green: 0.72, blue: 0.64) : Color(red: 0.86, green: 0.92, blue: 1.0))
+            .foregroundStyle(isDestructive ? Color(red: 0.97, green: 0.55, blue: 0.48) : Color(red: 0.30, green: 0.59, blue: 1.0))
             .padding(.horizontal, 12)
             .frame(height: 36)
-            .background(Color(red: 0.10, green: 0.135, blue: 0.19), in: Capsule(style: .continuous))
+            .background(
+                (isDestructive ? Color(red: 0.97, green: 0.44, blue: 0.36) : Color(red: 0.30, green: 0.59, blue: 1.0)).opacity(0.13),
+                in: Capsule(style: .continuous)
+            )
             .overlay {
                 Capsule(style: .continuous)
-                    .stroke(isDestructive ? Color(red: 1.0, green: 0.45, blue: 0.35).opacity(0.35) : Color(red: 0.36, green: 0.48, blue: 0.64).opacity(0.55), lineWidth: 1)
+                    .stroke(
+                        (isDestructive ? Color(red: 0.97, green: 0.44, blue: 0.36) : Color(red: 0.30, green: 0.59, blue: 1.0)).opacity(0.30),
+                        lineWidth: 1
+                    )
             }
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .opacity(!isEnabled ? 0.42 : (configuration.isPressed ? 0.78 : 1))
