@@ -1,17 +1,28 @@
 import Foundation
 import SwiftUI
 
+/// CloudBox Home: a private-cloud dashboard with one telemetry panel, an
+/// asymmetric metrics bento, and a single action row. Visual language is
+/// deliberately restrained — deep navy surfaces, hairline strokes, one blue
+/// accent, monospaced telemetry — so it reads handcrafted rather than
+/// template-like. All data, refresh, and navigation behavior is unchanged.
 struct HomeView: View {
     private let serverIP = "100.95.39.107"
     private let backendBaseURL = CompletedFilesAPI.baseURL
     private let refreshInterval: UInt64 = 12_000_000_000
-    private let screenBackground = Color(red: 0.015, green: 0.035, blue: 0.075)
-    private let cardBackground = Color(red: 0.025, green: 0.075, blue: 0.155)
-    private let cardStroke = Color(red: 0.16, green: 0.39, blue: 0.82)
-    private let mutedText = Color(red: 0.58, green: 0.66, blue: 0.80)
-    private let premiumBlue = Color(red: 0.28, green: 0.58, blue: 1.0)
+
+    // MARK: Palette — semantic tokens, used consistently across the screen.
+    private let screenBackground = Color(red: 0.008, green: 0.022, blue: 0.055)
+    private let surface = Color(red: 0.035, green: 0.065, blue: 0.125)
+    private let surfaceRaised = Color(red: 0.055, green: 0.095, blue: 0.175)
+    private let hairline = Color.white.opacity(0.08)
+    private let mutedText = Color(red: 0.56, green: 0.64, blue: 0.78)
+    private let premiumBlue = Color(red: 0.30, green: 0.59, blue: 1.0)
+    private let videosViolet = Color(red: 0.64, green: 0.52, blue: 1.0)
+    private let filesTeal = Color(red: 0.28, green: 0.76, blue: 0.70)
 
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dashboard = HomeDashboardState()
     @State private var refreshTask: Task<Void, Never>?
     @State private var refreshGeneration = 0
@@ -19,17 +30,21 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    heroHeader
-                    statusStrip
-                    dashboardGrid
+                VStack(alignment: .leading, spacing: 16) {
+                    brandHeader
+                    serverPanel
+                    metricsBento
                     tailscaleAction
                     privateCloudNote
                 }
                 .padding(.horizontal, 18)
-                .padding(.top, 22)
+                .padding(.top, 14)
                 .padding(.bottom, 34)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // One animation driver for the whole dashboard: counts and
+                // status text settle with a short ease whenever fresh data
+                // lands (contentTransition handles the digit morph).
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: dashboard.lastUpdated)
             }
             .background(homeBackground)
             .navigationTitle("Home")
@@ -54,443 +69,389 @@ struct HomeView: View {
         }
     }
 
+    // MARK: Background — deep navy with ONE soft accent bloom, no busy gradients.
+
     private var homeBackground: some View {
         ZStack {
             screenBackground.ignoresSafeArea()
-            LinearGradient(
-                colors: [
-                    Color(red: 0.03, green: 0.13, blue: 0.28).opacity(0.95),
-                    screenBackground,
-                    Color(red: 0.0, green: 0.015, blue: 0.035)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
             RadialGradient(
-                colors: [Color.blue.opacity(0.22), .clear],
-                center: .topLeading,
-                startRadius: 20,
-                endRadius: 300
+                colors: [premiumBlue.opacity(0.14), .clear],
+                center: .init(x: 0.85, y: -0.05),
+                startRadius: 10,
+                endRadius: 420
             )
             .ignoresSafeArea()
         }
     }
 
-    private var heroHeader: some View {
-        ZStack(alignment: .topTrailing) {
-            HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("Private media shelf")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(premiumBlue)
-                        .textCase(.uppercase)
-                        .tracking(1.2)
+    // MARK: Brand header — wordmark + live subtitle, no card chrome.
 
-                    Text("CloudBox")
-                        .font(.system(size: 42, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
+    private var brandHeader: some View {
+        HStack(spacing: 13) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [premiumBlue, Color(red: 0.07, green: 0.22, blue: 0.55)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 46, height: 46)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                    }
 
-                    Text(dashboard.headerSubtitle)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(mutedText)
-                        .lineLimit(2)
-
-                    serverPill
-
-                    heroStatsRow
-                }
-                .layoutPriority(1)
-
-                Spacer(minLength: 4)
-
-                cloudBoxIllustration
-                    .frame(width: 126, height: 124)
-                    .opacity(0.95)
+                Image(systemName: "cloud.fill")
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundStyle(Color.white)
             }
-            .padding(24)
+            .shadow(color: premiumBlue.opacity(0.35), radius: 12, y: 6)
+            .accessibilityHidden(true)
 
-            Image(systemName: serverStatusIcon)
-                .font(.title2.weight(.bold))
-                .foregroundStyle(serverStatusColor)
-                .frame(width: 52, height: 52)
-                .background(serverStatusColor.opacity(0.20), in: Circle())
-                .overlay(Circle().stroke(serverStatusColor.opacity(0.9), lineWidth: 1.5))
-                .shadow(color: serverStatusColor.opacity(0.35), radius: 14)
-                .padding(16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("CloudBox")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white)
+
+                Text(dashboard.headerSubtitle)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(mutedText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .contentTransition(.opacity)
+            }
+
+            Spacer(minLength: 0)
         }
+        .padding(.top, 4)
+    }
+
+    // MARK: Server panel — the screen's telemetry centerpiece.
+
+    /// Private-tailnet panel: status orb + label, monospaced server address,
+    /// and an updated/refresh footer. Dot-grid texture + corner bloom give it
+    /// a quiet "infrastructure" character instead of a generic stat card.
+    private var serverPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("PRIVATE TAILNET")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.6)
+                    .foregroundStyle(premiumBlue)
+
+                Spacer(minLength: 8)
+
+                StatusOrb(color: serverStatusColor, animates: !reduceMotion)
+
+                Text(dashboard.serverStatusText)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(serverStatusColor)
+                    .contentTransition(.opacity)
+            }
+            .padding(.bottom, 14)
+
+            HStack(spacing: 10) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(premiumBlue)
+                    .accessibilityHidden(true)
+
+                Text(serverIP)
+                    .font(.system(size: 23, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("Server address \(serverIP)")
+
+                Spacer(minLength: 0)
+            }
+            .padding(.bottom, 14)
+
+            Rectangle()
+                .fill(hairline)
+                .frame(height: 1)
+                .padding(.bottom, 11)
+
+            HStack(spacing: 6) {
+                Image(systemName: dashboard.isRefreshing ? "arrow.triangle.2.circlepath" : "clock")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(mutedText)
+                    .accessibilityHidden(true)
+
+                Text("Updated")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(mutedText)
+
+                Text(dashboard.lastUpdatedText)
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .contentTransition(.opacity)
+
+                Spacer(minLength: 8)
+
+                Text("Oracle · Tokyo")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(mutedText.opacity(0.85))
+            }
+        }
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.09, green: 0.24, blue: 0.52),
-                            Color(red: 0.015, green: 0.045, blue: 0.11),
-                            Color(red: 0.0, green: 0.02, blue: 0.055)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+            ZStack {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(surface)
+
+                // Quiet infrastructure texture — static, cheap to draw.
+                DotGrid()
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                RadialGradient(
+                    colors: [premiumBlue.opacity(0.16), .clear],
+                    center: .topTrailing,
+                    startRadius: 4,
+                    endRadius: 240
                 )
-                .overlay(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.16), .clear],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(height: 96)
-                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                }
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(
                     LinearGradient(
-                        colors: [premiumBlue.opacity(0.86), Color.white.opacity(0.18)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+                        colors: [premiumBlue.opacity(0.45), hairline],
+                        startPoint: .topTrailing,
+                        endPoint: .bottomLeading
                     ),
-                    lineWidth: 1.25
+                    lineWidth: 1
                 )
         }
-        .shadow(color: premiumBlue.opacity(0.30), radius: 30, y: 18)
     }
 
-    private var heroStatsRow: some View {
-        HStack(spacing: 10) {
-            heroStat(title: "Server", value: dashboard.serverStatusText, tint: serverStatusColor)
-            heroStat(title: "Updated", value: dashboard.lastUpdatedText, tint: premiumBlue)
+    // MARK: Metrics bento — one wide card + a pair, instead of a uniform grid.
+
+    private var metricsBento: some View {
+        VStack(spacing: 12) {
+            downloaderCard
+
+            HStack(spacing: 12) {
+                compactMetricCard(
+                    icon: "play.rectangle.fill",
+                    title: "Videos",
+                    value: dashboard.completedFilesText,
+                    detail: "Completed files",
+                    tint: videosViolet
+                )
+
+                compactMetricCard(
+                    icon: "externaldrive.fill",
+                    title: "Files",
+                    value: dashboard.filesIndexText,
+                    detail: dashboard.filesIndexDetail,
+                    tint: filesTeal
+                )
+            }
         }
     }
 
-    private func heroStat(title: String, value: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(mutedText)
-                .textCase(.uppercase)
-            Text(value)
-                .font(.system(size: 15, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
+    /// Wide downloader card: count dominates, wave ornament fills the trailing
+    /// space. The asymmetry (one wide + two compact) is what keeps the bento
+    /// from reading as a template grid.
+    private var downloaderCard: some View {
+        HStack(alignment: .center, spacing: 14) {
+            iconChip("arrow.down.circle.fill", tint: premiumBlue)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Downloader")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(mutedText)
+
+                Text(dashboard.torrentCountText)
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .contentTransition(.numericText())
+
+                Text(dashboard.activeTorrentText)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(mutedText)
+                    .lineLimit(1)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 8)
+
+            WaveLines(tint: premiumBlue.opacity(0.30))
+                .frame(width: 110, height: 58)
+                .accessibilityHidden(true)
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
-        .frame(minWidth: 92, alignment: .leading)
-        .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(tint.opacity(0.34), lineWidth: 1)
-        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(metricSurface(tint: premiumBlue))
+        .accessibilityElement(children: .combine)
     }
 
-    private var serverPill: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "lock.shield")
-                .font(.caption.weight(.semibold))
-            Text("Tailscale private")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(Color.white)
-            Text(serverIP)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(mutedText)
-                .textSelection(.enabled)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color.blue.opacity(0.22), in: Capsule())
-        .overlay(Capsule().stroke(Color.blue.opacity(0.25), lineWidth: 1))
-    }
-
-    private var cloudBoxIllustration: some View {
-        ZStack {
-            ForEach(0..<4) { index in
-                Circle()
-                    .stroke(Color.blue.opacity(0.08), lineWidth: 1)
-                    .frame(width: CGFloat(76 + index * 24), height: CGFloat(76 + index * 24))
+    private func compactMetricCard(
+        icon: String,
+        title: String,
+        value: String,
+        detail: String,
+        tint: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                iconChip(icon, tint: tint)
+                Spacer(minLength: 0)
             }
 
-            Image(systemName: "server.rack")
-                .font(.system(size: 56, weight: .semibold))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [Color(red: 0.35, green: 0.67, blue: 1.0), Color(red: 0.04, green: 0.16, blue: 0.34)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(color: Color.blue.opacity(0.35), radius: 10, y: 6)
-                .offset(x: -12, y: -8)
-
-            Image(systemName: "cloud.fill")
-                .font(.system(size: 58, weight: .semibold))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [Color(red: 0.13, green: 0.42, blue: 0.95), Color(red: 0.02, green: 0.10, blue: 0.24)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(color: Color.blue.opacity(0.45), radius: 12, y: 8)
-                .offset(x: 18, y: 26)
-        }
-    }
-
-    private var statusStrip: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 154), spacing: 12)], spacing: 12) {
-            statusPill(
-                icon: serverStatusIcon,
-                title: "Server",
-                value: dashboard.serverStatusText,
-                tint: serverStatusColor
-            )
-
-            statusPill(
-                icon: dashboard.isRefreshing ? "arrow.triangle.2.circlepath" : "clock",
-                title: "Updated",
-                value: dashboard.lastUpdatedText,
-                tint: .secondary
-            )
-        }
-    }
-
-    private func statusPill(icon: String, title: String, value: String, tint: Color) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(tint)
-                .frame(width: 44, height: 44)
-                .background(tint.opacity(0.18), in: Circle())
-                .overlay(Circle().stroke(tint.opacity(0.32), lineWidth: 1))
-                .shadow(color: tint.opacity(0.22), radius: 10)
+            Spacer(minLength: 2)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(mutedText)
+                    .lineLimit(1)
+
                 Text(value)
-                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .monospacedDigit()
                     .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .contentTransition(.numericText())
+
+                Text(detail)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(mutedText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .layoutPriority(1)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [tint.opacity(0.24), cardBackground.opacity(0.92)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(tint.opacity(0.50), lineWidth: 1.25)
-        }
-        .shadow(color: tint.opacity(0.16), radius: 16, y: 9)
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 128, alignment: .topLeading)
+        .background(metricSurface(tint: tint))
+        .accessibilityElement(children: .combine)
     }
 
-    private var dashboardGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 12)], spacing: 12) {
-            dashboardCard(
-                icon: "arrow.down.circle.fill",
-                title: "Downloader",
-                value: dashboard.torrentCountText,
-                detail: dashboard.activeTorrentText,
-                tint: .blue
-            )
-
-            dashboardCard(
-                icon: "play.rectangle.fill",
-                title: "Videos",
-                value: dashboard.completedFilesText,
-                detail: "Completed files",
-                tint: .purple
-            )
-
-            dashboardCard(
-                icon: "externaldrive.fill",
-                title: "Files",
-                value: dashboard.filesIndexText,
-                detail: dashboard.filesIndexDetail,
-                tint: .teal
-            )
-
-        }
-    }
-
-    private func dashboardCard(icon: String, title: String, value: String, detail: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Image(systemName: icon)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(Color.white)
-                .frame(width: 52, height: 52)
-                .background(
-                    LinearGradient(
-                        colors: [tint.opacity(0.95), tint.opacity(0.35)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    in: Circle()
+    /// Shared metric-card surface: flat raised navy, hairline stroke, and a
+    /// whisper of the card's tint along the top edge. No glow shadows.
+    private func metricSurface(tint: Color) -> some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(surfaceRaised)
+            .overlay(alignment: .top) {
+                LinearGradient(
+                    colors: [tint.opacity(0.14), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
-                .shadow(color: tint.opacity(0.32), radius: 12, y: 7)
-
-            Spacer(minLength: 4)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(mutedText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-                Text(value)
-                    .font(.system(size: 27, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                Text(detail)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(mutedText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+                .frame(height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 160, alignment: .topLeading)
-        .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [tint.opacity(0.18), cardBackground.opacity(0.86)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .overlay(alignment: .bottom) {
-                    WaveLines(tint: tint.opacity(0.28))
-                        .frame(height: 42)
-                        .offset(y: 10)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                }
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(tint.opacity(0.45), lineWidth: 1)
-        }
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(hairline, lineWidth: 1)
+            }
     }
+
+    /// Small tinted icon chip shared by every metric card — one size, one
+    /// stroke, one icon family.
+    private func iconChip(_ systemName: String, tint: Color) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(tint)
+            .frame(width: 38, height: 38)
+            .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(tint.opacity(0.30), lineWidth: 1)
+            }
+            .accessibilityHidden(true)
+    }
+
+    // MARK: Tailscale action — the screen's single tappable row.
 
     private var tailscaleAction: some View {
         Link(destination: URL(string: "tailscale://")!) {
-            actionCardContent(
-                icon: "network",
-                title: "Open Tailscale",
-                subtitle: "Private connection / VPN route",
-                tint: .orange
-            )
+            HStack(spacing: 13) {
+                ZStack(alignment: .bottomTrailing) {
+                    Image(systemName: "globe")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.62, green: 0.80, blue: 1.0))
+                        .frame(width: 46, height: 46)
+                        .background(premiumBlue.opacity(0.14), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .stroke(premiumBlue.opacity(0.32), lineWidth: 1)
+                        }
+
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 18, height: 18)
+                        .background(premiumBlue, in: Circle())
+                        .offset(x: 5, y: 5)
+                }
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Open Tailscale")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(1)
+
+                    Text("Private connection / VPN route")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(mutedText)
+                        .lineLimit(1)
+                }
+                .layoutPriority(1)
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(premiumBlue)
+                    .frame(width: 34, height: 34)
+                    .background(premiumBlue.opacity(0.12), in: Circle())
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(surfaceRaised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(premiumBlue.opacity(0.30), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(HomePressStyle())
     }
 
-    private func actionCardContent(icon: String, title: String, subtitle: String, tint: Color) -> some View {
-        HStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: "globe")
-                    .font(.system(size: 34, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.62, green: 0.80, blue: 1.0))
-                    .frame(width: 62, height: 62)
-                    .background(Color.blue.opacity(0.16), in: Circle())
-                    .overlay(Circle().stroke(Color.blue.opacity(0.42), lineWidth: 1))
-
-                Image(systemName: "lock.fill")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 26, height: 26)
-                    .background(Color.blue, in: Circle())
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                Text(subtitle)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Color.blue)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-            }
-            .layoutPriority(1)
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(Color(red: 0.70, green: 0.83, blue: 1.0))
-                .frame(width: 52, height: 52)
-                .background(Color.blue.opacity(0.13), in: Circle())
-                .overlay(Circle().stroke(Color.blue.opacity(0.72), lineWidth: 1.5))
-        }
-        .padding(18)
-        .background(
-            LinearGradient(
-                colors: [Color.blue.opacity(0.20), cardBackground.opacity(0.90)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.blue.opacity(0.58), lineWidth: 1.25)
-        }
-        .shadow(color: Color.blue.opacity(0.18), radius: 18, y: 10)
-    }
+    // MARK: Footer note — quiet, no card competition.
 
     private var privateCloudNote: some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: "checkmark.shield")
-                .font(.system(size: 34, weight: .medium))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(mutedText)
-                .frame(width: 54)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
+
             Text("Private CloudBox access stays behind Tailscale. Offline values mean the phone cannot reach the server right now.")
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(mutedText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground.opacity(0.68), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(cardStroke.opacity(0.38), lineWidth: 1)
-        }
+        .padding(.horizontal, 4)
+        .padding(.top, 2)
     }
 
-    private var serverStatusIcon: String {
-        if dashboard.isCheckingUnknownServer {
-            return "arrow.triangle.2.circlepath"
-        }
-
-        switch dashboard.serverStatus {
-        case .loading:
-            return "arrow.triangle.2.circlepath"
-        case .online:
-            return "checkmark.circle.fill"
-        case .offline:
-            return "xmark.circle.fill"
-        }
-    }
+    // MARK: Status mapping (unchanged behavior)
 
     private var serverStatusColor: Color {
         if dashboard.isCheckingUnknownServer {
@@ -640,6 +601,38 @@ struct HomeView: View {
     }
 }
 
+/// Live status indicator: a solid dot with a slow expanding pulse ring.
+/// The pulse is purely decorative, runs on transform/opacity only, and is
+/// disabled entirely under Reduce Motion.
+private struct StatusOrb: View {
+    let color: Color
+    let animates: Bool
+
+    @State private var pulsing = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(color.opacity(0.55), lineWidth: 1)
+                .frame(width: 9, height: 9)
+                .scaleEffect(pulsing ? 2.1 : 1)
+                .opacity(pulsing ? 0 : 0.8)
+
+            Circle()
+                .fill(color)
+                .frame(width: 9, height: 9)
+        }
+        .frame(width: 20, height: 20)
+        .onAppear {
+            guard animates else { return }
+            withAnimation(.easeOut(duration: 1.8).repeatForever(autoreverses: false)) {
+                pulsing = true
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 private struct HomePressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -741,6 +734,31 @@ private enum HomeServerStatus: Equatable {
     }
 }
 
+/// Static dot-grid texture for the server panel — a quiet nod to rack/console
+/// UIs. Drawn once per layout; no animation, no hit testing.
+private struct DotGrid: View {
+    var body: some View {
+        Canvas { context, size in
+            let step: CGFloat = 19
+            var y: CGFloat = 8
+            while y < size.height {
+                var x: CGFloat = 8
+                while x < size.width {
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: x, y: y, width: 1.6, height: 1.6)),
+                        with: .color(.white.opacity(0.045))
+                    )
+                    x += step
+                }
+                y += step
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Decorative flowing lines for the downloader card's trailing space — pure
+/// ornament (not data), kept faint so the count stays the focal point.
 private struct WaveLines: View {
     let tint: Color
 
