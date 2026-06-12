@@ -60,7 +60,12 @@ struct MarkdownConverterView: View {
 
                     actionBar
                         .padding(.horizontal, 16)
-                        .padding(.bottom, 12)
+                        // The floating CloudBox tab bar lives in the TabView's bottom
+                        // safeAreaInset, but pushed navigation destinations don't inherit
+                        // that inset, so this screen must clear the bar's height (~74pt)
+                        // itself. While the URL field has focus the keyboard covers the
+                        // tab bar and provides its own inset, so the plain 12pt gap applies.
+                        .padding(.bottom, isURLFocused ? 12 : 86)
                 }
             }
             .navigationTitle("Markdown Converter")
