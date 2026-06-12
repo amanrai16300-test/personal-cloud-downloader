@@ -52,12 +52,23 @@ struct NetworkUsageView: View {
                 stopAutoRefresh()
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active && isVisible {
+                if phase == .active {
+                    guard isVisible else { return }
+                    // Mirror the tab-switch recovery: a request suspended
+                    // mid-flight can resume on a dead Tailscale socket and
+                    // hold isLoading, which would make loadUsage() bail out.
+                    // Cancel it, invalidate its generation, and restart the
+                    // loop after the Tailscale warm-up delay.
+                    stopAutoRefresh()
+                    refreshGeneration += 1
+                    isLoading = false
                     Task {
                         try? await Task.sleep(nanoseconds: 750_000_000)
-                        guard !Task.isCancelled else { return }
-                        await loadUsage()
+                        guard !Task.isCancelled, isVisible else { return }
+                        startAutoRefresh()
                     }
+                } else {
+                    stopAutoRefresh()
                 }
             }
         }
@@ -721,7 +732,13 @@ private enum NetworkUsageAPI {
             throw URLError(.badURL)
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+        // Dead Tailscale sockets after a foreground wake should fail fast so
+        // the 12s auto-refresh loop can retry, instead of hanging for the
+        // default 60s request timeout.
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+
+        let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw URLError(.badServerResponse)
         }
