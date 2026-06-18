@@ -862,9 +862,10 @@ struct HomeView: View {
         // (newest-first), preserving prior behavior so the strip still renders
         // and still opens the player.
         guard let videos = try? await CompletedFilesAPI.fetchVideos() else {
-            return items.enumerated().map { index, item in
+            let movies = items.enumerated().map { index, item in
                 RecentlyAddedEntry(kind: .movie(item), sortDate: backendOrderDate(at: index))
             }
+            return Array(movies.prefix(Self.recentlyAddedDisplayLimit))
         }
 
         let grouped = VideoGrouping.group(videos)
@@ -894,8 +895,14 @@ struct HomeView: View {
             }
         }
 
-        return entries.sorted { $0.sortDate > $1.sortDate }
+        // The backend over-fetches raw videos so episodes can be grouped; show
+        // only the newest few unique cards (one per movie / per series).
+        let ordered = entries.sorted { $0.sortDate > $1.sortDate }
+        return Array(ordered.prefix(Self.recentlyAddedDisplayLimit))
     }
+
+    /// Max unique Recently Added cards shown after series grouping.
+    private static let recentlyAddedDisplayLimit = 8
 
     /// A synthetic descending timestamp that preserves the backend's newest-first
     /// Recently Added order when a real `modified_at` is unavailable (earlier

@@ -65,7 +65,11 @@ class ConvertMarkdownURLRequest(BaseModel):
 VIDEO_PROGRESS_FILE = settings.download_complete_dir.parent / "video_progress.json"
 HOME_SERVER_LOCATION = "Oracle · Tokyo"
 HOME_WATCHED_COMPLETE_PERCENT = 90.0
-HOME_RECENTLY_ADDED_LIMIT = 8
+# Raw playable videos returned for `recently_added`. The client groups TV
+# episodes into series and then shows only the first few unique cards, so the
+# backend must over-fetch (a single series can span many episodes) to leave the
+# client enough rows to fill its visible slots.
+HOME_RECENTLY_ADDED_LIMIT = 40
 HOME_NETWORK_SAMPLE_SECONDS = 0.5
 # TMDB artwork enrichment for Home. Reuses the same TMDB scheme as
 # scripts/fetch_trends.py (api.themoviedb.org/3, TMDB_API_KEY env var, w500
