@@ -51,7 +51,7 @@ struct RootTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            HomeView()
+            HomeView(selectedTab: $selection)
                 .tag(Tab.home)
                 .toolbar(.hidden, for: .tabBar)
 

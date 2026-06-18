@@ -15,14 +15,19 @@ import SwiftUI
 /// + AVPlayer/VLC routing) and its saved-resume position is seeded before
 /// pushing the player.
 struct HomeView: View {
+    /// Top-level tab selection, injected by RootTabView so the "View Network"
+    /// shortcut can switch to the existing Network tab. Optional so the view
+    /// still previews standalone.
+    var selectedTab: Binding<RootTabView.Tab>?
+
     private let backendBaseURL = CompletedFilesAPI.baseURL
     private let refreshInterval: UInt64 = 12_000_000_000
 
     // MARK: Palette — semantic tokens, used consistently across the screen.
-    private let screenBackground = Color(red: 0.008, green: 0.022, blue: 0.045)
-    private let surface = Color(red: 0.035, green: 0.060, blue: 0.110)
-    private let surfaceRaised = Color(red: 0.050, green: 0.080, blue: 0.150)
-    private let hairline = Color.white.opacity(0.07)
+    private let screenBackground = Color(red: 0.018, green: 0.030, blue: 0.058)
+    private let surface = Color(red: 0.032, green: 0.052, blue: 0.092)
+    private let surfaceRaised = Color(red: 0.045, green: 0.070, blue: 0.125)
+    private let hairline = Color.white.opacity(0.06)
     private let mutedText = Color(red: 0.56, green: 0.64, blue: 0.78)
     private let premiumBlue = Color(red: 0.42, green: 0.45, blue: 0.98)
     private let videosViolet = Color(red: 0.55, green: 0.50, blue: 1.0)
@@ -62,8 +67,9 @@ struct HomeView: View {
                     tailscaleAction
                 }
                 .padding(.horizontal, 18)
-                .padding(.top, 10)
-                .padding(.bottom, 34)
+                .padding(.top, 8)
+                // Clearance so the floating tab bar never covers the last row.
+                .padding(.bottom, 96)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // One animation driver for the whole dashboard: counts and
                 // status text settle with a short ease whenever fresh data
@@ -107,50 +113,40 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Background — deep navy, no busy gradients.
+    // MARK: Background — subtle deep navy→black, one faint top bloom, no glow.
 
     private var homeBackground: some View {
-        screenBackground.ignoresSafeArea()
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.022, green: 0.038, blue: 0.072),
+                    screenBackground,
+                    Color(red: 0.006, green: 0.012, blue: 0.028)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        }
     }
 
-    // MARK: Brand header — greeting + wordmark + subtitle, bell on the right.
+    // MARK: Brand header — greeting + wordmark + subtitle.
 
     private var brandHeader: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(dashboard.greetingText)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(mutedText)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(dashboard.greetingText)
+                .font(.system(size: 15.5, weight: .medium))
+                .foregroundStyle(mutedText)
 
-                Text("CloudBox")
-                    .font(.system(size: 46, weight: .heavy))
-                    .foregroundStyle(Color.white)
-                    .padding(.bottom, 1)
+            Text("CloudBox")
+                .font(.system(size: 42, weight: .heavy))
+                .foregroundStyle(Color.white)
 
-                Text("Your private cloud. Always connected.")
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(mutedText)
-            }
-
-            Spacer(minLength: 8)
-
-            // Visual-only notification bell (no inbox in this app yet).
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: "bell")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.92))
-                    .frame(width: 46, height: 46)
-                    .background(surfaceRaised, in: Circle())
-                    .overlay { Circle().stroke(hairline, lineWidth: 1) }
-
-                Circle()
-                    .fill(premiumBlue)
-                    .frame(width: 9, height: 9)
-                    .offset(x: -3, y: 3)
-            }
-            .accessibilityHidden(true)
-            .padding(.top, 6)
+            Text("Your private cloud. Always connected.")
+                .font(.system(size: 14.5, weight: .regular))
+                .foregroundStyle(mutedText)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Connection panel — status + link diagram centerpiece.
@@ -185,47 +181,67 @@ struct HomeView: View {
                 .contentTransition(.opacity)
                 .padding(.bottom, 14)
 
-                // Visual-only quick link (Home has no router to the Network tab).
-                HStack(spacing: 5) {
-                    Text("View Network")
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(mutedText)
+                // Switches to the existing Network bottom tab.
+                Button {
+                    selectedTab?.wrappedValue = .network
+                } label: {
+                    HStack(spacing: 5) {
+                        Text("View Network")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(mutedText)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(surfaceRaised, in: Capsule())
+                    .overlay { Capsule().stroke(hairline, lineWidth: 1) }
+                    .contentShape(Capsule())
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(surfaceRaised, in: Capsule())
-                .overlay { Capsule().stroke(hairline, lineWidth: 1) }
-                .accessibilityHidden(true)
+                .buttonStyle(HomePressStyle())
+                .accessibilityLabel("View Network")
             }
             .layoutPriority(1)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 6)
 
             ConnectionDiagram(linkActive: dashboard.serverStatus == .online,
                               accent: premiumBlue,
                               link: onlineGreen)
-                .frame(width: 150, height: 150)
+                .frame(width: 132, height: 132)
                 .accessibilityHidden(true)
         }
-        .padding(18)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(panelSurface)
+        .background(connectionPanelSurface)
     }
 
-    private var panelSurface: some View {
+    /// Connection panel only — keeps the dotted "global" texture. Tighter radius
+    /// and a hairline border so it reads as a restrained card, not a bubble.
+    private var connectionPanelSurface: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(surface)
             DotWorld()
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(hairline, lineWidth: 1)
         }
+    }
+
+    /// Flat dark surface shared by every other section — no texture, no glow.
+    /// `radius` lets sections vary their corner softness slightly so the page
+    /// doesn't read as identical stacked rectangles.
+    private func panelSurface(radius: CGFloat = 14) -> some View {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(surface)
+            .overlay {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(hairline, lineWidth: 1)
+            }
     }
 
     // MARK: Continue Watching — wide backdrop resume card.
@@ -239,57 +255,71 @@ struct HomeView: View {
                 Button {
                     openMedia(item)
                 } label: {
-                    ZStack(alignment: .bottom) {
-                        HStack(spacing: 0) {
-                            mediaArtwork(item, wide: true)
-                                .frame(width: 168, height: 132)
-                                .clipped()
-                                .overlay(alignment: .center) {
-                                    Image(systemName: "play.fill")
-                                        .font(.system(size: 17, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 48, height: 48)
-                                        .background(Color.black.opacity(0.45), in: Circle())
-                                        .overlay { Circle().stroke(Color.white.opacity(0.35), lineWidth: 1) }
-                                }
+                    ZStack(alignment: .bottomLeading) {
+                        // Large cinematic backdrop fills the whole card.
+                        mediaArtwork(item, wide: true)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 184)
+                            .clipped()
 
-                            VStack(alignment: .leading, spacing: 7) {
-                                Text(item.title)
-                                    .font(.system(size: 22, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
+                        // Dark scrim — stronger left/bottom — so overlaid text and
+                        // progress stay readable over any artwork.
+                        LinearGradient(
+                            colors: [
+                                Color.black.opacity(0.78),
+                                Color.black.opacity(0.30),
+                                Color.black.opacity(0.05)
+                            ],
+                            startPoint: .bottomLeading,
+                            endPoint: .topTrailing
+                        )
 
-                                if let subtitle = item.subtitleText {
-                                    Text(subtitle)
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(premiumBlue)
-                                        .lineLimit(1)
-                                }
+                        // Play affordance, top-left, integrated over the artwork.
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 46, height: 46)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay { Circle().stroke(Color.white.opacity(0.45), lineWidth: 1) }
+                            .padding(16)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-                                Text(item.remainingText)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(mutedText)
+                        // Title block + integrated progress, bottom-left.
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(item.title)
+                                .font(.system(size: 23, weight: .bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+
+                            if let subtitle = item.subtitleText {
+                                Text(subtitle)
+                                    .font(.system(size: 14.5, weight: .semibold))
+                                    .foregroundStyle(Color(red: 0.70, green: 0.80, blue: 1.0))
                                     .lineLimit(1)
                             }
-                            .padding(.leading, 18)
-                            .padding(.trailing, 14)
 
-                            Spacer(minLength: 0)
+                            Text(item.remainingText)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.78))
+                                .lineLimit(1)
+                                .padding(.bottom, 4)
+
+                            mediaProgressBar(item.progressFraction)
                         }
-
-                        mediaProgressBar(item.progressFraction)
-                            .padding(.horizontal, 0)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: 132)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 184)
                     .background(surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .stroke(hairline, lineWidth: 1)
                     }
-                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .buttonStyle(HomePressStyle())
             }
@@ -336,15 +366,15 @@ struct HomeView: View {
                 detail: "Storage used"
             )
         }
-        .padding(.vertical, 20)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity)
-        .background(panelSurface)
+        .background(panelSurface(radius: 12))
     }
 
     private var statDivider: some View {
         Rectangle()
-            .fill(hairline)
-            .frame(width: 1, height: 92)
+            .fill(Color.white.opacity(0.09))
+            .frame(width: 1, height: 70)
     }
 
     private func statColumn(
@@ -355,18 +385,19 @@ struct HomeView: View {
         title: String,
         detail: String
     ) -> some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 5) {
             Image(systemName: icon)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(tint)
-                .frame(height: 26)
+                .frame(height: 24)
+                .padding(.bottom, 2)
 
             (
                 Text(value)
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.system(size: 23, weight: .bold))
                     .foregroundColor(.white)
                 + Text(unit.map { " \($0)" } ?? "")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 12.5, weight: .bold))
                     .foregroundColor(mutedText)
             )
             .monospacedDigit()
@@ -375,18 +406,18 @@ struct HomeView: View {
             .contentTransition(.numericText())
 
             Text(title)
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.92))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
             Text(detail)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(mutedText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 4)
         .frame(maxWidth: .infinity)
     }
 
@@ -421,9 +452,9 @@ struct HomeView: View {
                     .foregroundStyle(mutedText)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-        .background(panelSurface)
+        .padding(15)
+        .frame(maxWidth: .infinity, minHeight: 138, alignment: .topLeading)
+        .background(panelSurface(radius: 14))
     }
 
     private var systemStatusCard: some View {
@@ -452,9 +483,9 @@ struct HomeView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-        .background(panelSurface)
+        .padding(15)
+        .frame(maxWidth: .infinity, minHeight: 138, alignment: .topLeading)
+        .background(panelSurface(radius: 14))
     }
 
     // MARK: Tailscale action — the screen's single tappable utility row.
@@ -510,8 +541,8 @@ struct HomeView: View {
             .padding(.horizontal, 15)
             .padding(.vertical, 13)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(panelSurface)
-            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(panelSurface(radius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(HomePressStyle())
         .accessibilityLabel("Open Tailscale")
@@ -1410,15 +1441,16 @@ private struct ConnectionDiagram: View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            let midY = h * 0.42
-            let endChip: CGFloat = 40
-            let orbSize: CGFloat = 56
+            let midY = h * 0.40
+            let orbSize: CGFloat = 50
+            // Inset the endpoints so their bounded labels stay inside the frame.
+            let endInset = w * 0.18
 
             ZStack {
-                // Connector line behind everything.
+                // Connector: one straight horizontal line, end dot → end dot.
                 Path { p in
-                    p.move(to: CGPoint(x: endChip / 2, y: midY))
-                    p.addLine(to: CGPoint(x: w - endChip / 2, y: midY))
+                    p.move(to: CGPoint(x: endInset, y: midY))
+                    p.addLine(to: CGPoint(x: w - endInset, y: midY))
                 }
                 .stroke(
                     (linkActive ? link : Color.white.opacity(0.18)),
@@ -1426,18 +1458,18 @@ private struct ConnectionDiagram: View {
                 )
 
                 // Left: this iPhone.
-                endpointChip(systemName: "iphone", label: "This iPhone")
-                    .position(x: endChip / 2, y: midY)
+                endpointChip(systemName: "iphone", label: "This iPhone", maxWidth: endInset * 2 - 4)
+                    .position(x: endInset, y: midY)
 
                 // Right: CloudBox server.
-                endpointChip(systemName: "server.rack", label: "CloudBox Server")
-                    .position(x: w - endChip / 2, y: midY)
+                endpointChip(systemName: "server.rack", label: "CloudBox Server", maxWidth: endInset * 2 - 4)
+                    .position(x: w - endInset, y: midY)
 
                 // Center: glowing cloud orb.
                 ZStack {
                     Circle()
                         .fill(accent.opacity(0.18))
-                        .frame(width: orbSize + 18, height: orbSize + 18)
+                        .frame(width: orbSize + 16, height: orbSize + 16)
                         .blur(radius: 6)
                     Circle()
                         .fill(
@@ -1449,7 +1481,7 @@ private struct ConnectionDiagram: View {
                         .frame(width: orbSize, height: orbSize)
                         .overlay { Circle().stroke(accent.opacity(0.7), lineWidth: 1.5) }
                     Image(systemName: "cloud.fill")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(.white)
                 }
                 .position(x: w / 2, y: midY)
@@ -1457,20 +1489,22 @@ private struct ConnectionDiagram: View {
         }
     }
 
-    private func endpointChip(systemName: String, label: String) -> some View {
-        VStack(spacing: 7) {
+    private func endpointChip(systemName: String, label: String, maxWidth: CGFloat) -> some View {
+        VStack(spacing: 6) {
             Image(systemName: systemName)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.85))
-                .frame(width: 40, height: 40)
+                .frame(width: 38, height: 38)
                 .background(Color.white.opacity(0.05), in: Circle())
                 .overlay { Circle().stroke(Color.white.opacity(0.12), lineWidth: 1) }
 
             Text(label)
-                .font(.system(size: 9.5, weight: .medium))
+                .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.55))
-                .lineLimit(1)
-                .fixedSize()
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .frame(width: maxWidth)
         }
     }
 }
