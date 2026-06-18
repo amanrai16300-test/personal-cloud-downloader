@@ -9,7 +9,43 @@
 - Retention rule: Delete downloaded files quickly after use.
 - Privacy rule: qBittorrent, file streaming, and any future backend should stay private through Tailscale.
 
-## 2. Current AWS Working Setup
+## 1a. Current Production Environment (authoritative)
+
+This block supersedes the older AWS and early-Oracle environment details below. Oracle is the active production environment; AWS is historical/backup only.
+
+- Active environment: Oracle Cloud (Always Free A1).
+- Server hostname: `personal-cloud-downloader-vcn`.
+- Current Tailscale IP: `100.95.39.107`.
+- Current private Oracle IP: `10.0.0.129`.
+- Public IP: not recently verified; do not assume a current public IP. Access is through Tailscale only.
+- SSH:
+
+```powershell
+ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
+```
+
+- Current private services (Tailscale only):
+
+```text
+FastAPI:      http://100.95.39.107:8000
+qBittorrent:  http://100.95.39.107:8080
+Web/files:    http://100.95.39.107:8090
+Web app:      http://100.95.39.107:8090/app/
+Files:        http://100.95.39.107:8090/files/
+```
+
+- Current VM layout:
+  - Ubuntu 24.04
+  - approximately 50GB boot/root disk
+  - approximately 100GB CloudBox storage volume (mounted, used for downloaded media)
+  - approximately 4GB RAM
+- Historical Oracle Tailscale IP `100.92.146.101` is no longer current; treat every `100.92.146.101` reference below as historical.
+- Historical AWS Tailscale IP `100.125.15.118` is historical/backup only.
+- AWS EC2 is stopped and is not the active environment.
+
+> **Warning:** Do not use historical IP addresses for SSH, deployment, API calls, WebViews, or testing. Use only the current Oracle Tailscale IP `100.95.39.107`.
+
+## 2. AWS Working Setup (Historical / backup only)
 
 - Current working cloud provider: AWS
 - AWS region: Asia Pacific Tokyo, `ap-northeast-1`
@@ -157,7 +193,10 @@ ssh -i .\personal-cloud-downloader-key.pem ubuntu@100.125.15.118
 - Estimated post-free AWS cost for this downloader if running 24/7: about `$16` to `$18` per month.
 - Stopping EC2 when not using it reduces compute cost.
 
-## 10. Oracle Cloud Always Free Plan
+## 10. Oracle Cloud Always Free Plan (Historical — initial provisioning)
+
+> Historical initial-provisioning record. The Oracle Tailscale IP `100.92.146.101` and public IP `138.2.31.123` here are no longer current. See "1a. Current Production Environment" for the current `100.95.39.107` / `10.0.0.129` details.
+
 
 - Goal: Move to Oracle Always Free after full testing succeeds.
 - Region/home region: Japan East Tokyo
@@ -173,10 +212,9 @@ ssh -i .\personal-cloud-downloader-key.pem ubuntu@100.125.15.118
 - Oracle A1 instance was successfully created.
 - Public IP: `138.2.31.123`
 - Private IP: `10.0.0.58`
-- Oracle Tailscale IP: `100.95.39.107`
-- Historical Oracle Tailscale IP: `100.92.146.101`
+- Oracle Tailscale IP: `100.92.146.101`
 - SSH user: `ubuntu`
-- Main private SSH through Tailscale:
+- Main private SSH through Tailscale (current IP — historical IP was `100.92.146.101`):
 
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
@@ -308,7 +346,10 @@ ls -la /srv/personal-cloud/downloads/complete
 
 - This is a later cleanup task, not part of Phase 1 backend completion.
 
-## 13. Oracle Migration Status
+## 13. Oracle Migration Status (Historical — first migration)
+
+> Historical first-migration record. IPs here (`100.92.146.101`, `138.2.31.123`, `10.0.0.58`) are superseded by "1a. Current Production Environment" (`100.95.39.107` / `10.0.0.129`).
+
 
 - Oracle A1 instance was successfully created.
 - Oracle is now the confirmed working main environment for the downloader.
@@ -318,10 +359,9 @@ ls -la /srv/personal-cloud/downloads/complete
 - RAM: `4GB`
 - Public IP: `138.2.31.123`
 - Private IP: `10.0.0.58`
-- Oracle Tailscale IP: `100.95.39.107`
-- Historical Oracle Tailscale IP: `100.92.146.101`
+- Oracle Tailscale IP: `100.92.146.101`
 - SSH user: `ubuntu`
-- Main private SSH works through Tailscale:
+- Main private SSH works through Tailscale (current IP — historical IP was `100.92.146.101`):
 
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
@@ -336,7 +376,7 @@ ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.9
 - Ubuntu updated and rebooted successfully.
 - Tailscale installed and connected.
 - qBittorrent-nox installed.
-- qBittorrent Web UI works privately:
+- qBittorrent Web UI works privately (current IP — historical IP was `100.92.146.101`):
 
 ```text
 http://100.95.39.107:8080
@@ -352,7 +392,7 @@ Incomplete: /srv/personal-cloud/downloads/incomplete
 
 - qBittorrent systemd service was created and is running.
 - Nginx installed and configured for private file streaming.
-- Oracle Nginx file streaming works:
+- Oracle Nginx file streaming works (current IP — historical IP was `100.92.146.101`):
 
 ```text
 http://100.95.39.107:8090/files/
@@ -365,7 +405,7 @@ http://100.95.39.107:8090/files/
   - `8090/tcp`
   - `8000/tcp`
 - Tailscale SSH, qBittorrent, and Nginx file list were tested and confirmed working.
-- FastAPI backend was deployed on Oracle as a private systemd service:
+- FastAPI backend was deployed on Oracle as a private systemd service (current IP — historical IP was `100.92.146.101`):
 
 ```text
 http://100.95.39.107:8000
@@ -410,7 +450,9 @@ http://100.95.39.107:8000
 - AWS Tailscale IP is still `100.125.15.118`.
 - AWS qBittorrent and Nginx were already working.
 
-## 14. Current Final Status
+## 14. Final Status (Historical — early Oracle MVP)
+
+> Historical snapshot from the early Oracle MVP (the old Oracle Tailscale IP was `100.92.146.101`). Superseded by section "1a. Current Production Environment" (current IP `100.95.39.107`) and the "Current Final Status (authoritative)" section at the end of this document. Actionable URLs in this section have been updated to the current IP `100.95.39.107`.
 
 - Oracle is now the confirmed working main environment.
 - AWS EC2 instance is stopped and should not be used unless needed as backup.
@@ -459,16 +501,6 @@ http://100.95.39.107:8090/app/
 - AWS was stopped to reduce cost.
 - Oracle migration backend testing is complete.
 - Simple Seedr-style UI MVP is live on Oracle.
-- File to Markdown works through `POST /api/convert-markdown`.
-- Image OCR works through the same Markdown Converter endpoint.
-- Files picker works for Markdown Converter uploads.
-- Photos picker works for Markdown Converter image OCR.
-- Rendered Markdown preview works in iOS.
-- Copy, Share, and Save `.md` use raw Markdown and work.
-- Empty-result handling works for blank/bad/scanned inputs.
-- Markdown Converter backend is deployed and tested on Oracle.
-- Remaining future improvement: URL-to-Markdown for job pages/web pages.
-- Remaining limitation: free OCR is not perfect and cannot fully organize complex webpage screenshots like ChatGPT or direct HTML parsing.
 
 ### 2026-06-03 CloudBox / Personal Cloud Downloader Progress Update
 
@@ -477,7 +509,7 @@ http://100.95.39.107:8090/app/
 - AppIcon asset catalog added under `ios/PersonalCloudDownloader/Assets.xcassets/AppIcon.appiconset/`.
 - XcodeGen display name fixed using `targets > PersonalCloudDownloader > info > properties > CFBundleDisplayName: CloudBox`.
 - GitHub Actions workflow should use `main` and `"feature/**"` so future feature branches trigger automatically.
-- VLC fake-landscape player was kept because real landscape was unreliable with iPhone rotation lock.
+- Historical: at this milestone the VLC fake-landscape player was kept because real landscape was unreliable with iPhone rotation lock. Superseded — real iOS fullscreen landscape now works (see "Real Landscape Player" section near the end); the fake `rotationEffect(90°)` was removed.
 - VLC fullscreen UI was polished:
   - custom top clock
   - nPlayer-style top nav timeline
@@ -525,7 +557,7 @@ http://100.95.39.107:8090/app/
     - use the manual GitHub Actions IPA workflow when needed
   - GitHub Actions macOS IPA builds are manual-only and should be run only when needed.
   - Web and backend fixes can still be deployed manually to Oracle.
-  - Native iOS fixes still require a new IPA build/install.
+  - Native iOS fixes still require a new IPA after Actions billing/budget is available again.
 - Downloader queue ordering work:
   - file: `frontend/app.js`
   - `renderTorrents(torrents)` is the real visible render path
@@ -536,7 +568,9 @@ http://100.95.39.107:8090/app/
 - It uses an in-page DOM modal, not `window.confirm()`, so it works in PC browser and iOS WKWebView.
 - `frontend/app.js` changes must be manually deployed to `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
 
-## 15. Next Steps
+## 15. Next Steps (Historical — early Oracle MVP)
+
+> Historical. The current next-steps list is in "Next Steps (authoritative)" at the end of this document. The old Oracle Tailscale IP was `100.92.146.101`; current is `100.95.39.107`. The `.env` example below has been updated to the current IP.
 
 - Keep AWS services private through Tailscale.
 - Confirm AWS public SSH is not left open to `0.0.0.0/0`.
@@ -618,10 +652,10 @@ Full docs:
 - Tabs exist for Home, Downloader, Videos, qBittorrent, Files, and Settings.
 - Reusable WKWebView support was added using `WebView` and `WebScreen`.
 - ATS HTTP loading support was added for private Tailscale URLs.
-- Downloader tab loads `http://100.95.39.107:8090/app/`.
-- qBittorrent tab loads `http://100.95.39.107:8080`.
-- Files tab loads `http://100.95.39.107:8090/files/`.
-- Home, Videos, and Settings are still placeholders.
+- Downloader tab loads `http://100.92.146.101:8090/app/`.
+- qBittorrent tab loads `http://100.92.146.101:8080`.
+- Files tab loads `http://100.92.146.101:8090/files/`.
+- Historical (this milestone only): Home, Videos, and Settings were still placeholders. Superseded — Home is now a native aggregated dashboard and Videos is a full native media library/player.
 - No backend, frontend web app, Oracle server, Nginx, qBittorrent, or Tailscale behavior was changed.
 - Existing browser web downloader remains the main working app.
 
@@ -632,7 +666,7 @@ Full docs:
 - Settings tab is now a native SwiftUI Settings / Tailscale Helper screen.
 - Settings shows server URLs, Tailscale-only privacy note, and an Open Tailscale helper button using `tailscale://`.
 - Downloader, qBittorrent, and Files remain WKWebView tabs.
-- Videos is still only a placeholder.
+- Historical (this milestone only): Videos was still a placeholder. Superseded — Videos is now a full native media library and player.
 - No video player, API integration, torrent logic, backend change, frontend web app change, Oracle change, Nginx change, qBittorrent change, or Tailscale change was made.
 - Existing browser web downloader remains unchanged and usable.
 
@@ -648,7 +682,7 @@ Full docs:
 ## iOS App Phase 2 Videos Library Status (native milestone)
 
 - Phase 2 native Videos library was added.
-- Videos tab fetches from `http://100.95.39.107:8000/api/completed-files`.
+- Videos tab fetches from `http://100.92.146.101:8000/api/completed-files`.
 - A `CompletedFile` model matches the real backend JSON keys:
   - `name`
   - `path`
@@ -673,7 +707,7 @@ Full docs:
 - `VideosView` now navigates to `PlayerView` using `NavigationLink` / `navigationDestination`.
 - `CompletedFile` now supports `Hashable` and `streamURL` resolution.
 - `backend/main.py` was read-only only to confirm `CompletedFile.url` is generated as a stream link; not modified.
-- Deployed `CompletedFile.url` is an absolute, percent-encoded Nginx `/files/` URL: `http://100.95.39.107:8090/files/...`.
+- Deployed `CompletedFile.url` is an absolute, percent-encoded Nginx `/files/` URL: `http://100.92.146.101:8090/files/...`.
 - AVPlayer / AVKit playback was added for `mp4`, `mov`, `m4v`.
 - MobileVLCKit dependency setup was added with CocoaPods:
   - `ios/Podfile`
@@ -729,8 +763,8 @@ Full docs:
 - The app already supports landscape by default.
 - No forced rotation code was added.
 - No app-wide orientation settings were changed.
-- Decision: use zero-config orientation for now. The user can rotate the device manually in fullscreen.
-- Forced auto-landscape rotation is intentionally deferred because it requires UIKit/app-wide orientation handling and has SwiftUI risk.
+- Historical decision (superseded): use zero-config orientation for now; the user rotates the device manually in fullscreen.
+- Historical (superseded): forced auto-landscape rotation was intentionally deferred. This is no longer the case — real iOS fullscreen landscape now works via `OrientationHelper` and `UIWindowScene.requestGeometryUpdate` (see "Real Landscape Player" section near the end).
 - No backend, frontend web app, Videos list, Oracle, Nginx, qBittorrent, Tailscale, or API behavior was changed.
 - No Delete, Download, or Copy Link controls were added to Videos.
 
@@ -990,15 +1024,12 @@ Full docs:
   - Downloader / Videos / Files cards
   - Open Tailscale action
   - private access note
-- Home live data still uses:
-  - `/api/health`
-  - `/api/torrents`
-  - `/api/completed-files`
-- Home status logic was fixed:
-  - Server Online depends only on `/api/health`
-  - Downloader failure does not mark server offline
-  - Videos/Files failure does not mark server offline
-  - refresh race protection prevents old failed refreshes from overwriting newer good status
+- Historical: at this milestone Home pulled separate `/api/health`, `/api/torrents`, and `/api/completed-files` requests. This is superseded — current Home uses one aggregated `GET /api/home-dashboard` (see "Current Home Dashboard API" section near the end).
+- Home status logic at this milestone (historical):
+  - Server Online depended only on `/api/health`
+  - Downloader failure did not mark server offline
+  - Videos/Files failure did not mark server offline
+  - refresh race protection prevented old failed refreshes from overwriting newer good status
 - Removed misleading `Private Link / Check VPN` card.
 - Kept only real `Open Tailscale` action using `tailscale://`.
 
@@ -1073,7 +1104,7 @@ Full docs:
 - qBittorrent WebView behavior and URL remain unchanged:
 
 ```text
-http://100.95.39.107:8080
+http://100.92.146.101:8080
 ```
 
 - Backend endpoint added:
@@ -1132,7 +1163,7 @@ sudo systemctl restart personal-downloader-api.service
 - qBittorrent URL remains:
 
 ```text
-http://100.95.39.107:8080
+http://100.92.146.101:8080
 ```
 
 - iPhone Safari can open qBittorrent successfully, confirming server/Tailscale is working.
@@ -1160,26 +1191,6 @@ http://100.95.39.107:8080
 - Changed files for this milestone:
   - `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`
   - `ios/PersonalCloudDownloader/Views/PlayerView.swift`
-
-## Real Landscape Player Status
-
-- Branch: `feature/real-landscape-player`.
-- Real fullscreen landscape now works on iPhone.
-- Fake VLC landscape was removed.
-- Fullscreen player now uses real iOS landscape via `UIWindowScene.requestGeometryUpdate`.
-- Normal app screens remain portrait-locked through app-level orientation lock.
-- Player fullscreen sets orientation mask to landscape only.
-- Closing/dismissing player restores portrait.
-- Orientation updates target the topmost presented view controller because fullscreen uses `fullScreenCover`.
-- `project.yml` allows Portrait, LandscapeLeft, and LandscapeRight.
-- Existing player controls were preserved: timeline, brightness/volume gestures, subtitles, Fit/Cover, audio selector, close button, and resume behavior.
-- Previous warning/freeze rule about no new fullscreen features before real landscape is resolved.
-- Changed files:
-  - `ios/PersonalCloudDownloader/Support/OrientationHelper.swift`
-  - `ios/PersonalCloudDownloader/PersonalCloudDownloaderApp.swift`
-  - `ios/project.yml`
-  - `ios/PersonalCloudDownloader/Views/PlayerView.swift`
-  - `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`
 
 ## CloudBox UI Polish Update
 
@@ -1216,7 +1227,7 @@ http://100.95.39.107:8080
   - Home hero/status/action area made more visually distinct
   - Network daily usage pills wrap better on narrow screens
   - bottom tab accent tint unified to CloudBox blue
-  - bottom tab bar now uses native `UITabBarAppearance` with a darker CloudBox surface, stronger selected tint, muted inactive tabs, and custom label weights
+  - bottom tab bar at this milestone used native `UITabBarAppearance` with a darker CloudBox surface, stronger selected tint, muted inactive tabs, and custom label weights (Historical — superseded by the custom SwiftUI floating pill bar described in "CloudBox UI Refresh" near the end)
 - Behavior stayed unchanged:
   - APIs
   - navigation destinations
@@ -1430,12 +1441,10 @@ http://100.95.39.107:8080
 
 ## Branch and Deployment Status
 
-- Current Trends branch:
+> Historical: `feature/tmdb-trends` was the active branch during the Trends milestone. It is no longer the current branch. The current active branch is `feature/home-dashboard-v3` — see "Branch and Status Summary (current)" near the end.
+
+- Trends-milestone branch (historical):
   - `feature/tmdb-trends`
-- File-to-Markdown branch:
-  - `feature/markdown-converter-v1`
-- Latest Markdown/image OCR branch:
-  - `feature/markdown-image-ocr-v1`
 - `feature/ios-trends` was not created/pushed as a remote branch and should not be used for deployment.
 - Use `feature/tmdb-trends` for:
   - Trends script deploy
@@ -1443,7 +1452,7 @@ http://100.95.39.107:8080
 - Oracle project folder:
   - `/home/ubuntu/personal-cloud-downloader`
 - This Oracle folder is not a Git repository.
-- For Oracle deploys, use manual copy/deploy or clone-copy from `/tmp`; do not run `git pull` inside the Oracle app folder.
+- For Oracle deploys, use clone-copy method from `/tmp`.
 - Script-only deploy requires:
   - copy `scripts/fetch_trends.py`
   - run `python3 -m py_compile scripts/fetch_trends.py`
@@ -1452,285 +1461,19 @@ http://100.95.39.107:8080
   - no IPA unless iOS files changed
 - Backend deploy requires:
   - copy `backend/main.py`
-  - run `sudo systemctl restart personal-downloader-api.service`
-  - no new IPA unless iOS files changed
+  - restart `personal-downloader-api.service`
 - Web frontend deploy requires:
   - copy `frontend/app.js` to `/home/ubuntu/personal-cloud-downloader/backend/app.js`
 - iOS native changes require:
   - manual GitHub Actions IPA build
   - install with Sideloadly
-  - no Oracle deploy unless backend/web files changed
 - Manual IPA build path:
   - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
-  - branch should match the current feature being tested
-
-## Oracle CloudBox Storage Migration Completed Status
-
-- Old Oracle VM `personal-cloud-downloader` was terminated.
-- Old 100GB boot volume was permanently deleted.
-- New Oracle VM is now the active CloudBox server.
-- New VM name: `cloudbox-migration-50gb`
-- New hostname: `personal-cloud-downloader-vcn`
-- Region: `ap-tokyo-1`
-- OS: Ubuntu 24.04
-- Shape: Ampere A1 Flex
-- Final CPU/RAM: 2 OCPU / 4GB RAM
-- Swap: 2GB
-- New public IP: `161.33.181.237`
-- New Tailscale IP: `100.95.39.107`
-- New private IP: `10.0.0.129`
-
-### Final Storage Layout
-
-- Boot disk: `/dev/sda`, 50GB
-- Root filesystem: `/`, about 48GB usable
-- Separate data disk: `/dev/sdb`, 100GB
-- Data mount path: `/srv/personal-cloud`
-- Usable data size: about 97.9 GiB
-- Final Oracle block storage total: 150GB
-- Target remains inside Oracle Always Free 200GB block storage limit.
-
-### Current CloudBox Live URLs
-
-- Backend: `http://100.95.39.107:8000`
-- Web app: `http://100.95.39.107:8090/app/`
-- qBittorrent: `http://100.95.39.107:8080`
-- Files: `http://100.95.39.107:8090/files/`
-- SSH:
-
-```powershell
-ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
-```
-
-### Current Firewall and Services
-
-- UFW is active.
-- Default incoming traffic is denied.
-- Only `tailscale0` allows ports `22`, `8000`, `8080`, and `8090`.
-- qBittorrent, FastAPI, and Nginx remain private through Tailscale.
-- `nginx` is enabled and active.
-- `qbittorrent-nox.service` is enabled and active.
-- `personal-downloader-api.service` is enabled and active.
-- Reboot test passed.
-- `/api/health` returns OK.
-- `/api/qbittorrent/test` returns OK.
-- `/app/` and `/files/` return `200 OK`.
-
-### Latest TMDB Trends Cron Fix
-
-- After migration reboot, Trends initially failed because `/tmp/trends.json` was missing.
-- Manual run confirmed TMDB env and `scripts/fetch_trends.py` work.
-- TMDB env path: `/home/ubuntu/.config/cloudbox/tmdb.env`
-- Trends script path: `/home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py`
-- Cache currently writes to `/tmp/trends.json`.
-- New cron file: `/etc/cron.d/cloudbox-trends`
-- Cron runs `fetch_trends.py` at reboot after 90 seconds and every 2 hours.
-- Manual test passed and `/api/trends` returned trend data.
-- Current limitation: cache is still in `/tmp`; cron recreates it after reboot. A future cleanup can move cache to a persistent path.
-
-### Latest OCI Object Storage App Backup Setup
-
-- OCI Object Storage bucket created: `cloudbox-app-backups`.
-- Purpose: S3-style app-only backup for the CloudBox app brain.
-- Backup script added: `scripts/backup_cloudbox_app.sh`.
-- Backup excludes video/download files and runtime-heavy media files.
-- Backup includes CloudBox app code, configs, Nginx config, systemd service files, qBittorrent settings, cron config, `/var/www/personal-cloud`, `/var/lib/cloudbox` if present, package list, and systemd unit list.
-- OCI CLI is installed and configured on the Oracle VM; namespace test passed with `oci os ns get`.
-- Manual backup upload succeeded.
-- Daily cron template added: `scripts/cloudbox-app-backup.cron`.
-- Installed on Oracle VM as `/etc/cron.d/cloudbox-app-backup`.
-- Cron schedule: daily at `03:30 UTC`.
-- Backup target: bucket `cloudbox-app-backups`, prefix `daily/`.
-- Manual cron-style test succeeded as `ubuntu`.
-- Confirmed uploaded object: `daily/cloudbox-app-backup-20260608-1253.tar.gz`.
-- Local tarball is deleted after successful daily upload.
-- Current restore strategy: restore app brain from OCI Object Storage if the app/instance fails; if the VM fails but data disk survives, attach the 100GB `/srv/personal-cloud` block volume to a replacement VM; video files are intentionally not backed up.
-
-### Backup and Data Migration Notes
-
-- Final app-only backup was downloaded to PC:
-  - `cloudbox-newvm-final-app-backup-20260607-1929.tar.gz`
-- Backup excludes video/download files.
-- Old downloaded files were intentionally not copied.
-- `/srv/personal-cloud/downloads` starts clean on the new 100GB data volume.
-- If the VM breaks in the future but `/dev/sdb` survives, the 100GB data volume can be attached to a replacement VM and mounted again at `/srv/personal-cloud`.
-
-### iOS Migration Update
-
-- iOS app server references were updated from `100.92.146.101` to `100.95.39.107`.
-- Changed files:
-  - `ios/PersonalCloudDownloader/Services/CompletedFilesAPI.swift`
-  - `ios/PersonalCloudDownloader/Views/DownloaderView.swift`
-  - `ios/PersonalCloudDownloader/Views/FilesView.swift`
-  - `ios/PersonalCloudDownloader/Views/HomeView.swift`
-  - `ios/PersonalCloudDownloader/Views/PlayerView.swift`
-  - `ios/PersonalCloudDownloader/Views/QBittorrentView.swift`
-  - `ios/PersonalCloudDownloader/Views/SettingsView.swift`
-- New IPA must be built/installed for iPhone to use the new server.
-
-### Latest iOS Foreground Reconnect Fix
-
-- iOS app sometimes showed disconnected after being minimized/backgrounded and reopened.
-- Server and Safari links were working, so the issue was iOS app foreground reconnect behavior, not Oracle, Tailscale, or server availability.
-- Fixed iOS foreground reconnect behavior.
-- Changed files: `ios/PersonalCloudDownloader/Views/HomeView.swift`, `ios/PersonalCloudDownloader/Views/VideosView.swift`, `ios/PersonalCloudDownloader/Views/NetworkUsageView.swift`, `ios/PersonalCloudDownloader/TrendsView.swift`.
-- Home now shows reconnecting/checking state, waits briefly, retries `/api/health` 3 times with short delay, and marks offline only after retries fail.
-- Videos, Network, and Trends refresh after app foreground with a short delay.
-- WebViews were not changed to avoid reload loops.
-- Build initially failed because `HomeView.swift` had a missing `return` in the `serverStatusText` getter.
-- Fixed build error by adding the missing `return`.
-- New IPA was built, installed, and tested working.
-- Foreground reopen behavior now works better.
-
-### Network Storage Follow-Up
-
-- `backend/main.py` was updated so `/api/network-usage` reports storage for `/srv/personal-cloud`, not `/`.
-- Network page now shows the 100GB data disk, about 97.9 GiB total, instead of the 50GB boot disk.
-- Network traffic calculation was not changed.
-
-## CloudBox Markdown Converter Status
-
-- File converter branch: `feature/markdown-converter-v1`.
-- Image OCR branch: `feature/markdown-image-ocr-v1`.
-- Backend endpoint: `POST /api/convert-markdown`.
-- Request format: `multipart/form-data` with field name `file`.
-- Response fields:
-  - `filename`
-  - `extension`
-  - `markdown`
-  - `conversion_mode`
-- Upload limit: 25 MB.
-- Uploads use temp files only.
-- No permanent uploaded file storage is created.
-- No automatic Markdown storage is created.
-- Document content, image content, and OCR text are not logged.
-- Backend was deployed to Oracle and tested.
-- Windows-to-Oracle curl test passed.
-- Oracle local curl test passed.
-- Unsupported file rejection works.
-- Supported document/text formats:
-  - `.pdf`
-  - `.docx`
-  - `.pptx`
-  - `.xlsx`
-  - `.xls`
-  - `.csv`
-  - `.json`
-  - `.xml`
-  - `.html`
-  - `.htm`
-  - `.txt`
-  - `.text`
-  - `.md`
-  - `.markdown`
-  - `.epub`
-- MarkItDown dependency is installed on Oracle.
-- `python-multipart` is installed.
-
-### iOS Markdown Converter
-
-- iOS screen: `MarkdownConverterView.swift`.
-- More tab entry was added.
-- Uses the existing CloudBox backend base URL pattern.
-- Supports file picker from the Files app.
-- Shows rendered Markdown preview.
-- Uses a custom visual Markdown renderer for headings, bullets, numbered rows, paragraphs, and readable links.
-- Copy, Share, and Save use raw Markdown.
-- Save as `.md` works.
-- Clear and Retry work.
-- Empty-result message exists for scanned, bad, or blank files.
-- Problem PDFs with broken text encoding may return empty or messy text; this is accepted for V1.
-
-### Markdown Converter Image OCR
-
-- Image upload support was added to the same endpoint: `POST /api/convert-markdown`.
-- Supported image formats:
-  - `.jpg`
-  - `.jpeg`
-  - `.png`
-  - `.webp`
-- iOS supports `Select Photo` through `PhotosPicker`.
-- iOS still supports the Files picker.
-- Backend uses free local Tesseract OCR, not paid AI.
-- No OpenAI, Azure, LLM, or external API is used for OCR.
-- Oracle system packages installed:
-  - `tesseract-ocr`
-  - `tesseract-ocr-eng`
-  - `tesseract-ocr-jpn`
-- Python dependencies added:
-  - `pytesseract`
-  - `Pillow`
-- OCR was tested on Oracle with a generated image.
-- English OCR test returned clean text after larger-font test.
-- Japanese OCR language data is installed.
-- OCR image preprocessing was added:
-  - EXIF transpose
-  - RGB/grayscale handling
-  - white alpha background
-  - upscaling small images
-  - autocontrast
-  - contrast/sharpness adjustment
-- Tesseract config was improved:
-  - `--oem 3 --psm 6`
-  - preserve interword spaces
-  - use `eng+jpn` when available
-- OCR output cleanup/organization was added:
-  - trims spaces
-  - collapses repeated blanks
-  - joins safe broken lines
-  - preserves bullets, numbers, prices, dates, times, URLs, phone-like lines, and Japanese text
-  - adds Markdown title/section formatting when safe
-  - groups paragraphs
-  - removes only obvious OCR garbage lines
-- Free OCR quality is improved but not perfect.
-- For full webpage screenshots or job pages, URL-to-Markdown is recommended next because screenshot OCR is weak for tiny/tall pages.
-
-### Current Markdown Converter Final Status
-
-- Branch: `feature/markdown-url-converter-v1`.
-- File to Markdown works.
-- Image OCR works.
-- URL-to-Markdown works for normal public web pages.
-- Files picker works.
-- Photos picker works.
-- iOS Markdown Converter now has Paste URL input and Convert URL button.
-- iOS calls `/api/convert-markdown-url` and reuses rendered preview, Copy, Share, Save, Clear, and Retry.
-- Rendered Markdown preview works.
-- Copy, Share, and Save `.md` work.
-- Empty-result handling works.
-- Oracle backend is deployed and tested.
-- Backend endpoint added: `POST /api/convert-markdown-url`.
-- Request JSON: `{"url":"https://example.com/page"}`.
-- Response fields: `url`, `markdown`, `conversion_mode`.
-- Backend accepts only public `http://` and `https://` URLs.
-- Backend blocks empty URLs, invalid schemes, localhost, loopback, private IPs, link-local, and internal hosts.
-- Server-side download uses timeout and 5 MB content limit.
-- Downloaded HTML and converted Markdown are not stored.
-- URL conversion was tested locally with `https://example.com`.
-- Safety tests passed for empty URL, `ftp://`, localhost, `127.0.0.1`, and private IP.
-- Backend was deployed to Oracle and tested successfully on `http://127.0.0.1:8000/api/convert-markdown-url`.
-- Current limitation: URL conversion does not support login-only pages, JavaScript-rendered pages, browser automation, LinkedIn scraping, or AI cleanup.
-- Current decision: generic page-cleanup improvement is not added yet because current output is usable; test more real links first.
-- Remaining limitation: free OCR is not perfect and cannot fully organize complex webpage screenshots like ChatGPT or direct HTML parsing.
-
-### Oracle Budget Status
-
-- `personal-cloud-budget` is active.
-- Budget target: `amandevil163 (root)` compartment.
-- Amount: JP¥1 monthly.
-- Current spent: JP¥0.
-- Current forecast: JP¥0.
-- Alert rules exist:
-  - 50% Actual Spend
-  - 100% Actual Spend
-  - 100% Forecast Spend
-- Budget alerts are warning-only and do not stop resources automatically.
+  - branch: use the current active branch (`feature/home-dashboard-v3`) for the latest IPA; `feature/tmdb-trends` was only for the historical Trends work
 
 ## Deployment Notes
 
 - Current verified Oracle layout:
-  - Oracle project folder: `/home/ubuntu/personal-cloud-downloader`
-  - Oracle project folder is not a Git repository
   - local backend file: `backend/main.py`
   - live Oracle backend file: `/home/ubuntu/personal-cloud-downloader/backend/main.py`
   - local web frontend file: `frontend/app.js`
@@ -1739,7 +1482,6 @@ ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.9
   - live Oracle Trends script: `/home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py`
   - generated Trends data: `/tmp/trends.json`
   - TMDB env file: `/home/ubuntu/.config/cloudbox/tmdb.env`
-- Use manual copy/deploy for Oracle changes; do not run `git pull` inside `/home/ubuntu/personal-cloud-downloader`.
 - Backend changes require deploying `backend/main.py` to Oracle and restarting:
 
 ```bash
@@ -1749,9 +1491,312 @@ sudo systemctl restart personal-downloader-api.service
 - Web frontend changes require copying `frontend/app.js` to `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
 - Trends script-only changes require copying `scripts/fetch_trends.py`, running `python3 -m py_compile scripts/fetch_trends.py`, and running the script with the TMDB env.
 - iOS UI/model/WebView changes require new IPA build/install.
-- Backend-only changes do not require a new IPA.
-- iOS-only changes require a new IPA but no Oracle deploy.
 - GitHub Actions IPA workflow is manual-only now, so backend/frontend/docs pushes do not automatically create IPA builds.
 - Manual IPA build path:
   - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
-  - branch should match the current feature being tested
+
+---
+
+# CURRENT STATE (authoritative — newest sections below)
+
+> The sections below reflect the latest confirmed CloudBox state. Where they conflict with older sections above, these win. Older sections are kept as historical milestones.
+
+## Current Deployment Paths and Rules (verified)
+
+Verified current paths:
+
+```text
+Local backend:        backend/main.py
+Live Oracle backend:  /home/ubuntu/personal-cloud-downloader/backend/main.py
+
+Local web frontend:        frontend/app.js
+Live Oracle web frontend:  /home/ubuntu/personal-cloud-downloader/backend/app.js
+
+Local Trends script:  scripts/fetch_trends.py
+Live Trends script:   /home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py
+```
+
+Deployment rules:
+
+- Backend changes:
+  - copy `backend/main.py` to the live Oracle backend path
+  - run a Python compile check (`python3 -m py_compile backend/main.py`)
+  - restart `personal-downloader-api.service`
+- Web changes:
+  - copy `frontend/app.js` to the live `backend/app.js`
+  - no backend restart normally required
+- Native iOS changes:
+  - build a new unsigned IPA through the manual GitHub Actions workflow
+  - install through Sideloadly
+- Documentation-only changes:
+  - no Oracle deploy
+  - no IPA build
+
+## Markdown Converter (current)
+
+Backend:
+
+- `POST /api/convert-markdown`
+- Supports existing document formats plus images: `.jpg`, `.jpeg`, `.png`, `.webp`.
+- Image OCR uses local Tesseract with English and Japanese language data.
+- Image preprocessing includes orientation correction, grayscale/contrast/sharpness improvements, and safe OCR cleanup.
+- File upload limit is 25MB.
+- OCR/Markdown formatting creates headings, sections, bullets, numbered lists, and cleaner paragraphs where safely detectable.
+- Bad/blank conversions return an empty result safely.
+
+URL conversion:
+
+- `POST /api/convert-markdown-url`
+- Accepts public `http://` and `https://` URLs.
+- Blocks: empty URLs, invalid schemes, localhost, loopback, private/internal IPs, link-local/internal hosts.
+- Download timeout and a 5MB HTML limit are enforced.
+- Downloaded HTML and converted Markdown are not persisted.
+- Current limitations: no login-only pages, no JavaScript browser rendering, no browser automation, no AI cleanup; converted pages may still contain navigation/footer noise.
+
+iOS:
+
+- File picker, Photos picker, paste URL.
+- Rendered Markdown preview, Copy, Share, Save `.md`, Retry, Clear.
+- Empty-result and friendly error states.
+- Keyboard does not auto-open; Done, Convert, outside tap, and scroll can dismiss the keyboard.
+- UI is a CloudBox document-workbench design; preview is dark and readable.
+- Action bar clearance above the custom floating tab bar was fixed.
+
+## Real Landscape Player (current — replaces fake landscape)
+
+> Supersedes the earlier fake-landscape / zero-config-orientation decisions above.
+
+- Branch milestone: `feature/real-landscape-player`.
+- Real iOS fullscreen landscape works on iPhone.
+- The fake VLC `rotationEffect(90°)` landscape was removed.
+- `OrientationHelper` uses:
+  - portrait mask for normal app screens
+  - landscape-only mask while the fullscreen player is open
+  - portrait restore when the player closes
+- iOS 16+ `UIWindowScene.requestGeometryUpdate` is used.
+- Orientation updates target the topmost presented view controller because fullscreen uses `fullScreenCover`.
+- `UIWindowScene.keyWindow` is valid for the deployment target.
+- `project.yml` allows Portrait, LandscapeLeft, LandscapeRight.
+- Normal tabs remain portrait.
+- Existing controls remain: timeline, brightness/volume gestures, subtitles, audio selector, Fit/Cover, close, resume, auto-hide.
+
+Timeline scrub-time preview:
+
+- Branch milestone: `feature/timeline-scrub-time-preview`.
+- While dragging the fullscreen timeline, a floating timestamp follows the slider thumb.
+- Uses `MM:SS` or `H:MM:SS`; the timestamp disappears after release.
+- Existing seek behavior is unchanged. Verified working on iPhone.
+
+## CloudBox UI Refresh (current)
+
+- Branch milestone: `feature/home-dashboard-redesign-v2`.
+
+Completed redesigns:
+
+- Home dashboard
+- Custom floating bottom navigation
+- More control hub
+- Network infrastructure monitor
+- Videos media library
+- Markdown Converter document workbench
+- Trends discovery/radar screen
+- Downloader web UI
+
+Design workflow: UI/UX Pro, Taste, Impeccable, Emil Kowalski motion/design-engineering guidance. Goal: handcrafted, premium, non-generic CloudBox UI.
+
+Visual language:
+
+- deep navy background
+- one restrained corner bloom
+- flat raised surfaces
+- white low-opacity hairlines
+- premium blue accent
+- tinted icon chips
+- tracked uppercase captions
+- monospaced infrastructure labels
+- restrained motion with Reduce Motion support
+- no excessive glow or generic gradient-card dashboard style
+
+Bottom navigation:
+
+- The default system tab bar styling was replaced by a custom SwiftUI floating pill bar.
+- Tabs remain: Home, Downloader, Videos, Network, More.
+- Selected-state chip uses `matchedGeometryEffect`.
+- Light haptic and press feedback are included.
+- Accessibility labels and selected traits are included.
+- The custom bar respects the home indicator.
+- Pushed screens may require explicit bottom clearance because SwiftUI safe-area inset propagation is inconsistent.
+
+More page:
+
+- The default Form was replaced by a CloudBox control hub.
+- Includes endpoints, privacy, and Tailscale sections.
+- Existing values and the Tailscale action remain unchanged.
+
+Network page:
+
+- Redesigned into infrastructure telemetry: monitor panel, summary tiles, storage, month/today metrics, daily rows, raw counters.
+- Existing metrics/calculations remain unchanged.
+- Foreground reconnect hang was fixed:
+  - stale request is cancelled
+  - refresh generation is advanced
+  - loading state is reset
+  - waits 750ms for Tailscale wake-up
+  - restarts auto-refresh
+  - leaving active cancels requests
+  - the network request has a 10-second client timeout
+- Verified on iPhone: no tab switch is required after foregrounding; reconnect now works.
+
+Videos:
+
+- Redesigned media library and folder-detail UI.
+- Folder grouping, thumbnails, progress, navigation, playback, and refresh remain unchanged.
+
+Trends:
+
+- Redesigned into CloudBox discovery/radar style.
+- Existing TMDB data, four sections, trailers, refresh, and Safari sheet remain unchanged.
+
+Downloader web UI:
+
+- `frontend/app.js` now injects `installCloudBoxTheme()`.
+- The theme is self-contained in `app.js`; `index.html` and `style.css` remain unchanged.
+- The theme applies to the desktop browser and the iPhone WebView.
+- Existing add-magnet, queue ordering, delete modal, completed files, and Trends behavior remain unchanged.
+- The themed `app.js` was deployed manually to Oracle.
+
+## Current Home Dashboard API
+
+- Branches/milestones: `feature/home-dashboard-api`; latest integrated work: `feature/home-dashboard-v3`.
+
+Backend endpoint: `GET /api/home-dashboard`. One aggregated response containing:
+
+- `server`: online, Oracle/Tokyo location, real uptime, last-updated timestamp, API/qBittorrent/storage service status.
+- `library`: playable-video count, indexed/completed-file count, storage used bytes, storage total bytes.
+- `downloads`: real active torrent count.
+- `network`: current RX bytes/second, current TX bytes/second.
+- `continue_watching`.
+- `recently_added`.
+
+Implementation details:
+
+- Reuses existing video, progress, thumbnail, qBittorrent, storage, and network helpers.
+- `video_id` equals the safe relative path already used by the existing player flow.
+- Absolute filesystem paths are never exposed.
+- Continue Watching:
+  - selects the most recently watched unfinished video
+  - excludes missing videos
+  - excludes videos at or above the 90% watched threshold
+  - returns saved position and duration
+  - returns normalized progress from 0.0 to 1.0
+- Filename parsing:
+  - removes release noise
+  - detects year
+  - detects `S01E05` and `1x05`
+  - uses parent-folder metadata as fallback
+  - removes dangling punctuation
+- Recently Added:
+  - the backend returns up to 40 newest raw playable videos
+  - iOS groups episodes into unique series/movie entries
+  - iOS displays up to 8 unique entries after grouping
+- Movies open the existing player directly.
+- Series show one card and open the existing Videos folder/detail episode picker.
+- Continue Watching remains a separate resumable card above Recently Added.
+- VLC resume position is seeded through the existing progress store before opening.
+- Existing AVPlayer/VLC routing is preserved.
+
+Confirmed server test examples:
+
+- real server/service/storage/network data returned
+- normalized progress fixed
+- `Sector 36` parses correctly
+- `Raakh` episode title/subtitle/year parse correctly
+- recently-added grouping now fills available unique cards correctly
+
+## Current Home TMDB Artwork
+
+Backend:
+
+- Home dashboard media enrichment uses TMDB server-side, with the existing `TMDB_API_KEY`.
+- Search is based on normalized title, movie/TV media type, and year when available.
+- Movie uses `/search/movie`; series uses `/search/tv`.
+- Exact normalized-title match is required; conflicting years are rejected.
+- Missing key, network failure, non-200 response, parse failure, or no match returns `null` safely.
+- Successful and no-match results use an in-process TTL cache.
+- TMDB failures do not fail `/api/home-dashboard`.
+- The API key is never returned to iOS; images are not permanently downloaded.
+
+Returned artwork: `tmdb_id`, `poster_url`, `backdrop_url`; the existing local thumbnail fallback remains.
+
+iOS artwork priority:
+
+- Continue Watching: backdrop → poster → local thumbnail → placeholder.
+- Recently Added: poster → local thumbnail → placeholder.
+
+System configuration:
+
+- TMDB env file: `/home/ubuntu/.config/cloudbox/tmdb.env`.
+- The current file uses plain assignment for systemd compatibility:
+
+```text
+TMDB_API_KEY=...
+```
+
+- The FastAPI service loads it through a systemd drop-in:
+
+```text
+/etc/systemd/system/personal-downloader-api.service.d/tmdb.conf
+```
+
+- The drop-in uses:
+
+```text
+EnvironmentFile=/home/ubuntu/.config/cloudbox/tmdb.env
+```
+
+Important follow-up (Trends cron):
+
+- The old Trends cron sourced this file as a shell script when it used `export TMDB_API_KEY=...`.
+- Because the file now uses a plain assignment, the cron must export sourced values (for example with `set -a` / `set +a`) before claiming the reboot/6-hour Trends refresh still works.
+- Do NOT claim the Trends cron remains verified after this env-format change unless it has been retested.
+
+## Current Home Behavior (replaces older Home status)
+
+> Supersedes older statements that Home used separate `/api/health`, `/api/torrents`, and `/api/completed-files`.
+
+- Current Home uses one aggregated `GET /api/home-dashboard`.
+- Latency is measured client-side in iOS using request round-trip time.
+- Home currently supports: server status, services, latency, library counts, active downloads, storage, live network rates, Continue Watching, Recently Added, TMDB artwork, movie playback, series folder navigation, foreground reconnect.
+
+## Branch and Status Summary (current)
+
+- Current active Home work branch: `feature/home-dashboard-v3`.
+- Prior completed milestone branches:
+  - `feature/real-landscape-player`
+  - `feature/home-dashboard-redesign-v2`
+  - `feature/timeline-scrub-time-preview`
+  - `feature/home-dashboard-api`
+- `feature/tmdb-trends` is historical and is NOT the current branch.
+
+## Current Final Status (authoritative)
+
+- Oracle is production. AWS remains stopped as backup.
+- Current Tailscale IP is `100.95.39.107` (see "1a. Current Production Environment").
+- Working: backend, web downloader, qBittorrent, Nginx/files, the native iOS app, AVPlayer/VLC player, subtitles, audio selector, real landscape, Network, Trends, Markdown Converter, Home dashboard, TMDB artwork, Continue Watching, Recently Added, movie playback, and series folder navigation.
+- The Downloader web theme is deployed.
+- The Home dashboard API and TMDB artwork are deployed.
+- The latest Home and series-grouping UI require the corresponding latest IPA if not yet installed.
+- Everything remains private through Tailscale.
+
+## Next Steps (authoritative)
+
+- Verify the latest `feature/home-dashboard-v3` IPA end to end.
+- Verify the TMDB Trends cron after the env-file format change (plain assignment vs `export`).
+- Merge stable branches when ready.
+- Keep the legal-files-only, under-10GB, quick-delete policy.
+- Continue manual Oracle backup/deploy discipline.
+- Optional: AVPlayer cross-device resume parity.
+- Optional: a stronger persistent TMDB artwork cache if needed.
+- Optional: clean up duplicated historical context sections later.
+
+## Deployment Notes
