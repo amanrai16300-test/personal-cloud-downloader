@@ -1,32 +1,35 @@
 import Foundation
 import SwiftUI
 
-/// CloudBox Home: a private-cloud dashboard with one telemetry panel, an
-/// asymmetric metrics bento, and a single action row. Visual language is
-/// deliberately restrained — deep navy surfaces, hairline strokes, one blue
-/// accent, monospaced telemetry — so it reads handcrafted rather than
-/// template-like.
+/// CloudBox Home: a private-cloud dashboard. The layout follows the locked
+/// reference design — a greeting + wordmark header, a connection panel with a
+/// device→cloud→server link diagram, a Continue Watching backdrop card, a
+/// four-up stat strip, a Network Activity + System Status pair, and a Recently
+/// Added poster strip.
 ///
-/// Data layer: one aggregated `GET /api/home-dashboard` request feeds server,
-/// library, downloads, network, Continue Watching, and Recently Added. Request
-/// round-trip time is measured client-side for the latency readout. Media taps
-/// reuse the existing VideosView → PlayerView flow: the home item is matched to
-/// the real `CompletedFile` (for the correct stream URL + AVPlayer/VLC routing)
-/// and its saved-resume position is seeded before pushing the player.
+/// Data layer (unchanged): one aggregated `GET /api/home-dashboard` request
+/// feeds server, library, downloads, network, Continue Watching, and Recently
+/// Added. Request round-trip time is measured client-side for the latency
+/// readout. Media taps reuse the existing VideosView → PlayerView flow: the
+/// home item is matched to the real `CompletedFile` (for the correct stream URL
+/// + AVPlayer/VLC routing) and its saved-resume position is seeded before
+/// pushing the player.
 struct HomeView: View {
-    private let serverIP = "100.95.39.107"
     private let backendBaseURL = CompletedFilesAPI.baseURL
     private let refreshInterval: UInt64 = 12_000_000_000
 
     // MARK: Palette — semantic tokens, used consistently across the screen.
-    private let screenBackground = Color(red: 0.008, green: 0.022, blue: 0.055)
-    private let surface = Color(red: 0.035, green: 0.065, blue: 0.125)
-    private let surfaceRaised = Color(red: 0.055, green: 0.095, blue: 0.175)
-    private let hairline = Color.white.opacity(0.08)
+    private let screenBackground = Color(red: 0.008, green: 0.022, blue: 0.045)
+    private let surface = Color(red: 0.035, green: 0.060, blue: 0.110)
+    private let surfaceRaised = Color(red: 0.050, green: 0.080, blue: 0.150)
+    private let hairline = Color.white.opacity(0.07)
     private let mutedText = Color(red: 0.56, green: 0.64, blue: 0.78)
-    private let premiumBlue = Color(red: 0.30, green: 0.59, blue: 1.0)
-    private let videosViolet = Color(red: 0.64, green: 0.52, blue: 1.0)
-    private let filesTeal = Color(red: 0.28, green: 0.76, blue: 0.70)
+    private let premiumBlue = Color(red: 0.42, green: 0.45, blue: 0.98)
+    private let videosViolet = Color(red: 0.55, green: 0.50, blue: 1.0)
+    private let filesGreen = Color(red: 0.30, green: 0.80, blue: 0.52)
+    private let downloadAmber = Color(red: 1.0, green: 0.58, blue: 0.18)
+    private let storageBlue = Color(red: 0.34, green: 0.62, blue: 1.0)
+    private let onlineGreen = Color(red: 0.30, green: 0.82, blue: 0.46)
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -49,17 +52,17 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 22) {
                     brandHeader
-                    serverPanel
-                    metricsBento
+                    connectionPanel
                     continueWatchingSection
+                    statStrip
+                    statusRow
                     recentlyAddedSection
                     tailscaleAction
-                    privateCloudNote
                 }
                 .padding(.horizontal, 18)
-                .padding(.top, 14)
+                .padding(.top, 10)
                 .padding(.bottom, 34)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // One animation driver for the whole dashboard: counts and
@@ -68,9 +71,8 @@ struct HomeView: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: dashboard.lastUpdated)
             }
             .background(homeBackground)
-            .navigationTitle("Home")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
             // A tapped media card pushes the existing fullscreen player, exactly
             // as the Videos list does (same CompletedFile destination + flow).
             // Programmatic push via a binding (iOS 16-compatible: no
@@ -105,355 +107,188 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Background — deep navy with ONE soft accent bloom, no busy gradients.
+    // MARK: Background — deep navy, no busy gradients.
 
     private var homeBackground: some View {
-        ZStack {
-            screenBackground.ignoresSafeArea()
-            RadialGradient(
-                colors: [premiumBlue.opacity(0.14), .clear],
-                center: .init(x: 0.85, y: -0.05),
-                startRadius: 10,
-                endRadius: 420
-            )
-            .ignoresSafeArea()
-        }
+        screenBackground.ignoresSafeArea()
     }
 
-    // MARK: Brand header — wordmark + live subtitle, no card chrome.
+    // MARK: Brand header — greeting + wordmark + subtitle, bell on the right.
 
     private var brandHeader: some View {
-        HStack(spacing: 13) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [premiumBlue, Color(red: 0.07, green: 0.22, blue: 0.55)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 46, height: 46)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                    }
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(dashboard.greetingText)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(mutedText)
 
-                Image(systemName: "cloud.fill")
-                    .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(Color.white)
-            }
-            .shadow(color: premiumBlue.opacity(0.35), radius: 12, y: 6)
-            .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
                 Text("CloudBox")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.system(size: 46, weight: .heavy))
                     .foregroundStyle(Color.white)
+                    .padding(.bottom, 1)
 
-                Text(dashboard.headerSubtitle)
-                    .font(.system(size: 13.5, weight: .medium))
+                Text("Your private cloud. Always connected.")
+                    .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(mutedText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .contentTransition(.opacity)
             }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 4)
-    }
-
-    // MARK: Server panel — the screen's telemetry centerpiece.
-
-    /// Private-tailnet panel: status orb + label, monospaced server address,
-    /// and an updated/refresh footer. Dot-grid texture + corner bloom give it
-    /// a quiet "infrastructure" character instead of a generic stat card.
-    private var serverPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("PRIVATE TAILNET")
-                    .font(.system(size: 11, weight: .bold))
-                    .tracking(1.6)
-                    .foregroundStyle(premiumBlue)
-
-                Spacer(minLength: 8)
-
-                StatusOrb(color: serverStatusColor, animates: !reduceMotion)
-
-                Text(dashboard.serverStatusText)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(serverStatusColor)
-                    .contentTransition(.opacity)
-            }
-            .padding(.bottom, 14)
-
-            HStack(spacing: 10) {
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(premiumBlue)
-                    .accessibilityHidden(true)
-
-                Text(serverIP)
-                    .font(.system(size: 23, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .textSelection(.enabled)
-                    .accessibilityLabel("Server address \(serverIP)")
-
-                Spacer(minLength: 0)
-            }
-            .padding(.bottom, 14)
-
-            Rectangle()
-                .fill(hairline)
-                .frame(height: 1)
-                .padding(.bottom, 11)
-
-            HStack(spacing: 6) {
-                Image(systemName: dashboard.isRefreshing ? "arrow.triangle.2.circlepath" : "clock")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(mutedText)
-                    .accessibilityHidden(true)
-
-                Text("Updated")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(mutedText)
-
-                Text(dashboard.lastUpdatedText)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.92))
-                    .contentTransition(.opacity)
-
-                Spacer(minLength: 8)
-
-                Text(dashboard.latencyText)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(mutedText.opacity(0.85))
-                    .contentTransition(.opacity)
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            ZStack {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(surface)
-
-                // Quiet infrastructure texture — static, cheap to draw.
-                DotGrid()
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-
-                RadialGradient(
-                    colors: [premiumBlue.opacity(0.16), .clear],
-                    center: .topTrailing,
-                    startRadius: 4,
-                    endRadius: 240
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            }
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [premiumBlue.opacity(0.45), hairline],
-                        startPoint: .topTrailing,
-                        endPoint: .bottomLeading
-                    ),
-                    lineWidth: 1
-                )
-        }
-    }
-
-    // MARK: Metrics bento — one wide card + a pair, instead of a uniform grid.
-
-    private var metricsBento: some View {
-        VStack(spacing: 12) {
-            downloaderCard
-
-            HStack(spacing: 12) {
-                compactMetricCard(
-                    icon: "play.rectangle.fill",
-                    title: "Videos",
-                    value: dashboard.completedFilesText,
-                    detail: "Completed files",
-                    tint: videosViolet
-                )
-
-                compactMetricCard(
-                    icon: "externaldrive.fill",
-                    title: "Files",
-                    value: dashboard.filesIndexText,
-                    detail: dashboard.filesIndexDetail,
-                    tint: filesTeal
-                )
-            }
-        }
-    }
-
-    /// Wide downloader card: count dominates, wave ornament fills the trailing
-    /// space. The asymmetry (one wide + two compact) is what keeps the bento
-    /// from reading as a template grid.
-    private var downloaderCard: some View {
-        HStack(alignment: .center, spacing: 14) {
-            iconChip("arrow.down.circle.fill", tint: premiumBlue)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Downloader")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(mutedText)
-
-                Text(dashboard.torrentCountText)
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .contentTransition(.numericText())
-
-                Text(dashboard.activeTorrentText)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(mutedText)
-                    .lineLimit(1)
-            }
-            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
-            WaveLines(tint: premiumBlue.opacity(0.30))
-                .frame(width: 110, height: 58)
-                .accessibilityHidden(true)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(metricSurface(tint: premiumBlue))
-        .accessibilityElement(children: .combine)
-    }
+            // Visual-only notification bell (no inbox in this app yet).
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "bell")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .frame(width: 46, height: 46)
+                    .background(surfaceRaised, in: Circle())
+                    .overlay { Circle().stroke(hairline, lineWidth: 1) }
 
-    private func compactMetricCard(
-        icon: String,
-        title: String,
-        value: String,
-        detail: String,
-        tint: Color
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                iconChip(icon, tint: tint)
-                Spacer(minLength: 0)
-            }
-
-            Spacer(minLength: 2)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(mutedText)
-                    .lineLimit(1)
-
-                Text(value)
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .contentTransition(.numericText())
-
-                Text(detail)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(mutedText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 128, alignment: .topLeading)
-        .background(metricSurface(tint: tint))
-        .accessibilityElement(children: .combine)
-    }
-
-    /// Shared metric-card surface: flat raised navy, hairline stroke, and a
-    /// whisper of the card's tint along the top edge. No glow shadows.
-    private func metricSurface(tint: Color) -> some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(surfaceRaised)
-            .overlay(alignment: .top) {
-                LinearGradient(
-                    colors: [tint.opacity(0.14), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(hairline, lineWidth: 1)
-            }
-    }
-
-    /// Small tinted icon chip shared by every metric card — one size, one
-    /// stroke, one icon family.
-    private func iconChip(_ systemName: String, tint: Color) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(tint)
-            .frame(width: 38, height: 38)
-            .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(tint.opacity(0.30), lineWidth: 1)
+                Circle()
+                    .fill(premiumBlue)
+                    .frame(width: 9, height: 9)
+                    .offset(x: -3, y: 3)
             }
             .accessibilityHidden(true)
+            .padding(.top, 6)
+        }
     }
 
-    // MARK: Continue Watching — one wide resume card, or nothing when absent.
+    // MARK: Connection panel — status + link diagram centerpiece.
 
-    /// Rendered only when the backend returns a Continue Watching item; absent
-    /// (no card, no header) otherwise so the layout stays quiet. Tapping opens
-    /// the existing player at the saved position.
+    private var connectionPanel: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    StatusOrb(color: connectionDotColor, animates: !reduceMotion)
+                    Text(dashboard.connectionLabel)
+                        .font(.system(size: 12, weight: .bold))
+                        .tracking(1.4)
+                        .foregroundStyle(connectionDotColor)
+                        .contentTransition(.opacity)
+                }
+                .padding(.bottom, 8)
+
+                Text("Oracle • Tokyo")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.bottom, 6)
+
+                (
+                    Text(dashboard.latencyValueText)
+                        .foregroundStyle(onlineGreen)
+                    + Text(" latency")
+                        .foregroundStyle(mutedText)
+                )
+                .font(.system(size: 14, weight: .medium))
+                .contentTransition(.opacity)
+                .padding(.bottom, 14)
+
+                // Visual-only quick link (Home has no router to the Network tab).
+                HStack(spacing: 5) {
+                    Text("View Network")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(mutedText)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(surfaceRaised, in: Capsule())
+                .overlay { Capsule().stroke(hairline, lineWidth: 1) }
+                .accessibilityHidden(true)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 0)
+
+            ConnectionDiagram(linkActive: dashboard.serverStatus == .online,
+                              accent: premiumBlue,
+                              link: onlineGreen)
+                .frame(width: 150, height: 150)
+                .accessibilityHidden(true)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(panelSurface)
+    }
+
+    private var panelSurface: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(surface)
+            DotWorld()
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(hairline, lineWidth: 1)
+        }
+    }
+
+    // MARK: Continue Watching — wide backdrop resume card.
+
     @ViewBuilder
     private var continueWatchingSection: some View {
         if let item = dashboard.continueWatching {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeader("CONTINUE WATCHING")
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeader("Continue Watching", trailing: "See all")
 
                 Button {
                     openMedia(item)
                 } label: {
-                    HStack(spacing: 13) {
-                        mediaArtwork(item, wide: true, width: 124, height: 70)
+                    ZStack(alignment: .bottom) {
+                        HStack(spacing: 0) {
+                            mediaArtwork(item, wide: true)
+                                .frame(width: 168, height: 132)
+                                .clipped()
+                                .overlay(alignment: .center) {
+                                    Image(systemName: "play.fill")
+                                        .font(.system(size: 17, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 48, height: 48)
+                                        .background(Color.black.opacity(0.45), in: Circle())
+                                        .overlay { Circle().stroke(Color.white.opacity(0.35), lineWidth: 1) }
+                                }
 
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(item.title)
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text(item.title)
+                                    .font(.system(size: 22, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
 
-                            if let subtitle = item.subtitleText {
-                                Text(subtitle)
-                                    .font(.system(size: 12.5, weight: .medium))
+                                if let subtitle = item.subtitleText {
+                                    Text(subtitle)
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(premiumBlue)
+                                        .lineLimit(1)
+                                }
+
+                                Text(item.remainingText)
+                                    .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(mutedText)
                                     .lineLimit(1)
                             }
+                            .padding(.leading, 18)
+                            .padding(.trailing, 14)
 
-                            mediaProgressBar(item.progressFraction)
+                            Spacer(minLength: 0)
                         }
-                        .layoutPriority(1)
 
-                        Spacer(minLength: 8)
-
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 26, weight: .semibold))
-                            .foregroundStyle(premiumBlue)
-                            .accessibilityHidden(true)
+                        mediaProgressBar(item.progressFraction)
+                            .padding(.horizontal, 0)
                     }
-                    .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(metricSurface(tint: premiumBlue))
+                    .frame(height: 132)
+                    .background(surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(hairline, lineWidth: 1)
+                    }
                     .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 .buttonStyle(HomePressStyle())
@@ -461,152 +296,172 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Recently Added — horizontal poster strip, hidden when empty.
+    // MARK: Stat strip — four metrics in one divided card.
 
-    @ViewBuilder
-    private var recentlyAddedSection: some View {
-        if !dashboard.recentlyAddedEntries.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeader("RECENTLY ADDED")
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(dashboard.recentlyAddedEntries) { entry in
-                            switch entry.kind {
-                            case .movie(let item):
-                                Button {
-                                    openMedia(item)
-                                } label: {
-                                    recentlyAddedCard(
-                                        item: item,
-                                        title: entry.displayTitle,
-                                        episodeCount: nil
-                                    )
-                                }
-                                .buttonStyle(HomePressStyle())
-
-                            case .series(let folder, let item):
-                                // Tapping opens the existing folder/episode
-                                // picker (same screen as the Videos tab).
-                                NavigationLink(value: folder) {
-                                    recentlyAddedCard(
-                                        item: item,
-                                        title: entry.displayTitle,
-                                        episodeCount: folder.videos.count
-                                    )
-                                }
-                                .buttonStyle(HomePressStyle())
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 1)
-                }
-            }
+    private var statStrip: some View {
+        HStack(spacing: 0) {
+            statColumn(
+                icon: "play.circle",
+                tint: videosViolet,
+                value: dashboard.completedFilesText,
+                unit: nil,
+                title: "Videos",
+                detail: "In library"
+            )
+            statDivider
+            statColumn(
+                icon: "folder",
+                tint: filesGreen,
+                value: dashboard.filesIndexText,
+                unit: nil,
+                title: dashboard.filesIndexDetail,
+                detail: "Files"
+            )
+            statDivider
+            statColumn(
+                icon: "arrow.down.circle",
+                tint: downloadAmber,
+                value: dashboard.torrentCountText,
+                unit: nil,
+                title: "Active",
+                detail: "Downloads"
+            )
+            statDivider
+            statColumn(
+                icon: "cylinder.split.1x2",
+                tint: storageBlue,
+                value: dashboard.storageUsedValue,
+                unit: dashboard.storageUsedUnit,
+                title: dashboard.storageTotalText,
+                detail: "Storage used"
+            )
         }
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity)
+        .background(panelSurface)
     }
 
-    /// One Recently Added poster card. Movies and grouped series share the same
-    /// layout; series add an episode-count badge over the artwork. `item`
-    /// supplies the artwork (poster_url → local_thumbnail_url → placeholder) and,
-    /// for series, the chosen representative episode's poster.
-    private func recentlyAddedCard(item: HomeMediaItem, title: String, episodeCount: Int?) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            mediaArtwork(item, wide: false, width: 116, height: 164)
-                .overlay(alignment: .topTrailing) {
-                    if let episodeCount {
-                        Text(episodeCount == 1 ? "1 ep" : "\(episodeCount) eps")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 4)
-                            .background(Color.black.opacity(0.70), in: Capsule())
-                            .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 1))
-                            .padding(7)
-                    }
-                }
+    private var statDivider: some View {
+        Rectangle()
+            .fill(hairline)
+            .frame(width: 1, height: 92)
+    }
+
+    private func statColumn(
+        icon: String,
+        tint: Color,
+        value: String,
+        unit: String?,
+        title: String,
+        detail: String
+    ) -> some View {
+        VStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(height: 26)
+
+            (
+                Text(value)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.white)
+                + Text(unit.map { " \($0)" } ?? "")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(mutedText)
+            )
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .contentTransition(.numericText())
 
             Text(title)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Text(detail)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(mutedText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: Network Activity + System Status pair.
+
+    private var statusRow: some View {
+        HStack(spacing: 12) {
+            networkActivityCard
+            systemStatusCard
+        }
+    }
+
+    private var networkActivityCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Network Activity")
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(.white)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(width: 116, alignment: .leading)
-        }
-    }
+                .padding(.bottom, 12)
 
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .bold))
-            .tracking(1.6)
-            .foregroundStyle(premiumBlue)
-    }
+            EqualizerBars(tint: premiumBlue, animates: !reduceMotion)
+                .frame(height: 48)
+                .padding(.bottom, 12)
 
-    /// Artwork for a media card. TMDB poster/backdrop are preferred when present
-    /// (backdrop for the wide Continue Watching card, poster for portrait
-    /// Recently Added), falling back to the local thumbnail, then a placeholder.
-    /// Visual only — never used for playback identity.
-    @ViewBuilder
-    private func mediaArtwork(_ item: HomeMediaItem, wide: Bool, width: CGFloat, height: CGFloat) -> some View {
-        let url = wide ? item.wideArtworkURL : item.portraitArtworkURL
-        let radius: CGFloat = wide ? 10 : 12
-        Group {
-            if let url {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        mediaArtworkPlaceholder
-                    }
-                }
-            } else {
-                mediaArtworkPlaceholder
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(dashboard.networkSpeedText)
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(premiumBlue)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                Text("Current Speed")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(mutedText)
             }
         }
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+        .background(panelSurface)
     }
 
-    private var mediaArtworkPlaceholder: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.14),
-                        Color(red: 0.045, green: 0.055, blue: 0.07),
-                        Color.black
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .overlay {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.28))
+    private var systemStatusCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("System Status")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.bottom, 16)
+
+            HStack(spacing: 9) {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(dashboard.serverStatus == .online ? onlineGreen : mutedText)
+                Text(dashboard.systemStatusText)
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-    }
+            .padding(.bottom, 6)
 
-    private func mediaProgressBar(_ fraction: Double) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.14))
-                Capsule()
-                    .fill(premiumBlue)
-                    .frame(width: geo.size.width * CGFloat(min(max(fraction, 0), 1)))
-            }
+            Text(dashboard.uptimeText)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(mutedText)
+                .padding(.leading, 27)
+                .contentTransition(.opacity)
+
+            Spacer(minLength: 0)
         }
-        .frame(height: 5)
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+        .background(panelSurface)
     }
 
-    // MARK: Tailscale action — the screen's single tappable row.
+    // MARK: Tailscale action — the screen's single tappable utility row.
 
+    /// Opens the Tailscale app via its custom scheme (unchanged behavior).
+    /// Styled to match the new dashboard surfaces; sits below the content so the
+    /// top of the screen stays faithful to the reference layout.
     private var tailscaleAction: some View {
         Link(destination: URL(string: "tailscale://")!) {
             HStack(spacing: 13) {
@@ -632,7 +487,7 @@ struct HomeView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Open Tailscale")
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(Color.white)
                         .lineLimit(1)
 
@@ -655,49 +510,190 @@ struct HomeView: View {
             .padding(.horizontal, 15)
             .padding(.vertical, 13)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(surfaceRaised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(premiumBlue.opacity(0.30), lineWidth: 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(panelSurface)
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(HomePressStyle())
+        .accessibilityLabel("Open Tailscale")
     }
 
-    // MARK: Footer note — quiet, no card competition.
+    // MARK: Recently Added — horizontal poster strip, hidden when empty.
 
-    private var privateCloudNote: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "checkmark.shield")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(mutedText)
-                .padding(.top, 1)
-                .accessibilityHidden(true)
+    @ViewBuilder
+    private var recentlyAddedSection: some View {
+        if !dashboard.recentlyAddedEntries.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeader("Recently Added", trailing: "View all")
 
-            Text("Private CloudBox access stays behind Tailscale. Offline values mean the phone cannot reach the server right now.")
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(mutedText)
-                .fixedSize(horizontal: false, vertical: true)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(dashboard.recentlyAddedEntries) { entry in
+                            switch entry.kind {
+                            case .movie(let item):
+                                Button {
+                                    openMedia(item)
+                                } label: {
+                                    recentlyAddedCard(
+                                        item: item,
+                                        title: entry.posterTitle,
+                                        episodeCount: nil
+                                    )
+                                }
+                                .buttonStyle(HomePressStyle())
+
+                            case .series(let folder, let item):
+                                // Tapping opens the existing folder/episode
+                                // picker (same screen as the Videos tab).
+                                NavigationLink(value: folder) {
+                                    recentlyAddedCard(
+                                        item: item,
+                                        title: entry.posterTitle,
+                                        episodeCount: folder.videos.count
+                                    )
+                                }
+                                .buttonStyle(HomePressStyle())
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 1)
+                }
+            }
         }
-        .padding(.horizontal, 4)
-        .padding(.top, 2)
+    }
+
+    /// One Recently Added poster card. The title (movie name, series episode tag,
+    /// or year) sits over the bottom of the artwork, with a progress hairline
+    /// beneath — matching the reference strip. `item` supplies the artwork
+    /// (poster_url → local_thumbnail_url → placeholder).
+    private func recentlyAddedCard(item: HomeMediaItem, title: String, episodeCount: Int?) -> some View {
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottomLeading) {
+                mediaArtwork(item, wide: false)
+                    .frame(width: 132, height: 188)
+                    .clipped()
+
+                LinearGradient(
+                    colors: [.clear, Color.black.opacity(0.85)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+                .frame(height: 90)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+
+                    if let episodeCount {
+                        Text(episodeCount == 1 ? "1 ep" : "\(episodeCount) eps")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.75))
+                    } else if let year = item.yearText {
+                        Text(year)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.75))
+                            .monospacedDigit()
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 9)
+            }
+            .frame(width: 132, height: 188)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            }
+
+            mediaProgressBar(item.progressFraction)
+                .padding(.horizontal, 4)
+                .padding(.top, 7)
+        }
+        .frame(width: 132)
+    }
+
+    private func sectionHeader(_ text: String, trailing: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(text)
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(.white)
+
+            Spacer(minLength: 8)
+
+            // Visual-only "see more" affordance (no list routing from Home).
+            Text(trailing)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(premiumBlue)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// Artwork for a media card. TMDB poster/backdrop are preferred when present
+    /// (backdrop for the wide Continue Watching card, poster for portrait
+    /// Recently Added), falling back to the local thumbnail, then a placeholder.
+    /// Visual only — never used for playback identity.
+    @ViewBuilder
+    private func mediaArtwork(_ item: HomeMediaItem, wide: Bool) -> some View {
+        let url = wide ? item.wideArtworkURL : item.portraitArtworkURL
+        Group {
+            if let url {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        mediaArtworkPlaceholder
+                    }
+                }
+            } else {
+                mediaArtworkPlaceholder
+            }
+        }
+    }
+
+    private var mediaArtworkPlaceholder: some View {
+        Rectangle()
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.14),
+                        Color(red: 0.045, green: 0.055, blue: 0.07),
+                        Color.black
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.28))
+            }
+    }
+
+    private func mediaProgressBar(_ fraction: Double) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.12))
+                Capsule()
+                    .fill(premiumBlue)
+                    .frame(width: geo.size.width * CGFloat(min(max(fraction, 0), 1)))
+            }
+        }
+        .frame(height: 4)
     }
 
     // MARK: Status mapping (unchanged behavior)
 
-    private var serverStatusColor: Color {
-        if dashboard.isCheckingUnknownServer {
-            return .secondary
-        }
-
+    private var connectionDotColor: Color {
+        if dashboard.isCheckingUnknownServer { return mutedText }
         switch dashboard.serverStatus {
-        case .loading:
-            return .secondary
-        case .online:
-            return .green
-        case .offline:
-            return .red
+        case .loading: return mutedText
+        case .online: return onlineGreen
+        case .offline: return .red
         }
     }
 
@@ -829,9 +825,13 @@ struct HomeView: View {
         let response = result.response
         return HomeDashboardState(
             serverStatus: (response.server?.online ?? true) ? .online : .offline,
+            uptimeSeconds: response.server?.uptimeSeconds,
             torrentCount: response.downloads?.activeCount,
             completedFileCount: response.library?.videoCount,
             indexedFileCount: response.library?.fileCount,
+            storageUsedBytes: response.library?.storageUsedBytes,
+            storageTotalBytes: response.library?.storageTotalBytes,
+            networkBytesPerSecond: response.network?.totalBytesPerSecond,
             latencyMs: result.latencyMs,
             continueWatching: response.continueWatching,
             recentlyAdded: response.recentlyAdded ?? [],
@@ -991,10 +991,14 @@ private struct HomeDashboardResponse: Decodable {
     struct LibraryInfo: Decodable {
         let videoCount: Int?
         let fileCount: Int?
+        let storageUsedBytes: Int?
+        let storageTotalBytes: Int?
 
         enum CodingKeys: String, CodingKey {
             case videoCount = "video_count"
             case fileCount = "file_count"
+            case storageUsedBytes = "storage_used_bytes"
+            case storageTotalBytes = "storage_total_bytes"
         }
     }
 
@@ -1013,6 +1017,12 @@ private struct HomeDashboardResponse: Decodable {
         enum CodingKeys: String, CodingKey {
             case rxBytesPerSecond = "rx_bytes_per_second"
             case txBytesPerSecond = "tx_bytes_per_second"
+        }
+
+        /// Combined current throughput for the single "Current Speed" readout.
+        var totalBytesPerSecond: Int? {
+            guard rxBytesPerSecond != nil || txBytesPerSecond != nil else { return nil }
+            return (rxBytesPerSecond ?? 0) + (txBytesPerSecond ?? 0)
         }
     }
 }
@@ -1062,6 +1072,31 @@ private struct HomeMediaItem: Decodable, Identifiable, Hashable {
         return subtitle
     }
 
+    /// "32:15 remaining" style readout for the Continue Watching card, from the
+    /// backend duration/position. Falls back to a progress percentage when the
+    /// duration is unknown, and to a generic line when neither is available.
+    var remainingText: String {
+        let remaining = durationSeconds - positionSeconds
+        if durationSeconds > 0, remaining > 0 {
+            return "\(Self.clockText(remaining)) remaining"
+        }
+        if durationSeconds > 0 {
+            return "Finished"
+        }
+        let percent = Int((progressFraction * 100).rounded())
+        return percent > 0 ? "\(percent)% watched" : "Resume watching"
+    }
+
+    private static func clockText(_ seconds: Int) -> String {
+        let h = seconds / 3600
+        let m = (seconds % 3600) / 60
+        let s = seconds % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
+    }
+
     /// Wide artwork (Continue Watching): TMDB backdrop preferred, else the local
     /// thumbnail. nil → placeholder.
     var wideArtworkURL: URL? {
@@ -1109,22 +1144,14 @@ private struct RecentlyAddedEntry: Identifiable {
         }
     }
 
-    /// Display title with the backend `year` appended when present (e.g.
-    /// "Severance (2022)"). Series use the folder name as the base; movies use
-    /// the item title. The year is taken straight from the dashboard payload —
-    /// not parsed from the title — and skipped if the base already contains it.
-    var displayTitle: String {
+    /// Poster overlay title. Movies use their own title (which may already carry
+    /// a year line beneath); series use the folder name. The year is shown
+    /// separately beneath, taken straight from the dashboard payload.
+    var posterTitle: String {
         switch kind {
-        case .movie(let item):
-            return Self.titled(item.title, year: item.yearText)
-        case .series(let folder, let item):
-            return Self.titled(folder.name, year: item.yearText)
+        case .movie(let item): return item.title
+        case .series(let folder, _): return folder.name
         }
-    }
-
-    private static func titled(_ base: String, year: String?) -> String {
-        guard let year, !base.contains(year) else { return base }
-        return "\(base) (\(year))"
     }
 }
 
@@ -1149,7 +1176,7 @@ private struct StatusOrb: View {
                 .fill(color)
                 .frame(width: 9, height: 9)
         }
-        .frame(width: 20, height: 20)
+        .frame(width: 14, height: 14)
         .onAppear {
             guard animates else { return }
             withAnimation(.easeOut(duration: 1.8).repeatForever(autoreverses: false)) {
@@ -1171,9 +1198,13 @@ private struct HomePressStyle: ButtonStyle {
 
 private struct HomeDashboardState {
     var serverStatus: HomeServerStatus = .loading
+    var uptimeSeconds: Int?
     var torrentCount: Int?
     var completedFileCount: Int?
     var indexedFileCount: Int?
+    var storageUsedBytes: Int?
+    var storageTotalBytes: Int?
+    var networkBytesPerSecond: Int?
     var latencyMs: Int?
     var continueWatching: HomeMediaItem?
     var recentlyAdded: [HomeMediaItem] = []
@@ -1183,75 +1214,145 @@ private struct HomeDashboardState {
     var isReconnecting = false
     var hasLoaded = false
 
+    var greetingText: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        let part: String
+        switch hour {
+        case 5..<12: part = "Good morning"
+        case 12..<17: part = "Good afternoon"
+        case 17..<22: part = "Good evening"
+        default: part = "Good night"
+        }
+        return "\(part), Aman"
+    }
+
+    var connectionLabel: String {
+        if isReconnecting { return "RECONNECTING" }
+        if isCheckingUnknownServer { return "CHECKING" }
+        switch serverStatus {
+        case .loading: return "CHECKING"
+        case .online: return "CONNECTED"
+        case .offline: return "OFFLINE"
+        }
+    }
+
     var torrentCountText: String {
-        guard let torrentCount else { return "Offline" }
+        guard let torrentCount else { return "—" }
         return "\(torrentCount)"
     }
 
-    var activeTorrentText: String {
-        guard let torrentCount else { return "No connection" }
-        return torrentCount == 1 ? "Active download" : "Active downloads"
-    }
-
     var completedFilesText: String {
-        guard let completedFileCount else { return "Offline" }
+        guard let completedFileCount else { return "—" }
         return "\(completedFileCount)"
     }
 
     var filesIndexText: String {
-        indexedFileCount == nil ? "Offline" : "Indexed"
+        indexedFileCount == nil ? "—" : "Indexed"
     }
 
     var filesIndexDetail: String {
-        guard let indexedFileCount else { return "No connection" }
-        return indexedFileCount == 1 ? "1 completed item" : "\(indexedFileCount) completed items"
+        guard let indexedFileCount else { return "No data" }
+        return indexedFileCount == 1 ? "1 item" : "\(indexedFileCount) items"
     }
 
-    var latencyText: String {
-        if isReconnecting || isRefreshing { return "Oracle · Tokyo" }
-        guard let latencyMs else { return "Oracle · Tokyo" }
+    /// Numeric portion of the storage-used readout (e.g. "82"). The unit is shown
+    /// separately so it can be set in a smaller weight, matching the reference.
+    var storageUsedValue: String {
+        guard let storageUsedBytes else { return "—" }
+        return Self.byteValue(storageUsedBytes)
+    }
+
+    var storageUsedUnit: String? {
+        guard let storageUsedBytes else { return nil }
+        return Self.byteUnit(storageUsedBytes)
+    }
+
+    var storageTotalText: String {
+        guard let storageTotalBytes else { return "Storage" }
+        return "of \(Self.byteValue(storageTotalBytes)) \(Self.byteUnit(storageTotalBytes))"
+    }
+
+    var networkSpeedText: String {
+        guard let networkBytesPerSecond else { return "—" }
+        return Self.speedText(networkBytesPerSecond)
+    }
+
+    var latencyValueText: String {
+        if isReconnecting || isRefreshing { return "— ms" }
+        guard let latencyMs else { return "— ms" }
         return "\(latencyMs) ms"
     }
 
-    var headerSubtitle: String {
-        if isReconnecting {
-            return "Reconnecting to the private shelf"
-        }
-
-        if isCheckingUnknownServer {
-            return "Checking the private shelf"
-        }
-
+    var systemStatusText: String {
         switch serverStatus {
-        case .loading:
-            return "Checking the private shelf"
-        case .online:
-            return "Tailnet online, library ready"
-        case .offline:
-            return "Private shelf unreachable"
+        case .loading: return "Checking systems"
+        case .online: return "All systems operational"
+        case .offline: return "Server unreachable"
         }
     }
 
-    var lastUpdatedText: String {
-        if isReconnecting {
-            return "Reconnecting"
+    var uptimeText: String {
+        guard serverStatus == .online, let uptimeSeconds, uptimeSeconds > 0 else {
+            return "Uptime unavailable"
         }
-        if isRefreshing {
-            return "Refreshing"
-        }
-        guard let lastUpdated else { return "Not yet" }
-        return lastUpdated.formatted(date: .omitted, time: .shortened)
+        return "Uptime: \(Self.uptime(uptimeSeconds))"
     }
 
     var serverStatusText: String {
-        if isReconnecting {
-            return "Reconnecting"
-        }
+        if isReconnecting { return "Reconnecting" }
         return isCheckingUnknownServer ? "Checking" : serverStatus.label
     }
 
     var isCheckingUnknownServer: Bool {
         (isRefreshing || isReconnecting) && serverStatus != .online
+    }
+
+    // MARK: Formatting helpers
+
+    /// Largest sensible binary unit value, no unit suffix (e.g. 88_000_000_000 → "82").
+    private static func byteValue(_ bytes: Int) -> String {
+        let (value, _) = byteParts(bytes)
+        return value
+    }
+
+    private static func byteUnit(_ bytes: Int) -> String {
+        let (_, unit) = byteParts(bytes)
+        return unit
+    }
+
+    private static func byteParts(_ bytes: Int) -> (String, String) {
+        let units = ["B", "KB", "MB", "GB", "TB"]
+        var value = Double(bytes)
+        var index = 0
+        while value >= 1024, index < units.count - 1 {
+            value /= 1024
+            index += 1
+        }
+        let rounded = value >= 100 || value == value.rounded()
+            ? String(Int(value.rounded()))
+            : String(format: "%.1f", value)
+        return (rounded, units[index])
+    }
+
+    private static func speedText(_ bytesPerSecond: Int) -> String {
+        let units = ["B/s", "KB/s", "MB/s", "GB/s"]
+        var value = Double(bytesPerSecond)
+        var index = 0
+        while value >= 1024, index < units.count - 1 {
+            value /= 1024
+            index += 1
+        }
+        let rounded = value >= 100 ? String(Int(value.rounded())) : String(format: "%.1f", value)
+        return "\(rounded) \(units[index])"
+    }
+
+    private static func uptime(_ seconds: Int) -> String {
+        let d = seconds / 86_400
+        let h = (seconds % 86_400) / 3600
+        let m = (seconds % 3600) / 60
+        if d > 0 { return "\(d)d \(h)h \(m)m" }
+        if h > 0 { return "\(h)h \(m)m" }
+        return "\(m)m"
     }
 }
 
@@ -1262,29 +1363,30 @@ private enum HomeServerStatus: Equatable {
 
     var label: String {
         switch self {
-        case .loading:
-            return "Checking"
-        case .online:
-            return "Online"
-        case .offline:
-            return "Offline"
+        case .loading: return "Checking"
+        case .online: return "Online"
+        case .offline: return "Offline"
         }
     }
 }
 
-/// Static dot-grid texture for the server panel — a quiet nod to rack/console
-/// UIs. Drawn once per layout; no animation, no hit testing.
-private struct DotGrid: View {
+/// Faint dotted world-map texture for the connection panel — a quiet nod to the
+/// reference's globe backdrop. Drawn once per layout; no animation, no hit
+/// testing. (Not a literal map — a regular dot field reading as "global".)
+private struct DotWorld: View {
     var body: some View {
         Canvas { context, size in
-            let step: CGFloat = 19
-            var y: CGFloat = 8
+            let step: CGFloat = 13
+            var y: CGFloat = 10
             while y < size.height {
-                var x: CGFloat = 8
+                var x: CGFloat = 10
                 while x < size.width {
+                    // Bias density toward the right half so it reads as a panel
+                    // ornament behind the diagram, not a full-bleed grid.
+                    let opacity = x > size.width * 0.42 ? 0.05 : 0.02
                     context.fill(
-                        Path(ellipseIn: CGRect(x: x, y: y, width: 1.6, height: 1.6)),
-                        with: .color(.white.opacity(0.045))
+                        Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)),
+                        with: .color(.white.opacity(opacity))
                     )
                     x += step
                 }
@@ -1295,25 +1397,126 @@ private struct DotGrid: View {
     }
 }
 
-/// Decorative flowing lines for the downloader card's trailing space — pure
-/// ornament (not data), kept faint so the count stays the focal point.
-private struct WaveLines: View {
-    let tint: Color
+/// The device → cloud → server link diagram. A phone chip on the left and a
+/// server chip on the right are joined by a connector line to a glowing cloud
+/// orb in the center. The connector tints green when the tailnet is online.
+/// Pure ornament — labels included to match the reference.
+private struct ConnectionDiagram: View {
+    let linkActive: Bool
+    let accent: Color
+    let link: Color
 
     var body: some View {
-        Canvas { context, size in
-            for index in 0..<5 {
-                var path = Path()
-                let y = size.height * 0.46 + CGFloat(index) * 5
-                path.move(to: CGPoint(x: 0, y: y))
-                path.addCurve(
-                    to: CGPoint(x: size.width, y: y + CGFloat(index % 2 == 0 ? -12 : 8)),
-                    control1: CGPoint(x: size.width * 0.35, y: y + 18),
-                    control2: CGPoint(x: size.width * 0.62, y: y - 22)
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let midY = h * 0.42
+            let endChip: CGFloat = 40
+            let orbSize: CGFloat = 56
+
+            ZStack {
+                // Connector line behind everything.
+                Path { p in
+                    p.move(to: CGPoint(x: endChip / 2, y: midY))
+                    p.addLine(to: CGPoint(x: w - endChip / 2, y: midY))
+                }
+                .stroke(
+                    (linkActive ? link : Color.white.opacity(0.18)),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
                 )
-                context.stroke(path, with: .color(tint), lineWidth: 0.8)
+
+                // Left: this iPhone.
+                endpointChip(systemName: "iphone", label: "This iPhone")
+                    .position(x: endChip / 2, y: midY)
+
+                // Right: CloudBox server.
+                endpointChip(systemName: "server.rack", label: "CloudBox Server")
+                    .position(x: w - endChip / 2, y: midY)
+
+                // Center: glowing cloud orb.
+                ZStack {
+                    Circle()
+                        .fill(accent.opacity(0.18))
+                        .frame(width: orbSize + 18, height: orbSize + 18)
+                        .blur(radius: 6)
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [accent.opacity(0.55), Color(red: 0.05, green: 0.07, blue: 0.18)],
+                                center: .center, startRadius: 2, endRadius: orbSize
+                            )
+                        )
+                        .frame(width: orbSize, height: orbSize)
+                        .overlay { Circle().stroke(accent.opacity(0.7), lineWidth: 1.5) }
+                    Image(systemName: "cloud.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .position(x: w / 2, y: midY)
             }
         }
+    }
+
+    private func endpointChip(systemName: String, label: String) -> some View {
+        VStack(spacing: 7) {
+            Image(systemName: systemName)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.85))
+                .frame(width: 40, height: 40)
+                .background(Color.white.opacity(0.05), in: Circle())
+                .overlay { Circle().stroke(Color.white.opacity(0.12), lineWidth: 1) }
+
+            Text(label)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+}
+
+/// Decorative equalizer bars for the Network Activity card — pure ornament (not
+/// real per-band data), kept restrained. Animates a gentle height shimmer unless
+/// Reduce Motion is on.
+private struct EqualizerBars: View {
+    let tint: Color
+    let animates: Bool
+
+    @State private var phase: CGFloat = 0
+    private let count = 34
+    // Fixed pseudo-random base heights so the silhouette is stable across redraws.
+    private let bases: [CGFloat] = (0..<34).map { i in
+        let n = sin(Double(i) * 1.7) * 0.5 + cos(Double(i) * 0.6) * 0.5
+        return CGFloat(0.35 + abs(n) * 0.6)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let spacing: CGFloat = 3
+            let barWidth = max(2, (geo.size.width - spacing * CGFloat(count - 1)) / CGFloat(count))
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(0..<count, id: \.self) { i in
+                    let wobble = animates ? (sin(phase + CGFloat(i) * 0.5) * 0.12) : 0
+                    let h = min(1, max(0.12, bases[i] + wobble))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [tint, tint.opacity(0.45)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                        .frame(width: barWidth, height: geo.size.height * h)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
+        }
+        .onAppear {
+            guard animates else { return }
+            withAnimation(.linear(duration: 2.2).repeatForever(autoreverses: false)) {
+                phase = .pi * 2
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
