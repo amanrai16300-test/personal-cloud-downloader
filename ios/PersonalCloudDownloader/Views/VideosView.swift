@@ -481,7 +481,11 @@ enum VideoGrouping {
 /// The videos inside one torrent folder. Reuses the same direct-fullscreen open
 /// behavior: each row pushes `PlayerView(startsFullscreen: true)` via the parent
 /// stack's `CompletedFile` navigation destination.
-private struct FolderVideosView: View {
+///
+/// Internal (not private) so the Home dashboard's separate `NavigationStack` can
+/// register the same `VideoFolder` destination and reuse this exact episode-
+/// picker screen for grouped series — no duplicate episode list.
+struct FolderVideosView: View {
     let folder: VideoFolder
     let progressByPath: [String: VideoProgress]
     private let background = Color(red: 0.008, green: 0.022, blue: 0.055)

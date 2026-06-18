@@ -80,6 +80,12 @@ struct HomeView: View {
                     PlayerView(video: video, startsFullscreen: true)
                 }
             }
+            // A tapped grouped-series card pushes the exact same folder/episode
+            // picker the Videos tab uses (FolderVideosView), where the user
+            // selects an episode. No second episode list is built in Home.
+            .navigationDestination(for: VideoFolder.self) { folder in
+                FolderVideosView(folder: folder, progressByPath: [:])
+            }
             .refreshable {
                 await refreshDashboard()
             }
@@ -459,34 +465,74 @@ struct HomeView: View {
 
     @ViewBuilder
     private var recentlyAddedSection: some View {
-        if !dashboard.recentlyAdded.isEmpty {
+        if !dashboard.recentlyAddedEntries.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeader("RECENTLY ADDED")
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        ForEach(dashboard.recentlyAdded) { item in
-                            Button {
-                                openMedia(item)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 7) {
-                                    mediaArtwork(item, wide: false, width: 116, height: 164)
-
-                                    Text(item.title)
-                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.white)
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .frame(width: 116, alignment: .leading)
+                        ForEach(dashboard.recentlyAddedEntries) { entry in
+                            switch entry.kind {
+                            case .movie(let item):
+                                Button {
+                                    openMedia(item)
+                                } label: {
+                                    recentlyAddedCard(
+                                        item: item,
+                                        title: entry.displayTitle,
+                                        episodeCount: nil
+                                    )
                                 }
+                                .buttonStyle(HomePressStyle())
+
+                            case .series(let folder, let item):
+                                // Tapping opens the existing folder/episode
+                                // picker (same screen as the Videos tab).
+                                NavigationLink(value: folder) {
+                                    recentlyAddedCard(
+                                        item: item,
+                                        title: entry.displayTitle,
+                                        episodeCount: folder.videos.count
+                                    )
+                                }
+                                .buttonStyle(HomePressStyle())
                             }
-                            .buttonStyle(HomePressStyle())
                         }
                     }
                     .padding(.horizontal, 1)
                 }
             }
+        }
+    }
+
+    /// One Recently Added poster card. Movies and grouped series share the same
+    /// layout; series add an episode-count badge over the artwork. `item`
+    /// supplies the artwork (poster_url → local_thumbnail_url → placeholder) and,
+    /// for series, the chosen representative episode's poster.
+    private func recentlyAddedCard(item: HomeMediaItem, title: String, episodeCount: Int?) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            mediaArtwork(item, wide: false, width: 116, height: 164)
+                .overlay(alignment: .topTrailing) {
+                    if let episodeCount {
+                        Text(episodeCount == 1 ? "1 ep" : "\(episodeCount) eps")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(Color.black.opacity(0.70), in: Capsule())
+                            .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 1))
+                            .padding(7)
+                    }
+                }
+
+            Text(title)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 116, alignment: .leading)
         }
     }
 
@@ -753,17 +799,23 @@ struct HomeView: View {
             ? await fetchDashboardWithRetries()
             : await fetchDashboard()
 
+        // Resolve Recently Added grouping off the main actor: match each item to
+        // its real CompletedFile and group by torrent folder (the same identity
+        // VideosView uses). TV episodes sharing a folder collapse into one series
+        // entry; everything else stays an individual (movie) card.
+        let entries = await makeRecentlyAddedEntries(from: result?.response.recentlyAdded ?? [])
+
         await MainActor.run {
             guard generation == refreshGeneration else { return }
             dashboard.isReconnecting = false
-            dashboard = makeState(from: result)
+            dashboard = makeState(from: result, recentlyAddedEntries: entries)
         }
     }
 
     /// Build the view state from a fetch outcome, preserving the existing
     /// online/offline semantics: a failed fetch is "offline" with cleared
     /// counts, a success is "online" with whatever fields decoded.
-    private func makeState(from result: DashboardFetch?) -> HomeDashboardState {
+    private func makeState(from result: DashboardFetch?, recentlyAddedEntries: [RecentlyAddedEntry]) -> HomeDashboardState {
         guard let result else {
             return HomeDashboardState(
                 serverStatus: .offline,
@@ -783,11 +835,80 @@ struct HomeView: View {
             latencyMs: result.latencyMs,
             continueWatching: response.continueWatching,
             recentlyAdded: response.recentlyAdded ?? [],
+            recentlyAddedEntries: recentlyAddedEntries,
             lastUpdated: Date(),
             isRefreshing: false,
             isReconnecting: false,
             hasLoaded: true
         )
+    }
+
+    /// Resolve the flat Recently Added payload into display entries: TV episodes
+    /// that share a torrent folder collapse into one series card (opening the
+    /// existing FolderVideosView episode picker); movies / single files stay as
+    /// individual cards (opening the existing player).
+    ///
+    /// Grouping reuses VideoGrouping over the real CompletedFile list, so a
+    /// series card shows the *complete* folder — the same folder VideosView would
+    /// — not just the episodes that happen to be in the home payload. Series are
+    /// positioned by their newest member episode's timestamp; the original
+    /// Recently Added order (already newest-first from the backend) is otherwise
+    /// preserved, and each series appears once.
+    private func makeRecentlyAddedEntries(from items: [HomeMediaItem]) async -> [RecentlyAddedEntry] {
+        guard !items.isEmpty else { return [] }
+
+        // Full library, grouped exactly like the Videos tab. If it can't be
+        // fetched, fall back to one movie card per item in the backend's order
+        // (newest-first), preserving prior behavior so the strip still renders
+        // and still opens the player.
+        guard let videos = try? await CompletedFilesAPI.fetchVideos() else {
+            return items.enumerated().map { index, item in
+                RecentlyAddedEntry(kind: .movie(item), sortDate: backendOrderDate(at: index))
+            }
+        }
+
+        let grouped = VideoGrouping.group(videos)
+        // Folder name (series key) → its complete VideoFolder.
+        let folderByName = Dictionary(uniqueKeysWithValues: grouped.folders.map { ($0.name, $0) })
+
+        var entries: [RecentlyAddedEntry] = []
+        var seenSeries: Set<String> = []
+
+        for (index, item) in items.enumerated() {
+            // Which folder does this item's file belong to? Match by relative
+            // path, then take its first path component (VideoGrouping's series
+            // key). A multi-video folder is a TV series; otherwise it's a movie.
+            let matched = matchVideo(for: item, in: videos)
+            if let matched,
+               let folderName = VideoGrouping.folderName(of: matched),
+               let folder = folderByName[folderName],
+               folder.videos.count > 1 {
+                guard seenSeries.insert(folderName).inserted else { continue }
+                // Position the series by its newest episode timestamp; fall back
+                // to the backend's newest-first ordering if no dates parse.
+                let newest = folder.videos.compactMap(\.modifiedDate).max() ?? backendOrderDate(at: index)
+                entries.append(RecentlyAddedEntry(kind: .series(folder, item), sortDate: newest))
+            } else {
+                let date = matched?.modifiedDate ?? backendOrderDate(at: index)
+                entries.append(RecentlyAddedEntry(kind: .movie(item), sortDate: date))
+            }
+        }
+
+        return entries.sorted { $0.sortDate > $1.sortDate }
+    }
+
+    /// A synthetic descending timestamp that preserves the backend's newest-first
+    /// Recently Added order when a real `modified_at` is unavailable (earlier
+    /// index → more recent).
+    private func backendOrderDate(at index: Int) -> Date {
+        Date(timeIntervalSinceReferenceDate: -Double(index))
+    }
+
+    /// Synchronous CompletedFile match against an already-fetched list, mirroring
+    /// `matchCompletedFile`'s path/name identity (used for grouping only).
+    private func matchVideo(for item: HomeMediaItem, in videos: [CompletedFile]) -> CompletedFile? {
+        let target = item.relativePath
+        return videos.first { normalizePath($0.path) == normalizePath(target) || normalizePath($0.name) == normalizePath(target) }
     }
 
     private func fetchDashboardWithRetries() async -> DashboardFetch? {
@@ -904,18 +1025,26 @@ private struct HomeMediaItem: Decodable, Identifiable, Hashable {
     let localThumbnailURL: String?
     let posterURL: String?
     let backdropURL: String?
+    let year: Int?
 
     var id: String { videoId }
 
     enum CodingKeys: String, CodingKey {
         case videoId = "video_id"
         case relativePath = "relative_path"
-        case filename, title, subtitle, progress
+        case filename, title, subtitle, progress, year
         case positionSeconds = "position_seconds"
         case durationSeconds = "duration_seconds"
         case localThumbnailURL = "local_thumbnail_url"
         case posterURL = "poster_url"
         case backdropURL = "backdrop_url"
+    }
+
+    /// Release year as display text (e.g. "2022"), if the backend supplied a
+    /// plausible one. nil → no year shown.
+    var yearText: String? {
+        guard let year, year > 0 else { return nil }
+        return String(year)
     }
 
     /// Normalized 0.0–1.0 progress from the backend, clamped defensively.
@@ -948,6 +1077,47 @@ private struct HomeMediaItem: Decodable, Identifiable, Hashable {
               url.host != nil
         else { return nil }
         return url
+    }
+}
+
+/// One Recently Added strip entry: either an individual movie/single file (opens
+/// the player) or a grouped TV series (opens the existing folder/episode picker).
+private struct RecentlyAddedEntry: Identifiable {
+    enum Kind {
+        /// A standalone file — tapping opens PlayerView via `openMedia`.
+        case movie(HomeMediaItem)
+        /// A grouped series: the complete folder to push, plus a representative
+        /// home item supplying the poster/thumbnail artwork.
+        case series(VideoFolder, HomeMediaItem)
+    }
+
+    let kind: Kind
+    /// Drives Recently Added ordering (newest first).
+    let sortDate: Date
+
+    var id: String {
+        switch kind {
+        case .movie(let item): return "movie:\(item.id)"
+        case .series(let folder, _): return "series:\(folder.id)"
+        }
+    }
+
+    /// Display title with the backend `year` appended when present (e.g.
+    /// "Severance (2022)"). Series use the folder name as the base; movies use
+    /// the item title. The year is taken straight from the dashboard payload —
+    /// not parsed from the title — and skipped if the base already contains it.
+    var displayTitle: String {
+        switch kind {
+        case .movie(let item):
+            return Self.titled(item.title, year: item.yearText)
+        case .series(let folder, let item):
+            return Self.titled(folder.name, year: item.yearText)
+        }
+    }
+
+    private static func titled(_ base: String, year: String?) -> String {
+        guard let year, !base.contains(year) else { return base }
+        return "\(base) (\(year))"
     }
 }
 
@@ -1000,6 +1170,7 @@ private struct HomeDashboardState {
     var latencyMs: Int?
     var continueWatching: HomeMediaItem?
     var recentlyAdded: [HomeMediaItem] = []
+    var recentlyAddedEntries: [RecentlyAddedEntry] = []
     var lastUpdated: Date?
     var isRefreshing = false
     var isReconnecting = false
