@@ -61,6 +61,25 @@ class ConvertMarkdownURLRequest(BaseModel):
 
 
 VIDEO_PROGRESS_FILE = settings.download_complete_dir.parent / "video_progress.json"
+HOME_SERVER_LOCATION = "Oracle · Tokyo"
+HOME_WATCHED_COMPLETE_PERCENT = 90.0
+HOME_RECENTLY_ADDED_LIMIT = 8
+HOME_NETWORK_SAMPLE_SECONDS = 0.5
+QB_ACTIVE_STATES = {
+    "downloading",
+    "metaDL",
+    "forcedDL",
+    "stalledDL",
+    "checkingDL",
+    "queuedDL",
+    "allocating",
+    "uploading",
+    "forcedUP",
+    "stalledUP",
+    "queuedUP",
+    "checkingUP",
+    "seeding",
+}
 THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
 THUMBNAIL_TIMESTAMPS_SECONDS = (10, 30, 60, 1)
 MIN_THUMBNAIL_BYTES = 2 * 1024
@@ -160,6 +179,267 @@ def network_usage() -> dict[str, Any]:
         }
 
     raise HTTPException(status_code=503, detail="vnstat is unavailable or returned no network data.")
+
+
+@app.get("/api/home-dashboard")
+def home_dashboard() -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+
+    qb_ok = qbittorrent_reachable()
+    storage = get_storage_usage()
+    storage_ok = storage_mount_available(storage)
+
+    library = build_home_library(storage)
+    downloads = {"active_count": count_active_downloads()}
+    network = get_network_rates()
+
+    continue_watching, recently_added = build_home_media()
+
+    return {
+        "server": {
+            "online": True,
+            "location": HOME_SERVER_LOCATION,
+            "uptime_seconds": get_uptime_seconds(),
+            "last_updated": now.isoformat(),
+            "services": {
+                "api": True,
+                "qbittorrent": qb_ok,
+                "storage": storage_ok,
+            },
+        },
+        "library": library,
+        "downloads": downloads,
+        "network": network,
+        "continue_watching": continue_watching,
+        "recently_added": recently_added,
+    }
+
+
+def qbittorrent_reachable() -> bool:
+    try:
+        qb.test_connection()
+        return True
+    except (RuntimeError, RequestException, ValueError):
+        return False
+
+
+def storage_mount_available(storage: dict[str, Any]) -> bool:
+    disks = storage.get("disks") if isinstance(storage, dict) else None
+    if not isinstance(disks, list) or not disks:
+        return False
+    return any(Path(str(disk.get("path"))).exists() for disk in disks if isinstance(disk, dict))
+
+
+def count_active_downloads() -> int:
+    try:
+        torrents = qb.list_torrents()
+    except (RuntimeError, RequestException, ValueError):
+        return 0
+    count = 0
+    for torrent in torrents:
+        if float(torrent.get("progress", 0)) >= 1:
+            continue
+        if str(torrent.get("state", "")) in QB_ACTIVE_STATES:
+            count += 1
+    return count
+
+
+def build_home_library(storage: dict[str, Any]) -> dict[str, Any]:
+    download_dir = settings.download_complete_dir
+    video_count = 0
+    file_count = 0
+    if download_dir.exists():
+        video_count = sum(1 for _ in iter_completed_video_files(download_dir))
+        for file_path in download_dir.rglob("*"):
+            if file_path.is_file() and is_visible_completed_file(file_path, download_dir):
+                file_count += 1
+
+    used_bytes = 0
+    total_bytes = 0
+    disks = storage.get("disks") if isinstance(storage, dict) else None
+    if isinstance(disks, list) and disks and isinstance(disks[0], dict):
+        used_bytes = int(disks[0].get("used_bytes", 0) or 0)
+        total_bytes = int(disks[0].get("total_bytes", 0) or 0)
+
+    return {
+        "video_count": video_count,
+        "file_count": file_count,
+        "storage_used_bytes": used_bytes,
+        "storage_total_bytes": total_bytes,
+    }
+
+
+def get_uptime_seconds() -> int:
+    try:
+        first = Path("/proc/uptime").read_text(encoding="utf-8").split()[0]
+        return int(float(first))
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def get_network_rates() -> dict[str, int]:
+    first = read_interface_counters()
+    if first is None:
+        return {"rx_bytes_per_second": 0, "tx_bytes_per_second": 0}
+    import time
+
+    time.sleep(HOME_NETWORK_SAMPLE_SECONDS)
+    second = read_interface_counters()
+    if second is None:
+        return {"rx_bytes_per_second": 0, "tx_bytes_per_second": 0}
+
+    rx_delta = max(second[0] - first[0], 0)
+    tx_delta = max(second[1] - first[1], 0)
+    return {
+        "rx_bytes_per_second": int(rx_delta / HOME_NETWORK_SAMPLE_SECONDS),
+        "tx_bytes_per_second": int(tx_delta / HOME_NETWORK_SAMPLE_SECONDS),
+    }
+
+
+def read_interface_counters() -> tuple[int, int] | None:
+    try:
+        lines = Path("/proc/net/dev").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        name, _, rest = line.partition(":")
+        if name.strip() != NETWORK_INTERFACE or not rest:
+            continue
+        fields = rest.split()
+        if len(fields) < 9:
+            return None
+        try:
+            return int(fields[0]), int(fields[8])
+        except ValueError:
+            return None
+    return None
+
+
+def build_home_media() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    download_dir = settings.download_complete_dir
+    if not download_dir.exists():
+        return None, []
+
+    download_root = download_dir.resolve()
+    progress_by_path = read_video_progress()
+    videos: list[dict[str, Any]] = []
+    for video_path in iter_completed_video_files(download_dir):
+        try:
+            relative = video_path.relative_to(download_root).as_posix()
+            stat = video_path.stat()
+        except (OSError, ValueError):
+            continue
+        videos.append(
+            {
+                "relative": relative,
+                "path": str(Path(relative)),
+                "filename": video_path.name,
+                "mtime": stat.st_mtime,
+                "thumbnail_url": thumbnail_url_for_completed_video(video_path, download_dir),
+                "progress": progress_by_path.get(str(Path(relative)))
+                or progress_by_path.get(relative),
+            }
+        )
+
+    recently_added = build_recently_added(videos)
+    continue_watching = build_continue_watching(videos)
+    return continue_watching, recently_added
+
+
+def build_recently_added(videos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    newest = sorted(videos, key=lambda video: video["mtime"], reverse=True)[:HOME_RECENTLY_ADDED_LIMIT]
+    items: list[dict[str, Any]] = []
+    for video in newest:
+        item = build_home_media_item(video)
+        item["added_at"] = timestamp_to_iso(video["mtime"])
+        items.append(item)
+    return items
+
+
+def build_continue_watching(videos: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for video in videos:
+        record = video["progress"]
+        if not isinstance(record, dict):
+            continue
+        watched = float(record.get("watchedPercent", 0) or 0)
+        time_ms = int(record.get("timeMs", 0) or 0)
+        if watched >= HOME_WATCHED_COMPLETE_PERCENT or time_ms <= 0:
+            continue
+        updated_at = record.get("updatedAt")
+        if not isinstance(updated_at, str):
+            continue
+        candidates.append({"video": video, "updated_at": updated_at})
+
+    if not candidates:
+        return None
+
+    chosen = max(candidates, key=lambda candidate: candidate["updated_at"])
+    item = build_home_media_item(chosen["video"])
+    item["last_watched_at"] = chosen["updated_at"]
+    return item
+
+
+def build_home_media_item(video: dict[str, Any]) -> dict[str, Any]:
+    record = video["progress"] if isinstance(video["progress"], dict) else {}
+    time_ms = int(record.get("timeMs", 0) or 0)
+    duration_ms = int(record.get("durationMs", 0) or 0)
+    metadata = parse_media_filename(video["filename"])
+    return {
+        "video_id": video["path"],
+        "relative_path": video["path"],
+        "filename": video["filename"],
+        "title": metadata["title"],
+        "subtitle": metadata["subtitle"],
+        "year": metadata["year"],
+        "position_seconds": time_ms // 1000,
+        "duration_seconds": duration_ms // 1000,
+        "progress": float(record.get("watchedPercent", 0) or 0),
+        "local_thumbnail_url": video["thumbnail_url"],
+        "tmdb_id": None,
+        "media_type": metadata["media_type"],
+        "poster_url": None,
+        "backdrop_url": None,
+    }
+
+
+def parse_media_filename(filename: str) -> dict[str, Any]:
+    stem = Path(filename).stem
+    cleaned = re.sub(r"[._]+", " ", stem)
+
+    year: int | None = None
+    year_match = re.search(r"\b(19\d{2}|20\d{2})\b", cleaned)
+    if year_match:
+        year = int(year_match.group(1))
+
+    subtitle: str | None = None
+    media_type = "movie"
+    tv_match = re.search(r"\bS(\d{1,2})\s?E(\d{1,2})\b", cleaned, re.IGNORECASE) or re.search(
+        r"\b(\d{1,2})x(\d{2})\b", cleaned
+    )
+    if tv_match:
+        media_type = "tv"
+        subtitle = f"S{int(tv_match.group(1)):02d}E{int(tv_match.group(2)):02d}"
+
+    title = clean_media_title(cleaned, tv_match, year_match)
+    return {"title": title or stem, "subtitle": subtitle, "year": year, "media_type": media_type}
+
+
+def clean_media_title(cleaned: str, tv_match: Any, year_match: Any) -> str:
+    cut = len(cleaned)
+    if tv_match:
+        cut = min(cut, tv_match.start())
+    if year_match:
+        cut = min(cut, year_match.start())
+    title = cleaned[:cut]
+
+    junk = re.compile(
+        r"\b(720p|1080p|2160p|480p|web[\s-]?dl|webrip|bluray|brrip|hdrip|dvdrip|x264|x265|"
+        r"h\.?264|h\.?265|hevc|aac|ac3|dts|ddp?5\.?1|10bit|hdr|remux)\b.*",
+        re.IGNORECASE,
+    )
+    title = junk.sub("", title)
+    return re.sub(r"\s+", " ", title).strip(" -")
 
 
 @app.post("/api/convert-markdown")
