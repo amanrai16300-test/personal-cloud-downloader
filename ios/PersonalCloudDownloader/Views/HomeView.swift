@@ -5,7 +5,14 @@ import SwiftUI
 /// asymmetric metrics bento, and a single action row. Visual language is
 /// deliberately restrained — deep navy surfaces, hairline strokes, one blue
 /// accent, monospaced telemetry — so it reads handcrafted rather than
-/// template-like. All data, refresh, and navigation behavior is unchanged.
+/// template-like.
+///
+/// Data layer: one aggregated `GET /api/home-dashboard` request feeds server,
+/// library, downloads, network, Continue Watching, and Recently Added. Request
+/// round-trip time is measured client-side for the latency readout. Media taps
+/// reuse the existing VideosView → PlayerView flow: the home item is matched to
+/// the real `CompletedFile` (for the correct stream URL + AVPlayer/VLC routing)
+/// and its saved-resume position is seeded before pushing the player.
 struct HomeView: View {
     private let serverIP = "100.95.39.107"
     private let backendBaseURL = CompletedFilesAPI.baseURL
@@ -26,6 +33,18 @@ struct HomeView: View {
     @State private var dashboard = HomeDashboardState()
     @State private var refreshTask: Task<Void, Never>?
     @State private var refreshGeneration = 0
+    /// Pushed when a media card is tapped — the matched real `CompletedFile`,
+    /// which drives PlayerView's stream URL and AVPlayer/VLC routing.
+    @State private var selectedVideo: CompletedFile?
+
+    /// Drives the player push (iOS 16-compatible). Clearing on pop releases the
+    /// matched file so a later tap re-matches fresh.
+    private var playerPresented: Binding<Bool> {
+        Binding(
+            get: { selectedVideo != nil },
+            set: { presented in if !presented { selectedVideo = nil } }
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -34,6 +53,8 @@ struct HomeView: View {
                     brandHeader
                     serverPanel
                     metricsBento
+                    continueWatchingSection
+                    recentlyAddedSection
                     tailscaleAction
                     privateCloudNote
                 }
@@ -50,6 +71,15 @@ struct HomeView: View {
             .navigationTitle("Home")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            // A tapped media card pushes the existing fullscreen player, exactly
+            // as the Videos list does (same CompletedFile destination + flow).
+            // Programmatic push via a binding (iOS 16-compatible: no
+            // `navigationDestination(item:)`, which is iOS 17+).
+            .navigationDestination(isPresented: playerPresented) {
+                if let video = selectedVideo {
+                    PlayerView(video: video, startsFullscreen: true)
+                }
+            }
             .refreshable {
                 await refreshDashboard()
             }
@@ -192,9 +222,10 @@ struct HomeView: View {
 
                 Spacer(minLength: 8)
 
-                Text("Oracle · Tokyo")
-                    .font(.system(size: 11, weight: .semibold))
+                Text(dashboard.latencyText)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(mutedText.opacity(0.85))
+                    .contentTransition(.opacity)
             }
         }
         .padding(18)
@@ -372,6 +403,162 @@ struct HomeView: View {
             .accessibilityHidden(true)
     }
 
+    // MARK: Continue Watching — one wide resume card, or nothing when absent.
+
+    /// Rendered only when the backend returns a Continue Watching item; absent
+    /// (no card, no header) otherwise so the layout stays quiet. Tapping opens
+    /// the existing player at the saved position.
+    @ViewBuilder
+    private var continueWatchingSection: some View {
+        if let item = dashboard.continueWatching {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("CONTINUE WATCHING")
+
+                Button {
+                    openMedia(item)
+                } label: {
+                    HStack(spacing: 13) {
+                        mediaArtwork(item, wide: true, width: 124, height: 70)
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(item.title)
+                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            if let subtitle = item.subtitleText {
+                                Text(subtitle)
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(mutedText)
+                                    .lineLimit(1)
+                            }
+
+                            mediaProgressBar(item.progressFraction)
+                        }
+                        .layoutPriority(1)
+
+                        Spacer(minLength: 8)
+
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundStyle(premiumBlue)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(metricSurface(tint: premiumBlue))
+                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .buttonStyle(HomePressStyle())
+            }
+        }
+    }
+
+    // MARK: Recently Added — horizontal poster strip, hidden when empty.
+
+    @ViewBuilder
+    private var recentlyAddedSection: some View {
+        if !dashboard.recentlyAdded.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("RECENTLY ADDED")
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(dashboard.recentlyAdded) { item in
+                            Button {
+                                openMedia(item)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 7) {
+                                    mediaArtwork(item, wide: false, width: 116, height: 164)
+
+                                    Text(item.title)
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(width: 116, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(HomePressStyle())
+                        }
+                    }
+                    .padding(.horizontal, 1)
+                }
+            }
+        }
+    }
+
+    private func sectionHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .bold))
+            .tracking(1.6)
+            .foregroundStyle(premiumBlue)
+    }
+
+    /// Artwork for a media card. TMDB poster/backdrop are preferred when present
+    /// (backdrop for the wide Continue Watching card, poster for portrait
+    /// Recently Added), falling back to the local thumbnail, then a placeholder.
+    /// Visual only — never used for playback identity.
+    @ViewBuilder
+    private func mediaArtwork(_ item: HomeMediaItem, wide: Bool, width: CGFloat, height: CGFloat) -> some View {
+        let url = wide ? item.wideArtworkURL : item.portraitArtworkURL
+        let radius: CGFloat = wide ? 10 : 12
+        Group {
+            if let url {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        mediaArtworkPlaceholder
+                    }
+                }
+            } else {
+                mediaArtworkPlaceholder
+            }
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        }
+    }
+
+    private var mediaArtworkPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.14),
+                        Color(red: 0.045, green: 0.055, blue: 0.07),
+                        Color.black
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.28))
+            }
+    }
+
+    private func mediaProgressBar(_ fraction: Double) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.14))
+                Capsule()
+                    .fill(premiumBlue)
+                    .frame(width: geo.size.width * CGFloat(min(max(fraction, 0), 1)))
+            }
+        }
+        .frame(height: 5)
+    }
+
     // MARK: Tailscale action — the screen's single tappable row.
 
     private var tailscaleAction: some View {
@@ -468,6 +655,56 @@ struct HomeView: View {
         }
     }
 
+    // MARK: Media open — reuse the existing VideosView → PlayerView flow.
+
+    /// Open the existing player for a home media item. The home payload omits the
+    /// stream URL (and AVPlayer/VLC routing keys off the file extension), so the
+    /// item is matched to the real `CompletedFile` from `/api/completed-files`
+    /// by its stable relative path — the same identity VideosView uses. Resume
+    /// is seeded into the shared saved-position store (keyed by the matched
+    /// file's `path`, the VLC resume key) so playback resumes at the backend
+    /// `position_seconds`. Playback never uses the artwork/thumbnail.
+    private func openMedia(_ item: HomeMediaItem) {
+        Task {
+            let matched = await matchCompletedFile(for: item)
+            await MainActor.run {
+                guard let matched else { return }
+                seedResume(for: matched, item: item)
+                selectedVideo = matched
+            }
+        }
+    }
+
+    /// Find the `CompletedFile` whose relative path matches the home item's
+    /// `relativePath` / `videoId`. Both the backend home item and `CompletedFile`
+    /// use the completed-files relative path as the stable identifier.
+    private func matchCompletedFile(for item: HomeMediaItem) async -> CompletedFile? {
+        guard let videos = try? await CompletedFilesAPI.fetchVideos() else { return nil }
+        let target = item.relativePath
+        return videos.first { normalizePath($0.path) == normalizePath(target) || normalizePath($0.name) == normalizePath(target) }
+    }
+
+    private func normalizePath(_ path: String) -> String {
+        path.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
+
+    /// Seed the saved-resume position so the VLC engine resumes at the backend
+    /// `position_seconds`. Keyed by the matched file's `path` (PlayerView's VLC
+    /// `resumeKey`). Only seeds when a real duration is known (the store ignores
+    /// zero-duration entries). Native AVPlayer formats don't resume in this app,
+    /// so this affects mkv/avi/webm — matching existing behavior.
+    private func seedResume(for matched: CompletedFile, item: HomeMediaItem) {
+        guard item.durationSeconds > 0, item.positionSeconds > 0 else { return }
+        let progress = VideoProgress.local(
+            path: matched.path,
+            timeMs: item.positionSeconds * 1000,
+            durationMs: item.durationSeconds * 1000
+        )
+        VLCPlayerController.importProgressSnapshot([matched.path: progress])
+    }
+
+    // MARK: Refresh loop (unchanged behavior)
+
     private func startRefreshLoop() {
         startRefreshLoop(foregroundReconnect: false)
     }
@@ -512,92 +749,205 @@ struct HomeView: View {
             guard !Task.isCancelled else { return }
         }
 
-        async let health = fetchHealth(foregroundReconnect: foregroundReconnect)
-        async let torrents = fetchJSONArrayCount(path: "/api/torrents")
-        async let completed = fetchJSONArrayCount(path: "/api/completed-files")
+        let result = foregroundReconnect
+            ? await fetchDashboardWithRetries()
+            : await fetchDashboard()
 
-        let isHealthy = await health
-        let torrentCount = await torrents
-        let completedFileCount = await completed
+        await MainActor.run {
+            guard generation == refreshGeneration else { return }
+            dashboard.isReconnecting = false
+            dashboard = makeState(from: result)
+        }
+    }
 
-        let nextState = HomeDashboardState(
-            serverStatus: isHealthy ? .online : .offline,
-            torrentCount: torrentCount,
-            completedFileCount: completedFileCount,
+    /// Build the view state from a fetch outcome, preserving the existing
+    /// online/offline semantics: a failed fetch is "offline" with cleared
+    /// counts, a success is "online" with whatever fields decoded.
+    private func makeState(from result: DashboardFetch?) -> HomeDashboardState {
+        guard let result else {
+            return HomeDashboardState(
+                serverStatus: .offline,
+                lastUpdated: Date(),
+                isRefreshing: false,
+                isReconnecting: false,
+                hasLoaded: true
+            )
+        }
+
+        let response = result.response
+        return HomeDashboardState(
+            serverStatus: (response.server?.online ?? true) ? .online : .offline,
+            torrentCount: response.downloads?.activeCount,
+            completedFileCount: response.library?.videoCount,
+            indexedFileCount: response.library?.fileCount,
+            latencyMs: result.latencyMs,
+            continueWatching: response.continueWatching,
+            recentlyAdded: response.recentlyAdded ?? [],
             lastUpdated: Date(),
             isRefreshing: false,
             isReconnecting: false,
             hasLoaded: true
         )
-
-        await MainActor.run {
-            guard generation == refreshGeneration else { return }
-            dashboard.isReconnecting = false
-            dashboard = nextState
-        }
     }
 
-    private func fetchHealth(foregroundReconnect: Bool) async -> Bool {
-        if foregroundReconnect {
-            return await fetchHealthWithRetries()
-        }
-        return await fetchHealth()
-    }
-
-    private func fetchHealthWithRetries() async -> Bool {
+    private func fetchDashboardWithRetries() async -> DashboardFetch? {
         for attempt in 1...3 {
-            if await fetchHealth() {
-                return true
+            if let result = await fetchDashboard() {
+                return result
             }
             guard attempt < 3 else { break }
             try? await Task.sleep(nanoseconds: 500_000_000)
             if Task.isCancelled {
-                return false
-            }
-        }
-        return false
-    }
-
-    private func fetchHealth() async -> Bool {
-        guard let url = URL(string: "\(backendBaseURL)/api/health") else { return false }
-
-        do {
-            let (_, response) = try await URLSession.shared.data(from: url)
-            guard let httpResponse = response as? HTTPURLResponse else { return false }
-            return (200..<300).contains(httpResponse.statusCode)
-        } catch {
-            return false
-        }
-    }
-
-    private func fetchJSONArrayCount(path: String) async -> Int? {
-        guard let url = URL(string: "\(backendBaseURL)\(path)") else { return nil }
-
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
                 return nil
             }
+        }
+        return nil
+    }
 
-            let json = try JSONSerialization.jsonObject(with: data)
-            if let array = json as? [Any] {
-                return array.count
+    /// One aggregated request. Measures the round-trip time client-side for the
+    /// latency readout (the backend deliberately does not compute latency).
+    private func fetchDashboard() async -> DashboardFetch? {
+        guard let url = URL(string: "\(backendBaseURL)/api/home-dashboard") else { return nil }
+
+        let start = DispatchTime.now()
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            let elapsedNs = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return nil
             }
-            if let dictionary = json as? [String: Any] {
-                if let files = dictionary["files"] as? [Any] {
-                    return files.count
-                }
-                if let torrents = dictionary["torrents"] as? [Any] {
-                    return torrents.count
-                }
-                if let items = dictionary["items"] as? [Any] {
-                    return items.count
-                }
-            }
-            return nil
+            let decoded = try JSONDecoder().decode(HomeDashboardResponse.self, from: data)
+            return DashboardFetch(response: decoded, latencyMs: Int(elapsedNs / 1_000_000))
         } catch {
             return nil
         }
+    }
+}
+
+/// A successful dashboard fetch plus the measured client round-trip latency.
+private struct DashboardFetch {
+    let response: HomeDashboardResponse
+    let latencyMs: Int
+}
+
+// MARK: - Backend response models (GET /api/home-dashboard)
+
+/// Decodes the aggregated Home response. Every section is optional so one
+/// failed/absent service never fails the whole decode — missing pieces simply
+/// render as their offline/empty fallbacks.
+private struct HomeDashboardResponse: Decodable {
+    let server: ServerInfo?
+    let library: LibraryInfo?
+    let downloads: DownloadsInfo?
+    let network: NetworkInfo?
+    let continueWatching: HomeMediaItem?
+    let recentlyAdded: [HomeMediaItem]?
+
+    enum CodingKeys: String, CodingKey {
+        case server, library, downloads, network
+        case continueWatching = "continue_watching"
+        case recentlyAdded = "recently_added"
+    }
+
+    struct ServerInfo: Decodable {
+        let online: Bool?
+        let location: String?
+        let uptimeSeconds: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case online, location
+            case uptimeSeconds = "uptime_seconds"
+        }
+    }
+
+    struct LibraryInfo: Decodable {
+        let videoCount: Int?
+        let fileCount: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case videoCount = "video_count"
+            case fileCount = "file_count"
+        }
+    }
+
+    struct DownloadsInfo: Decodable {
+        let activeCount: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case activeCount = "active_count"
+        }
+    }
+
+    struct NetworkInfo: Decodable {
+        let rxBytesPerSecond: Int?
+        let txBytesPerSecond: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case rxBytesPerSecond = "rx_bytes_per_second"
+            case txBytesPerSecond = "tx_bytes_per_second"
+        }
+    }
+}
+
+/// One Home media item (Continue Watching or Recently Added). Playback identity
+/// is `videoId` / `relativePath` (the completed-files relative path); poster /
+/// backdrop are optional artwork only, with `localThumbnailURL` as fallback.
+private struct HomeMediaItem: Decodable, Identifiable, Hashable {
+    let videoId: String
+    let relativePath: String
+    let filename: String
+    let title: String
+    let subtitle: String?
+    let positionSeconds: Int
+    let durationSeconds: Int
+    let progress: Double
+    let localThumbnailURL: String?
+    let posterURL: String?
+    let backdropURL: String?
+
+    var id: String { videoId }
+
+    enum CodingKeys: String, CodingKey {
+        case videoId = "video_id"
+        case relativePath = "relative_path"
+        case filename, title, subtitle, progress
+        case positionSeconds = "position_seconds"
+        case durationSeconds = "duration_seconds"
+        case localThumbnailURL = "local_thumbnail_url"
+        case posterURL = "poster_url"
+        case backdropURL = "backdrop_url"
+    }
+
+    /// Normalized 0.0–1.0 progress from the backend, clamped defensively.
+    var progressFraction: Double { min(max(progress, 0), 1) }
+
+    var subtitleText: String? {
+        guard let subtitle, !subtitle.isEmpty else { return nil }
+        return subtitle
+    }
+
+    /// Wide artwork (Continue Watching): TMDB backdrop preferred, else the local
+    /// thumbnail. nil → placeholder.
+    var wideArtworkURL: URL? {
+        validURL(backdropURL) ?? validURL(localThumbnailURL)
+    }
+
+    /// Portrait artwork (Recently Added): TMDB poster preferred, else the local
+    /// thumbnail. nil → placeholder.
+    var portraitArtworkURL: URL? {
+        validURL(posterURL) ?? validURL(localThumbnailURL)
+    }
+
+    private func validURL(_ raw: String?) -> URL? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil
+        else { return nil }
+        return url
     }
 }
 
@@ -646,6 +996,10 @@ private struct HomeDashboardState {
     var serverStatus: HomeServerStatus = .loading
     var torrentCount: Int?
     var completedFileCount: Int?
+    var indexedFileCount: Int?
+    var latencyMs: Int?
+    var continueWatching: HomeMediaItem?
+    var recentlyAdded: [HomeMediaItem] = []
     var lastUpdated: Date?
     var isRefreshing = false
     var isReconnecting = false
@@ -658,7 +1012,7 @@ private struct HomeDashboardState {
 
     var activeTorrentText: String {
         guard let torrentCount else { return "No connection" }
-        return torrentCount == 1 ? "Torrent tracked" : "Torrents tracked"
+        return torrentCount == 1 ? "Active download" : "Active downloads"
     }
 
     var completedFilesText: String {
@@ -667,12 +1021,18 @@ private struct HomeDashboardState {
     }
 
     var filesIndexText: String {
-        completedFileCount == nil ? "Offline" : "Indexed"
+        indexedFileCount == nil ? "Offline" : "Indexed"
     }
 
     var filesIndexDetail: String {
-        guard let completedFileCount else { return "No connection" }
-        return completedFileCount == 1 ? "1 completed item" : "\(completedFileCount) completed items"
+        guard let indexedFileCount else { return "No connection" }
+        return indexedFileCount == 1 ? "1 completed item" : "\(indexedFileCount) completed items"
+    }
+
+    var latencyText: String {
+        if isReconnecting || isRefreshing { return "Oracle · Tokyo" }
+        guard let latencyMs else { return "Oracle · Tokyo" }
+        return "\(latencyMs) ms"
     }
 
     var headerSubtitle: String {
