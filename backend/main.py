@@ -3,10 +3,12 @@ import calendar
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import shutil
 import socket
 import subprocess
+import time
 import tempfile
 import unicodedata
 from io import BytesIO
@@ -65,6 +67,19 @@ HOME_SERVER_LOCATION = "Oracle · Tokyo"
 HOME_WATCHED_COMPLETE_PERCENT = 90.0
 HOME_RECENTLY_ADDED_LIMIT = 8
 HOME_NETWORK_SAMPLE_SECONDS = 0.5
+# TMDB artwork enrichment for Home. Reuses the same TMDB scheme as
+# scripts/fetch_trends.py (api.themoviedb.org/3, TMDB_API_KEY env var, w500
+# images) so credentials and request shape stay consistent. Key is read from
+# the environment and never returned to clients — only image CDN URLs are.
+TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500"
+TMDB_BACKDROP_BASE_URL = "https://image.tmdb.org/t/p/w780"
+TMDB_REQUEST_TIMEOUT_SECONDS = 6
+TMDB_CACHE_TTL_SECONDS = 6 * 60 * 60
+# Module-level cache of TMDB lookups keyed by normalized title+year+media_type.
+# Stores hits AND no-match (None) results with a timestamp so a Home refresh
+# does not re-search TMDB; entries expire after TMDB_CACHE_TTL_SECONDS.
+_tmdb_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
 QB_ACTIVE_STATES = {
     "downloading",
     "metaDL",
@@ -329,11 +344,13 @@ def build_home_media() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
             stat = video_path.stat()
         except (OSError, ValueError):
             continue
+        parent_name = video_path.parent.name if video_path.parent != download_root else None
         videos.append(
             {
                 "relative": relative,
                 "path": str(Path(relative)),
                 "filename": video_path.name,
+                "parent": parent_name,
                 "mtime": stat.st_mtime,
                 "thumbnail_url": thumbnail_url_for_completed_video(video_path, download_dir),
                 "progress": progress_by_path.get(str(Path(relative)))
@@ -384,7 +401,10 @@ def build_home_media_item(video: dict[str, Any]) -> dict[str, Any]:
     record = video["progress"] if isinstance(video["progress"], dict) else {}
     time_ms = int(record.get("timeMs", 0) or 0)
     duration_ms = int(record.get("durationMs", 0) or 0)
-    metadata = parse_media_filename(video["filename"])
+    position_seconds = time_ms // 1000
+    duration_seconds = duration_ms // 1000
+    metadata = parse_media_filename(video["filename"], video.get("parent"))
+    artwork = tmdb_artwork_for(metadata["title"], metadata["media_type"], metadata["year"])
     return {
         "video_id": video["path"],
         "relative_path": video["path"],
@@ -392,37 +412,156 @@ def build_home_media_item(video: dict[str, Any]) -> dict[str, Any]:
         "title": metadata["title"],
         "subtitle": metadata["subtitle"],
         "year": metadata["year"],
-        "position_seconds": time_ms // 1000,
-        "duration_seconds": duration_ms // 1000,
-        "progress": float(record.get("watchedPercent", 0) or 0),
+        "position_seconds": position_seconds,
+        "duration_seconds": duration_seconds,
+        "progress": normalized_progress(position_seconds, duration_seconds),
         "local_thumbnail_url": video["thumbnail_url"],
-        "tmdb_id": None,
+        "tmdb_id": artwork["tmdb_id"] if artwork else None,
         "media_type": metadata["media_type"],
-        "poster_url": None,
-        "backdrop_url": None,
+        "poster_url": artwork["poster_url"] if artwork else None,
+        "backdrop_url": artwork["backdrop_url"] if artwork else None,
     }
 
 
-def parse_media_filename(filename: str) -> dict[str, Any]:
+def normalized_progress(position_seconds: int, duration_seconds: int) -> float:
+    if duration_seconds <= 0:
+        return 0.0
+    return round(min(max(position_seconds / duration_seconds, 0.0), 1.0), 4)
+
+
+def tmdb_artwork_for(title: str, media_type: str, year: int | None) -> dict[str, Any] | None:
+    """Look up TMDB artwork for a parsed media title. Returns
+    {tmdb_id, media_type, poster_url, backdrop_url} on a conservative match, or
+    None on no-match / failure. Results (including no-match) are cached so a Home
+    refresh does not re-search TMDB. Never raises — TMDB problems must not fail
+    the Home dashboard, and the API key is never returned to the caller.
+    """
+    normalized = normalize_tmdb_title(title)
+    if not normalized:
+        return None
+
+    cache_key = f"{media_type}:{year or ''}:{normalized}"
+    cached = _tmdb_cache.get(cache_key)
+    if cached is not None and (time.monotonic() - cached[0]) < TMDB_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    result = search_tmdb_artwork(title, normalized, media_type, year)
+    _tmdb_cache[cache_key] = (time.monotonic(), result)
+    return result
+
+
+def normalize_tmdb_title(title: str) -> str:
+    """Lowercase, strip punctuation, and collapse whitespace for conservative
+    title matching (so "Sector 36" and "sector  36!" compare equal)."""
+    folded = unicodedata.normalize("NFKD", title or "")
+    stripped = re.sub(r"[^\w\s]", " ", folded.lower())
+    return re.sub(r"\s+", " ", stripped).strip()
+
+
+def search_tmdb_artwork(
+    title: str, normalized: str, media_type: str, year: int | None
+) -> dict[str, Any] | None:
+    api_key = os.environ.get("TMDB_API_KEY")
+    if not api_key:
+        return None
+
+    # Series/episodes search the show title against /search/tv; movies against
+    # /search/movie. The parser already strips episode info from the title.
+    path = "/search/tv" if media_type == "tv" else "/search/movie"
+    params: dict[str, Any] = {"api_key": api_key, "query": title, "include_adult": "false"}
+    if year:
+        params["first_air_date_year" if media_type == "tv" else "year"] = year
+
+    try:
+        response = requests.get(
+            f"{TMDB_API_BASE_URL}{path}",
+            params=params,
+            headers={"accept": "application/json", "user-agent": "CloudBox Home"},
+            timeout=TMDB_REQUEST_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200:
+            return None
+        results = response.json().get("results")
+    except (RequestException, ValueError):
+        return None
+
+    if not isinstance(results, list):
+        return None
+
+    match = pick_tmdb_match(results, normalized, media_type, year)
+    if match is None:
+        return None
+
+    poster_path = match.get("poster_path")
+    backdrop_path = match.get("backdrop_path")
+    return {
+        "tmdb_id": match.get("id"),
+        "media_type": media_type,
+        "poster_url": f"{TMDB_POSTER_BASE_URL}{poster_path}" if poster_path else None,
+        "backdrop_url": f"{TMDB_BACKDROP_BASE_URL}{backdrop_path}" if backdrop_path else None,
+    }
+
+
+def pick_tmdb_match(
+    results: list[Any], normalized: str, media_type: str, year: int | None
+) -> dict[str, Any] | None:
+    """Conservatively choose a TMDB result: require a normalized-title match, and
+    when a year is known require the result's release year to match. Rejects
+    weak/conflicting candidates by returning None rather than guessing."""
+    year_field = "first_air_date" if media_type == "tv" else "release_date"
+    title_field = "name" if media_type == "tv" else "title"
+
+    for raw in results:
+        if not isinstance(raw, dict):
+            continue
+        candidate_title = raw.get(title_field) or raw.get("original_name") or raw.get("original_title") or ""
+        if normalize_tmdb_title(candidate_title) != normalized:
+            continue
+        if year is not None:
+            date_value = raw.get(year_field) or ""
+            candidate_year = date_value[:4] if isinstance(date_value, str) and len(date_value) >= 4 else ""
+            if candidate_year and candidate_year != str(year):
+                continue
+        return raw
+    return None
+
+
+def parse_media_filename(filename: str, parent: str | None = None) -> dict[str, Any]:
     stem = Path(filename).stem
     cleaned = re.sub(r"[._]+", " ", stem)
 
-    year: int | None = None
-    year_match = re.search(r"\b(19\d{2}|20\d{2})\b", cleaned)
-    if year_match:
-        year = int(year_match.group(1))
-
+    year, year_match = detect_media_year(cleaned)
+    tv_match = detect_tv_episode(cleaned)
     subtitle: str | None = None
     media_type = "movie"
-    tv_match = re.search(r"\bS(\d{1,2})\s?E(\d{1,2})\b", cleaned, re.IGNORECASE) or re.search(
-        r"\b(\d{1,2})x(\d{2})\b", cleaned
-    )
     if tv_match:
         media_type = "tv"
         subtitle = f"S{int(tv_match.group(1)):02d}E{int(tv_match.group(2)):02d}"
 
     title = clean_media_title(cleaned, tv_match, year_match)
+
+    # Episode filenames often lack the show title/year; the parent release folder
+    # carries it. Fall back there without touching filename/relative_path identity.
+    if parent and (not title or year is None):
+        parent_cleaned = re.sub(r"[._]+", " ", parent)
+        parent_year, parent_year_match = detect_media_year(parent_cleaned)
+        if not title:
+            title = clean_media_title(parent_cleaned, detect_tv_episode(parent_cleaned), parent_year_match)
+        if year is None:
+            year = parent_year
+
     return {"title": title or stem, "subtitle": subtitle, "year": year, "media_type": media_type}
+
+
+def detect_media_year(text: str) -> tuple[int | None, Any]:
+    match = re.search(r"\b(19\d{2}|20\d{2})\b", text)
+    return (int(match.group(1)) if match else None), match
+
+
+def detect_tv_episode(text: str) -> Any:
+    return re.search(r"\bS(\d{1,2})\s?E(\d{1,2})\b", text, re.IGNORECASE) or re.search(
+        r"\b(\d{1,2})x(\d{2})\b", text
+    )
 
 
 def clean_media_title(cleaned: str, tv_match: Any, year_match: Any) -> str:
@@ -439,7 +578,25 @@ def clean_media_title(cleaned: str, tv_match: Any, year_match: Any) -> str:
         re.IGNORECASE,
     )
     title = junk.sub("", title)
-    return re.sub(r"\s+", " ", title).strip(" -")
+    title = re.sub(r"\s+", " ", title).strip()
+    return strip_unbalanced_punctuation(title)
+
+
+def strip_unbalanced_punctuation(title: str) -> str:
+    # Release-tag removal can sever an opening bracket from its partner
+    # ("Sector 36 (2024)..." -> "Sector 36 ("). Drop trailing brackets/quotes
+    # left without a match; keep balanced punctuation inside real titles.
+    openers = {")": "(", "]": "[", "}": "{"}
+    while title:
+        last = title[-1]
+        if last in "([{\"'":
+            title = title[:-1].rstrip(" -–—")
+            continue
+        if last in openers and title.count(openers[last]) > title.count(last):
+            title = title[:-1].rstrip(" -–—")
+            continue
+        break
+    return title.strip(" -–—")
 
 
 @app.post("/api/convert-markdown")
