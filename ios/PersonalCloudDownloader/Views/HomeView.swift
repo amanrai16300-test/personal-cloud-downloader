@@ -177,9 +177,9 @@ struct HomeView: View {
 
                 (
                     Text(dashboard.latencyValueText)
-                        .foregroundStyle(onlineGreen)
+                        .foregroundColor(onlineGreen)
                     + Text(" latency")
-                        .foregroundStyle(mutedText)
+                        .foregroundColor(mutedText)
                 )
                 .font(.system(size: 14, weight: .medium))
                 .contentTransition(.opacity)
@@ -364,10 +364,10 @@ struct HomeView: View {
             (
                 Text(value)
                     .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundColor(.white)
                 + Text(unit.map { " \($0)" } ?? "")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(mutedText)
+                    .foregroundColor(mutedText)
             )
             .monospacedDigit()
             .lineLimit(1)
