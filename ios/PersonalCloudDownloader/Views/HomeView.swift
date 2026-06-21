@@ -88,6 +88,12 @@ struct HomeView: View {
                     PlayerView(video: video, startsFullscreen: true)
                 }
             }
+            // FolderVideosView rows navigate with CompletedFile values. Register
+            // the same destination as VideosView so Home-launched series episodes
+            // open the existing player flow.
+            .navigationDestination(for: CompletedFile.self) { video in
+                PlayerView(video: video, startsFullscreen: true)
+            }
             // A tapped grouped-series card pushes the exact same folder/episode
             // picker the Videos tab uses (FolderVideosView), where the user
             // selects an episode. No second episode list is built in Home.
