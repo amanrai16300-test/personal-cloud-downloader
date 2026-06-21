@@ -100,7 +100,7 @@ QB_ACTIVE_STATES = {
     "seeding",
 }
 THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
-THUMBNAIL_TIMESTAMPS_SECONDS = (10, 30, 60, 1)
+THUMBNAIL_CACHE_VERSION = "v2"
 MIN_THUMBNAIL_BYTES = 2 * 1024
 NETWORK_INTERFACE = "enp0s6"
 VNSTAT_TIMEOUT_SECONDS = 5
@@ -1235,7 +1235,7 @@ def thumbnail_url_for_completed_video(file_path: Path, download_dir: Path) -> st
         relative = thumbnail_path.relative_to(download_dir.resolve()).as_posix()
     except ValueError:
         return None
-    return f"{settings.stream_base_url}/{quote(relative)}"
+    return f"{settings.stream_base_url}/{quote(relative)}?v={THUMBNAIL_CACHE_VERSION}"
 
 
 def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
@@ -1258,10 +1258,16 @@ def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
         return None
 
     cache_dir = download_root / THUMBNAIL_CACHE_DIR_NAME
-    cache_key = hashlib.sha256(f"{relative}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()
+    path_seed = hashlib.sha256(relative.encode("utf-8")).digest()
+    cache_key = hashlib.sha256(
+        f"{THUMBNAIL_CACHE_VERSION}:{relative}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")
+    ).hexdigest()
 
     try:
-        thumbnail_path = resolve_safe_download_target(cache_dir / f"{cache_key}.jpg", download_root)
+        thumbnail_path = resolve_safe_download_target(
+            cache_dir / f"{THUMBNAIL_CACHE_VERSION}-{cache_key}.jpg",
+            download_root,
+        )
     except ValueError:
         return None
 
@@ -1278,7 +1284,8 @@ def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
     except OSError:
         return None
 
-    for timestamp in THUMBNAIL_TIMESTAMPS_SECONDS:
+    duration = probe_video_duration(video_path)
+    for timestamp in thumbnail_timestamps(duration, path_seed):
         if extract_video_thumbnail(video_path, thumbnail_path, timestamp):
             return thumbnail_path
 
@@ -1297,7 +1304,56 @@ def is_valid_thumbnail(thumbnail_path: Path) -> bool:
         return False
 
 
-def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_seconds: int) -> bool:
+def probe_video_duration(video_path: Path) -> float | None:
+    if shutil.which("ffprobe") is None:
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=FFPROBE_TIMEOUT_S,
+        )
+        duration = float(result.stdout.strip())
+        return duration if result.returncode == 0 and duration > 0 else None
+    except (ValueError, subprocess.SubprocessError, OSError):
+        return None
+
+
+def thumbnail_timestamps(duration: float | None, path_seed: bytes) -> list[float]:
+    seed_value = int.from_bytes(path_seed[:8], "big")
+
+    if duration is None:
+        # Duration probing is best-effort. These later fallbacks avoid the old
+        # 1s/10s-first behavior while still supporting unusual containers.
+        return [30.0 + (seed_value % 31), 90.0, 10.0, 1.0]
+
+    if duration < 4:
+        return [max(0.1, duration * 0.50), max(0.1, duration * 0.25)]
+
+    # Stable path-derived positions spanning 20%–70%. Offsets produce retries
+    # at different parts of the same exact video without changing per request.
+    base_fraction = 0.20 + ((seed_value % 5000) / 10000.0)
+    fractions = [
+        base_fraction,
+        0.20 + ((base_fraction - 0.20 + 0.19) % 0.50),
+        0.20 + ((base_fraction - 0.20 + 0.37) % 0.50),
+    ]
+    timestamps = [min(duration - 0.5, max(0.5, duration * fraction)) for fraction in fractions]
+
+    # Last-resort positions for short/corrupt videos or sparse keyframes.
+    timestamps.extend([min(duration - 0.25, max(0.25, duration * 0.50)), 1.0])
+    return list(dict.fromkeys(round(timestamp, 3) for timestamp in timestamps if timestamp >= 0))
+
+
+def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_seconds: float) -> bool:
     tmp_path = thumbnail_path.with_name(f"{thumbnail_path.stem}.tmp.jpg")
     tmp_path.unlink(missing_ok=True)
 
@@ -1310,7 +1366,7 @@ def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_se
                 "-i", str(video_path),
                 "-frames:v", "1",
                 "-q:v", "3",
-                "-vf", "scale=320:-1",
+                "-vf", "scale=320:-1,blackframe=amount=90:threshold=32",
                 str(tmp_path),
             ],
             capture_output=True,
@@ -1321,7 +1377,13 @@ def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_se
         tmp_path.unlink(missing_ok=True)
         return False
 
-    if result.returncode != 0 or not is_valid_thumbnail(tmp_path):
+    black_percentages = [
+        int(value)
+        for value in re.findall(r"pblack:(\d+)", result.stderr)
+    ]
+    is_black_looking = any(percentage >= 90 for percentage in black_percentages)
+
+    if result.returncode != 0 or not is_valid_thumbnail(tmp_path) or is_black_looking:
         tmp_path.unlink(missing_ok=True)
         return False
 
