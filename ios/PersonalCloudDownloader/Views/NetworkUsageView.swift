@@ -6,6 +6,9 @@ import SwiftUI
 /// monospaced counters, one blue accent. All data, API calls, refresh
 /// behavior, and calculations are unchanged; only the presentation moved.
 struct NetworkUsageView: View {
+    var reconnectCycle: Int = 0
+    var reconnectRefreshToken: Int = 0
+
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var usage: NetworkUsageResponse?
@@ -52,24 +55,20 @@ struct NetworkUsageView: View {
                 stopAutoRefresh()
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active {
-                    guard isVisible else { return }
-                    // Mirror the tab-switch recovery: a request suspended
-                    // mid-flight can resume on a dead Tailscale socket and
-                    // hold isLoading, which would make loadUsage() bail out.
-                    // Cancel it, invalidate its generation, and restart the
-                    // loop after the Tailscale warm-up delay.
+                if phase != .active {
                     stopAutoRefresh()
                     refreshGeneration += 1
                     isLoading = false
-                    Task {
-                        try? await Task.sleep(nanoseconds: 750_000_000)
-                        guard !Task.isCancelled, isVisible else { return }
-                        startAutoRefresh()
-                    }
-                } else {
-                    stopAutoRefresh()
                 }
+            }
+            .onChange(of: reconnectCycle) { _ in
+                stopAutoRefresh()
+                refreshGeneration += 1
+                isLoading = false
+            }
+            .onChange(of: reconnectRefreshToken) { _ in
+                guard isVisible else { return }
+                startAutoRefresh()
             }
         }
     }

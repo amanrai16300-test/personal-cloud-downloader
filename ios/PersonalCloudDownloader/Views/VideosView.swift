@@ -2,11 +2,15 @@ import Foundation
 import SwiftUI
 
 struct VideosView: View {
+    var reconnectCycle: Int = 0
+    var reconnectRefreshToken: Int = 0
+
     @Environment(\.scenePhase) private var scenePhase
     @State private var videos: [CompletedFile] = []
     @State private var progressByPath: [String: VideoProgress] = [:]
     @State private var phase: LoadPhase = .loading
     @State private var isVisible = false
+    @State private var loadGeneration = 0
     // Palette mirrored from the Home redesign tokens.
     private let background = Color(red: 0.008, green: 0.022, blue: 0.055)
     private let panel = Color(red: 0.035, green: 0.065, blue: 0.125)
@@ -46,13 +50,16 @@ struct VideosView: View {
             isVisible = false
         }
         .onChange(of: scenePhase) { phase in
-            if phase == .active && isVisible {
-                Task {
-                    try? await Task.sleep(nanoseconds: 750_000_000)
-                    guard !Task.isCancelled else { return }
-                    await load()
-                }
+            if phase != .active {
+                loadGeneration += 1
             }
+        }
+        .onChange(of: reconnectCycle) { _ in
+            loadGeneration += 1
+        }
+        .onChange(of: reconnectRefreshToken) { _ in
+            guard isVisible else { return }
+            Task { await load() }
         }
     }
 
@@ -368,19 +375,26 @@ struct VideosView: View {
         .background(videosBackground)
     }
 
+    @MainActor
     private func load() async {
-        phase = .loading
+        loadGeneration += 1
+        let generation = loadGeneration
+        if videos.isEmpty {
+            phase = .loading
+        }
         do {
             let fetchedVideos = try await CompletedFilesAPI.fetchVideos()
             let backendProgress = (try? await CompletedFilesAPI.fetchVideoProgress()) ?? [:]
             let localProgress = VLCPlayerController.localProgressSnapshot()
             let mergedProgress = Self.mergeProgress(backend: backendProgress, local: localProgress)
+            guard generation == loadGeneration else { return }
             videos = fetchedVideos
             progressByPath = mergedProgress
             VLCPlayerController.importProgressSnapshot(mergedProgress)
             phase = .loaded
         } catch {
-            phase = .error(error.localizedDescription)
+            guard generation == loadGeneration else { return }
+            phase = videos.isEmpty ? .error(error.localizedDescription) : .loaded
         }
     }
 

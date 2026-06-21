@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -48,10 +49,20 @@ struct RootTabView: View {
     }
 
     @State private var selection: Tab = .home
+    @StateObject private var reconnectCoordinator = ForegroundReconnectCoordinator()
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var wasInactive = false
+    @State private var homeRefreshToken = 0
+    @State private var videosRefreshToken = 0
+    @State private var networkRefreshToken = 0
 
     var body: some View {
         TabView(selection: $selection) {
-            HomeView(selectedTab: $selection)
+            HomeView(
+                selectedTab: $selection,
+                reconnectCycle: reconnectCoordinator.cycle,
+                reconnectRefreshToken: homeRefreshToken
+            )
                 .tag(Tab.home)
                 .toolbar(.hidden, for: .tabBar)
 
@@ -59,11 +70,17 @@ struct RootTabView: View {
                 .tag(Tab.downloader)
                 .toolbar(.hidden, for: .tabBar)
 
-            VideosView()
+            VideosView(
+                reconnectCycle: reconnectCoordinator.cycle,
+                reconnectRefreshToken: videosRefreshToken
+            )
                 .tag(Tab.videos)
                 .toolbar(.hidden, for: .tabBar)
 
-            NetworkUsageView()
+            NetworkUsageView(
+                reconnectCycle: reconnectCoordinator.cycle,
+                reconnectRefreshToken: networkRefreshToken
+            )
                 .tag(Tab.network)
                 .toolbar(.hidden, for: .tabBar)
 
@@ -78,7 +95,120 @@ struct RootTabView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             CloudBoxTabBar(selection: $selection)
         }
+        .overlay(alignment: .top) {
+            reconnectIndicator
+                .padding(.top, 8)
+        }
         .tint(Color(red: 0.42, green: 0.76, blue: 1.0))
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                guard wasInactive else { return }
+                wasInactive = false
+                reconnectCoordinator.start()
+            } else {
+                wasInactive = true
+                reconnectCoordinator.cancel()
+            }
+        }
+        .onChange(of: reconnectCoordinator.completedCycle) { _ in
+            switch selection {
+            case .home:
+                homeRefreshToken += 1
+            case .videos:
+                videosRefreshToken += 1
+            case .network:
+                networkRefreshToken += 1
+            case .downloader, .more:
+                break
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var reconnectIndicator: some View {
+        switch reconnectCoordinator.status {
+        case .idle, .connected:
+            EmptyView()
+        case .reconnecting:
+            Label("Reconnecting…", systemImage: "network")
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+        case .unavailable:
+            Link(destination: URL(string: "tailscale://")!) {
+                Label("Server unavailable · Open Tailscale", systemImage: "wifi.exclamationmark")
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.88), in: Capsule())
+            }
+        }
+    }
+}
+
+@MainActor
+final class ForegroundReconnectCoordinator: ObservableObject {
+    enum Status {
+        case idle
+        case reconnecting
+        case connected
+        case unavailable
+    }
+
+    @Published private(set) var status: Status = .idle
+    @Published private(set) var cycle = 0
+    @Published private(set) var completedCycle = 0
+
+    private var task: Task<Void, Never>?
+
+    func start() {
+        task?.cancel()
+        cycle += 1
+        let activeCycle = cycle
+        status = .reconnecting
+
+        task = Task {
+            let delays: [UInt64] = [0, 750_000_000, 2_000_000_000]
+            for delay in delays {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+                guard !Task.isCancelled else { return }
+
+                if await probeHealth() {
+                    guard activeCycle == cycle else { return }
+                    status = .connected
+                    completedCycle += 1
+                    return
+                }
+            }
+
+            guard !Task.isCancelled, activeCycle == cycle else { return }
+            status = .unavailable
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+
+    private func probeHealth() async -> Bool {
+        guard let url = URL(string: "\(CompletedFilesAPI.baseURL)/api/health") else {
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 9
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200..<300).contains(http.statusCode)
+        } catch {
+            return false
+        }
     }
 }
 

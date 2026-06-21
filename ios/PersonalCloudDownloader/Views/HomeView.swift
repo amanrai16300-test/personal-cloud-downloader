@@ -19,6 +19,8 @@ struct HomeView: View {
     /// shortcut can switch to the existing Network tab. Optional so the view
     /// still previews standalone.
     var selectedTab: Binding<RootTabView.Tab>?
+    var reconnectCycle: Int = 0
+    var reconnectRefreshToken: Int = 0
 
     private let backendBaseURL = CompletedFilesAPI.baseURL
     private let refreshInterval: UInt64 = 12_000_000_000
@@ -110,11 +112,15 @@ struct HomeView: View {
                 stopRefreshLoop()
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active {
-                    startRefreshLoop(foregroundReconnect: dashboard.hasLoaded)
-                } else {
+                if phase != .active {
                     stopRefreshLoop()
                 }
+            }
+            .onChange(of: reconnectCycle) { _ in
+                stopRefreshLoop()
+            }
+            .onChange(of: reconnectRefreshToken) { _ in
+                startRefreshLoop()
             }
         }
     }
@@ -850,13 +856,13 @@ struct HomeView: View {
     /// counts, a success is "online" with whatever fields decoded.
     private func makeState(from result: DashboardFetch?, recentlyAddedEntries: [RecentlyAddedEntry]) -> HomeDashboardState {
         guard let result else {
-            return HomeDashboardState(
-                serverStatus: .offline,
-                lastUpdated: Date(),
-                isRefreshing: false,
-                isReconnecting: false,
-                hasLoaded: true
-            )
+            var cached = dashboard
+            cached.serverStatus = .offline
+            cached.lastUpdated = Date()
+            cached.isRefreshing = false
+            cached.isReconnecting = false
+            cached.hasLoaded = true
+            return cached
         }
 
         let response = result.response
@@ -976,7 +982,9 @@ struct HomeView: View {
 
         let start = DispatchTime.now()
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 9
+            let (data, response) = try await URLSession.shared.data(for: request)
             let elapsedNs = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 return nil
