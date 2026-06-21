@@ -100,7 +100,7 @@ QB_ACTIVE_STATES = {
     "seeding",
 }
 THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
-THUMBNAIL_CACHE_VERSION = "v2"
+THUMBNAIL_CACHE_VERSION = "v3"
 MIN_THUMBNAIL_BYTES = 2 * 1024
 NETWORK_INTERFACE = "enp0s6"
 VNSTAT_TIMEOUT_SECONDS = 5
@@ -1285,9 +1285,28 @@ def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
         return None
 
     duration = probe_video_duration(video_path)
-    for timestamp in thumbnail_timestamps(duration, path_seed):
-        if extract_video_thumbnail(video_path, thumbnail_path, timestamp):
+    candidates: list[tuple[float, Path]] = []
+    try:
+        for index, timestamp in enumerate(thumbnail_timestamps(duration, path_seed)):
+            candidate_path = thumbnail_path.with_name(f"{thumbnail_path.stem}.candidate-{index}.jpg")
+            candidate_path.unlink(missing_ok=True)
+            if not extract_video_thumbnail(video_path, candidate_path, timestamp):
+                continue
+
+            score = score_thumbnail_candidate(candidate_path)
+            if score is not None:
+                candidates.append((score, candidate_path))
+
+        if candidates:
+            _, best_path = max(candidates, key=lambda candidate: candidate[0])
+            best_path.replace(thumbnail_path)
             return thumbnail_path
+    finally:
+        for _, candidate_path in candidates:
+            if candidate_path != thumbnail_path:
+                candidate_path.unlink(missing_ok=True)
+        for candidate_path in cache_dir.glob(f"{thumbnail_path.stem}.candidate-*.jpg"):
+            candidate_path.unlink(missing_ok=True)
 
     try:
         thumbnail_path.unlink(missing_ok=True)
@@ -1331,25 +1350,22 @@ def thumbnail_timestamps(duration: float | None, path_seed: bytes) -> list[float
     seed_value = int.from_bytes(path_seed[:8], "big")
 
     if duration is None:
-        # Duration probing is best-effort. These later fallbacks avoid the old
-        # 1s/10s-first behavior while still supporting unusual containers.
-        return [30.0 + (seed_value % 31), 90.0, 10.0, 1.0]
+        base = [45.0, 75.0, 105.0, 135.0, 30.0]
+        rotation = seed_value % len(base)
+        return base[rotation:] + base[:rotation]
 
-    if duration < 4:
+    if duration < 8:
         return [max(0.1, duration * 0.50), max(0.1, duration * 0.25)]
 
-    # Stable path-derived positions spanning 20%–70%. Offsets produce retries
-    # at different parts of the same exact video without changing per request.
-    base_fraction = 0.20 + ((seed_value % 5000) / 10000.0)
-    fractions = [
-        base_fraction,
-        0.20 + ((base_fraction - 0.20 + 0.19) % 0.50),
-        0.20 + ((base_fraction - 0.20 + 0.37) % 0.50),
-    ]
-    timestamps = [min(duration - 0.5, max(0.5, duration * fraction)) for fraction in fractions]
+    fractions = [0.25, 0.35, 0.45, 0.55, 0.65, 0.75]
+    rotation = seed_value % len(fractions)
+    fractions = fractions[rotation:] + fractions[:rotation]
+    jitter = (((seed_value >> 8) % 401) - 200) / 10000.0
+    fractions = [min(0.78, max(0.23, fraction + jitter)) for fraction in fractions]
 
-    # Last-resort positions for short/corrupt videos or sparse keyframes.
-    timestamps.extend([min(duration - 0.25, max(0.25, duration * 0.50)), 1.0])
+    timestamps = [min(duration - 0.5, max(0.5, duration * fraction)) for fraction in fractions]
+    if duration < 20:
+        timestamps.extend([duration * 0.50, duration * 0.70])
     return list(dict.fromkeys(round(timestamp, 3) for timestamp in timestamps if timestamp >= 0))
 
 
@@ -1366,7 +1382,7 @@ def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_se
                 "-i", str(video_path),
                 "-frames:v", "1",
                 "-q:v", "3",
-                "-vf", "scale=320:-1,blackframe=amount=90:threshold=32",
+                "-vf", "scale=320:-1",
                 str(tmp_path),
             ],
             capture_output=True,
@@ -1377,13 +1393,7 @@ def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_se
         tmp_path.unlink(missing_ok=True)
         return False
 
-    black_percentages = [
-        int(value)
-        for value in re.findall(r"pblack:(\d+)", result.stderr)
-    ]
-    is_black_looking = any(percentage >= 90 for percentage in black_percentages)
-
-    if result.returncode != 0 or not is_valid_thumbnail(tmp_path) or is_black_looking:
+    if result.returncode != 0 or not is_valid_thumbnail(tmp_path):
         tmp_path.unlink(missing_ok=True)
         return False
 
@@ -1393,6 +1403,63 @@ def extract_video_thumbnail(video_path: Path, thumbnail_path: Path, timestamp_se
         tmp_path.unlink(missing_ok=True)
         return False
     return True
+
+
+def score_thumbnail_candidate(candidate_path: Path) -> float | None:
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-v", "error",
+                "-i", str(candidate_path),
+                "-vf", "scale=64:64,format=gray",
+                "-f", "rawvideo",
+                "-",
+            ],
+            capture_output=True,
+            timeout=FFMPEG_TIMEOUT_S,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+    pixels = result.stdout
+    if result.returncode != 0 or len(pixels) != 64 * 64:
+        return None
+
+    count = len(pixels)
+    mean = sum(pixels) / count
+    variance = sum((pixel - mean) ** 2 for pixel in pixels) / count
+    dark_ratio = sum(pixel < 32 for pixel in pixels) / count
+    bright_ratio = sum(pixel > 220 for pixel in pixels) / count
+    midtone_ratio = sum(48 <= pixel <= 208 for pixel in pixels) / count
+
+    horizontal_edges = sum(
+        abs(pixels[row * 64 + column] - pixels[row * 64 + column - 1])
+        for row in range(64)
+        for column in range(1, 64)
+    )
+    vertical_edges = sum(
+        abs(pixels[row * 64 + column] - pixels[(row - 1) * 64 + column])
+        for row in range(1, 64)
+        for column in range(64)
+    )
+    edge_detail = (horizontal_edges + vertical_edges) / (2 * 64 * 63)
+
+    # Reject black fades, flat/static frames, and common white-text-on-black
+    # title/legal cards. The latter have a dark field, few bright pixels, and
+    # sharp sparse edges but little tonal variance across most of the frame.
+    if mean < 28 or variance < 180 or dark_ratio > 0.78:
+        return None
+    if dark_ratio > 0.58 and 0.005 < bright_ratio < 0.18 and midtone_ratio < 0.28:
+        return None
+
+    return (
+        variance ** 0.5 * 2.0
+        + edge_detail * 1.5
+        + midtone_ratio * 45.0
+        - dark_ratio * 35.0
+        - bright_ratio * 12.0
+    )
 
 
 def organize_loose_completed_videos(download_dir: Path) -> None:
