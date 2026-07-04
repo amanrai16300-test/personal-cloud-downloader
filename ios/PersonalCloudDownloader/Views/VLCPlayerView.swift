@@ -718,18 +718,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// subtitles show without the user hunting for a control (done once, guarded
     /// by `didAutoSelectSubtitle`, so a later manual "Off" is respected).
     private func refreshSubtitleTracks() {
-        // A sidecar `.srt` overlay takes over entirely: don't expose native
-        // tracks and don't auto-select one, so there are no duplicate subtitles
-        // and the picker stays a simple Subtitles/Off toggle.
-        if hasSidecarSubtitle {
-            if !subtitleTracks.isEmpty { subtitleTracks = [] }
-            if player.currentVideoSubTitleIndex != -1 {
-                player.currentVideoSubTitleIndex = -1
-            }
-            currentSubtitleIndex = -1
-            return
-        }
-
         let indexes = player.videoSubTitlesIndexes.compactMap { ($0 as? NSNumber)?.int32Value }
         let names = player.videoSubTitlesNames.compactMap { $0 as? String }
         guard indexes.count == names.count else { return }
@@ -742,7 +730,9 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             subtitleTracks = tracks
         }
 
-        if !didAutoSelectSubtitle, let first = tracks.first {
+        // Sidecar remains the default when present, but embedded tracks stay
+        // selectable in the menu.
+        if !hasSidecarSubtitle, !didAutoSelectSubtitle, let first = tracks.first {
             didAutoSelectSubtitle = true
             selectSubtitle(index: first.index)
         }

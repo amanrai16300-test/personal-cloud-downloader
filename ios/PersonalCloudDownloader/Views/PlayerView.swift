@@ -1098,78 +1098,58 @@ private struct VLCFullscreenView: View {
 
     /// Subtitle picker. Re-arms the auto-hide timer so changing the choice
     /// doesn't hide the controls.
-    ///   - Sidecar `.srt` present → overlay toggle plus provider search for a
-    ///     better full subtitle.
-    ///   - Embedded native tracks → each real VLC track, Off, and provider search.
-    ///   - No known tracks → provider search only.
+    /// Shows every source together: sidecar overlay, embedded VLC tracks, Off,
+    /// and provider search.
     @ViewBuilder
     private var subtitleButton: some View {
-        if fsVlc.hasSidecarSubtitle {
-            Menu {
+        Menu {
+            if fsVlc.hasSidecarSubtitle {
                 Button {
                     fsVlc.setSidecarEnabled(true)
+                    fsVlc.selectSubtitle(index: -1)
                     if controlsVisible { scheduleAutoHide() }
                 } label: {
                     Label("Subtitles", systemImage: fsVlc.sidecarEnabled ? "checkmark" : "")
                 }
+            }
+            ForEach(fsVlc.subtitleTracks) { track in
                 Button {
                     fsVlc.setSidecarEnabled(false)
-                    if controlsVisible { scheduleAutoHide() }
-                } label: {
-                    Label("Off", systemImage: fsVlc.sidecarEnabled ? "" : "checkmark")
-                }
-                Button {
-                    findSubtitles()
+                    fsVlc.selectSubtitle(index: track.index)
                     if controlsVisible { scheduleAutoHide() }
                 } label: {
                     Label(
-                        isSearchingSubtitles ? "Searching..." : "Find better subtitles",
-                        systemImage: "magnifyingglass"
+                        track.name,
+                        systemImage: !fsVlc.sidecarEnabled && fsVlc.currentSubtitleIndex == track.index ? "checkmark" : ""
                     )
                 }
-                .disabled(isSearchingSubtitles)
-            } label: { subtitleButtonLabel(on: fsVlc.sidecarEnabled) }
-            .padding(.leading, 4)
-        } else if fsVlc.hasSubtitles {
-            Menu {
-                ForEach(fsVlc.subtitleTracks) { track in
-                    Button {
-                        fsVlc.selectSubtitle(index: track.index)
-                        if controlsVisible { scheduleAutoHide() }
-                    } label: {
-                        Label(
-                            track.name,
-                            systemImage: fsVlc.currentSubtitleIndex == track.index ? "checkmark" : ""
-                        )
-                    }
-                }
-                Button {
-                    fsVlc.selectSubtitle(index: -1)
-                    if controlsVisible { scheduleAutoHide() }
-                } label: {
-                    Label("Off", systemImage: fsVlc.currentSubtitleIndex == -1 ? "checkmark" : "")
-                }
-                Button {
-                    findSubtitles()
-                    if controlsVisible { scheduleAutoHide() }
-                } label: {
-                    Label(isSearchingSubtitles ? "Searching..." : "Find subtitles", systemImage: "magnifyingglass")
-                }
-                .disabled(isSearchingSubtitles)
-            } label: { subtitleButtonLabel(on: fsVlc.currentSubtitleIndex != -1) }
-            .padding(.leading, 4)
-        } else {
-            Menu {
-                Button {
-                    findSubtitles()
-                    if controlsVisible { scheduleAutoHide() }
-                } label: {
-                    Label(isSearchingSubtitles ? "Searching..." : "Find subtitles", systemImage: "magnifyingglass")
-                }
-                .disabled(isSearchingSubtitles)
-            } label: { subtitleButtonLabel(on: isSearchingSubtitles) }
-            .padding(.leading, 4)
+            }
+            Button {
+                fsVlc.setSidecarEnabled(false)
+                fsVlc.selectSubtitle(index: -1)
+                if controlsVisible { scheduleAutoHide() }
+            } label: {
+                Label(
+                    "Off",
+                    systemImage: !fsVlc.sidecarEnabled && fsVlc.currentSubtitleIndex == -1 ? "checkmark" : ""
+                )
+            }
+            Button {
+                findSubtitles()
+                if controlsVisible { scheduleAutoHide() }
+            } label: {
+                Label(
+                    isSearchingSubtitles
+                        ? "Searching..."
+                        : (fsVlc.hasSidecarSubtitle ? "Find better subtitles" : "Find subtitles"),
+                    systemImage: "magnifyingglass"
+                )
+            }
+            .disabled(isSearchingSubtitles)
+        } label: {
+            subtitleButtonLabel(on: fsVlc.sidecarEnabled || fsVlc.currentSubtitleIndex != -1 || isSearchingSubtitles)
         }
+        .padding(.leading, 4)
     }
 
     private func findSubtitles() {
