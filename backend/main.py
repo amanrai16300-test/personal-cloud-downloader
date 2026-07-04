@@ -543,7 +543,7 @@ def parse_media_filename(filename: str, parent: str | None = None) -> dict[str, 
         media_type = "tv"
         subtitle = f"S{int(tv_match.group(1)):02d}E{int(tv_match.group(2)):02d}"
 
-    title = clean_media_title(cleaned, tv_match, year_match)
+    title = clean_home_media_title(cleaned, tv_match, year_match)
 
     # Episode filenames often lack the show title/year; the parent release folder
     # carries it. Fall back there without touching filename/relative_path identity.
@@ -551,7 +551,7 @@ def parse_media_filename(filename: str, parent: str | None = None) -> dict[str, 
         parent_cleaned = re.sub(r"[._]+", " ", parent)
         parent_year, parent_year_match = detect_media_year(parent_cleaned)
         if not title:
-            title = clean_media_title(parent_cleaned, detect_tv_episode(parent_cleaned), parent_year_match)
+            title = clean_home_media_title(parent_cleaned, detect_tv_episode(parent_cleaned), parent_year_match)
         if year is None:
             year = parent_year
 
@@ -569,7 +569,7 @@ def detect_tv_episode(text: str) -> Any:
     )
 
 
-def clean_media_title(cleaned: str, tv_match: Any, year_match: Any) -> str:
+def clean_home_media_title(cleaned: str, tv_match: Any, year_match: Any) -> str:
     cut = len(cleaned)
     if tv_match:
         cut = min(cut, tv_match.start())
