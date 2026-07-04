@@ -639,6 +639,8 @@ private struct VLCFullscreenView: View {
     @State private var gestureStartVolume: Float = SystemVolumeController.shared.volume
     @State private var adjustmentOverlay: AdjustmentOverlay?
     @State private var adjustmentOverlayHideTask: DispatchWorkItem?
+    @State private var isSearchingSubtitles = false
+    @State private var subtitleSearchMessage: String?
 
     /// Seconds the controls stay visible before auto-hiding during playback.
     private let autoHideDelay: TimeInterval = 3
@@ -758,6 +760,14 @@ private struct VLCFullscreenView: View {
         }
         .onReceive(wallClockTimer) { date in
             wallClockText = Self.wallClockFormatter.string(from: date)
+        }
+        .alert("Subtitles", isPresented: Binding(
+            get: { subtitleSearchMessage != nil },
+            set: { if !$0 { subtitleSearchMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { subtitleSearchMessage = nil }
+        } message: {
+            Text(subtitleSearchMessage ?? "")
         }
         // The controller's media frees with the view; `teardown` also persists
         // position and stops audio so inline can resume cleanly.
@@ -1066,11 +1076,7 @@ private struct VLCFullscreenView: View {
         .frame(maxWidth: .infinity)
         .overlay(alignment: .leading) {
             HStack(spacing: 8) {
-                if fsVlc.hasSidecarSubtitle || fsVlc.hasSubtitles {
-                    subtitleButton
-                } else {
-                    Color.clear.frame(width: 44, height: 44)
-                }
+                subtitleButton
                 if fsVlc.hasSelectableAudioTracks {
                     audioButton
                 }
@@ -1090,9 +1096,8 @@ private struct VLCFullscreenView: View {
         )
     }
 
-    /// Subtitle picker. Shown ONLY when subtitles are available, so a video
-    /// without any never shows a dead control. Re-arms the auto-hide timer so
-    /// changing the choice doesn't hide the controls.
+    /// Subtitle picker. Re-arms the auto-hide timer so changing the choice
+    /// doesn't hide the controls.
     ///   - Sidecar `.srt` present → simple "Subtitles / Off" toggle for the
     ///     stable SwiftUI overlay (native tracks are hidden — overlay is sole
     ///     source).
@@ -1137,6 +1142,51 @@ private struct VLCFullscreenView: View {
                 }
             } label: { subtitleButtonLabel(on: fsVlc.currentSubtitleIndex != -1) }
             .padding(.leading, 4)
+        } else {
+            Menu {
+                Button {
+                    findSubtitles()
+                    if controlsVisible { scheduleAutoHide() }
+                } label: {
+                    Label(isSearchingSubtitles ? "Searching..." : "Find subtitles", systemImage: "magnifyingglass")
+                }
+                .disabled(isSearchingSubtitles)
+            } label: { subtitleButtonLabel(on: isSearchingSubtitles) }
+            .padding(.leading, 4)
+        }
+    }
+
+    private func findSubtitles() {
+        guard !isSearchingSubtitles else { return }
+        isSearchingSubtitles = true
+        fsVlc.searchMissingSubtitle(for: streamURL) { status in
+            DispatchQueue.main.async {
+                isSearchingSubtitles = false
+                if status == "found" || status == "exists" {
+                    fsVlc.setSidecarEnabled(true)
+                    return
+                }
+                subtitleSearchMessage = subtitleSearchFailureMessage(for: status)
+            }
+        }
+    }
+
+    private func subtitleSearchFailureMessage(for status: String) -> String {
+        switch status {
+        case "not_found":
+            return "No matching subtitles found."
+        case "low_confidence":
+            return "No confident subtitle match found."
+        case "provider_not_configured":
+            return "Subtitle search is not configured on the server."
+        case "provider_unavailable":
+            return "Subtitle provider is unavailable."
+        case "download_failed":
+            return "Subtitle download failed."
+        case "invalid_path":
+            return "This video path cannot be searched."
+        default:
+            return "Subtitle search failed."
         }
     }
 

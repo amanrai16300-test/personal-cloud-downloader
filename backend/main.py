@@ -11,6 +11,7 @@ import subprocess
 import time
 import tempfile
 import unicodedata
+from difflib import SequenceMatcher
 from io import BytesIO
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -1545,6 +1546,9 @@ SUBTITLE_ENTITY_REPLACEMENTS = {
 # Hard limits so a stuck/huge probe or extract can't wedge the request.
 FFPROBE_TIMEOUT_S = 30
 FFMPEG_TIMEOUT_S = 120
+OPENSUBTITLES_API_URL = "https://api.opensubtitles.com/api/v1"
+SUBTITLE_SEARCH_MIN_CONFIDENCE = 72.0
+SUBTITLE_SEARCH_TIMEOUT_S = 20
 
 
 @app.post("/api/subtitles/extract")
@@ -1587,6 +1591,58 @@ def extract_subtitle(payload: ExtractSubtitleRequest) -> dict[str, Any]:
     return {"status": "extracted", "url": srt_stream_url(srt_path)}
 
 
+@app.post("/api/subtitles/search")
+def search_subtitle(payload: ExtractSubtitleRequest) -> dict[str, Any]:
+    try:
+        video_path = resolve_completed_path(payload.path)
+    except HTTPException:
+        return {"status": "invalid_path"}
+
+    srt_path = video_path.with_suffix(".srt")
+    if srt_path.exists():
+        sanitize_subtitle_file(srt_path, create_backup=True)
+        return {"status": "exists", "url": srt_stream_url(srt_path)}
+
+    config = opensubtitles_config()
+    if config is None:
+        return {"status": "provider_not_configured"}
+
+    metadata = detect_subtitle_metadata(video_path)
+    token = opensubtitles_login(config)
+    if token is None:
+        return {"status": "provider_unavailable"}
+
+    candidates = opensubtitles_search(config, token, metadata)
+    if candidates is None:
+        return {"status": "provider_unavailable"}
+    if not candidates:
+        return {"status": "not_found"}
+
+    scored = [
+        (score_subtitle_candidate(candidate, metadata), candidate)
+        for candidate in candidates
+    ]
+    scored = [(score, candidate) for score, candidate in scored if score > 0]
+    if not scored:
+        return {"status": "not_found"}
+
+    best_score, best_candidate = max(scored, key=lambda item: item[0])
+    if best_score < SUBTITLE_SEARCH_MIN_CONFIDENCE:
+        return {"status": "low_confidence", "score": round(best_score, 2)}
+
+    content = opensubtitles_download(config, token, best_candidate)
+    if content is None:
+        return {"status": "download_failed"}
+    if srt_path.exists():
+        sanitize_subtitle_file(srt_path, create_backup=True)
+        return {"status": "exists", "url": srt_stream_url(srt_path)}
+    if not save_downloaded_subtitle(content, srt_path):
+        return {"status": "download_failed"}
+
+    sanitize_subtitle_file(srt_path, create_backup=True)
+    return {"status": "found", "url": srt_stream_url(srt_path), "score": round(best_score, 2)}
+
+
 def resolve_completed_path(relative_path: str) -> Path:
     """Resolve a client-supplied relative path to an existing file UNDER the
     completed-downloads dir. Rejects traversal/escape and non-files with 400/404
@@ -1614,6 +1670,271 @@ def srt_stream_url(srt_path: Path) -> str:
     completed-files listing uses for videos."""
     relative = srt_path.relative_to(settings.download_complete_dir.resolve()).as_posix()
     return f"{settings.stream_base_url}/{quote(relative)}"
+
+
+def opensubtitles_config() -> dict[str, str] | None:
+    config = {
+        "api_key": os.getenv("OPENSUBTITLES_API_KEY", "").strip(),
+        "username": os.getenv("OPENSUBTITLES_USERNAME", "").strip(),
+        "password": os.getenv("OPENSUBTITLES_PASSWORD", "").strip(),
+    }
+    return config if all(config.values()) else None
+
+
+def opensubtitles_headers(config: dict[str, str], token: str | None = None) -> dict[str, str]:
+    headers = {
+        "Api-Key": config["api_key"],
+        "Content-Type": "application/json",
+        "User-Agent": "CloudBox/1.0",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def opensubtitles_login(config: dict[str, str]) -> str | None:
+    try:
+        response = requests.post(
+            f"{OPENSUBTITLES_API_URL}/login",
+            headers=opensubtitles_headers(config),
+            json={"username": config["username"], "password": config["password"]},
+            timeout=SUBTITLE_SEARCH_TIMEOUT_S,
+        )
+        if response.status_code != 200:
+            return None
+        token = response.json().get("token")
+        return token if isinstance(token, str) and token else None
+    except (RequestException, ValueError):
+        return None
+
+
+def detect_subtitle_metadata(video_path: Path) -> dict[str, Any]:
+    stem = video_path.stem
+    parent = video_path.parent.name
+    combined = f"{parent} {stem}" if parent and parent != stem else stem
+    season, episode = parse_episode_numbers(combined)
+    year = parse_year(combined)
+
+    title_source = parent if season is not None and parent else stem
+    title = clean_media_title(title_source)
+    if not title:
+        title = clean_media_title(stem)
+
+    release_hints = release_tokens(stem)
+    return {
+        "title": title,
+        "year": year,
+        "season": season,
+        "episode": episode,
+        "language": "en",
+        "release_hints": release_hints,
+        "filename_tokens": release_tokens(stem),
+        "query": clean_media_title(stem),
+    }
+
+
+def parse_episode_numbers(text: str) -> tuple[int | None, int | None]:
+    patterns = [
+        r"(?i)\bS(\d{1,2})E(\d{1,3})\b",
+        r"(?i)\b(\d{1,2})x(\d{1,3})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    return None, None
+
+
+def parse_year(text: str) -> int | None:
+    match = re.search(r"\b(19\d{2}|20\d{2})\b", text)
+    return int(match.group(1)) if match else None
+
+
+def clean_media_title(text: str) -> str:
+    cleaned = re.sub(r"(?i)\bS\d{1,2}E\d{1,3}\b|\b\d{1,2}x\d{1,3}\b", " ", text)
+    cleaned = re.sub(r"\b(19\d{2}|20\d{2})\b", " ", cleaned)
+    cleaned = re.sub(
+        r"(?i)\b(720p|1080p|2160p|480p|bluray|blu-ray|webrip|web-dl|webdl|hdtv|x264|x265|h264|h265|hevc|aac|dts|hdr|dv|proper|repack|extended|remux)\b",
+        " ",
+        cleaned,
+    )
+    cleaned = re.sub(r"[\._\-\[\]\(\)]+", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def release_tokens(text: str) -> set[str]:
+    tokens = re.split(r"[^A-Za-z0-9]+", text.lower())
+    return {
+        token
+        for token in tokens
+        if len(token) >= 3 and token not in {"srt", "mkv", "mp4", "avi", "mov", "webm"}
+    }
+
+
+def opensubtitles_search(
+    config: dict[str, str],
+    token: str,
+    metadata: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    params: dict[str, Any] = {
+        "languages": metadata["language"],
+        "query": metadata["title"] or metadata["query"],
+        "order_by": "download_count",
+        "order_direction": "desc",
+    }
+    if metadata["season"] is not None and metadata["episode"] is not None:
+        params["season_number"] = metadata["season"]
+        params["episode_number"] = metadata["episode"]
+    elif metadata["year"] is not None:
+        params["year"] = metadata["year"]
+
+    try:
+        response = requests.get(
+            f"{OPENSUBTITLES_API_URL}/subtitles",
+            headers=opensubtitles_headers(config, token),
+            params=params,
+            timeout=SUBTITLE_SEARCH_TIMEOUT_S,
+        )
+        if response.status_code != 200:
+            return None
+        data = response.json().get("data", [])
+        return data if isinstance(data, list) else []
+    except (RequestException, ValueError):
+        return None
+
+
+def score_subtitle_candidate(candidate: dict[str, Any], metadata: dict[str, Any]) -> float:
+    attrs = candidate.get("attributes") if isinstance(candidate, dict) else None
+    if not isinstance(attrs, dict):
+        return 0.0
+
+    feature = attrs.get("feature_details") if isinstance(attrs.get("feature_details"), dict) else {}
+    candidate_season = coerce_int(feature.get("season_number") or attrs.get("season_number"))
+    candidate_episode = coerce_int(feature.get("episode_number") or attrs.get("episode_number"))
+    if metadata["season"] is not None and metadata["episode"] is not None:
+        if candidate_season != metadata["season"] or candidate_episode != metadata["episode"]:
+            return 0.0
+
+    score = 0.0
+    language = str(attrs.get("language") or "").lower()
+    if language in {"en", "eng", "english"}:
+        score += 20.0
+
+    candidate_title = str(feature.get("title") or attrs.get("title") or attrs.get("release") or "")
+    title_similarity = similarity(clean_media_title(candidate_title), metadata["title"])
+    score += title_similarity * 30.0
+
+    candidate_year = coerce_int(feature.get("year") or attrs.get("year"))
+    if metadata["year"] is not None:
+        if candidate_year == metadata["year"]:
+            score += 20.0
+        elif candidate_year is not None:
+            score -= 10.0
+    else:
+        score += 5.0
+
+    if metadata["season"] is not None and metadata["episode"] is not None:
+        score += 25.0
+
+    files = attrs.get("files") if isinstance(attrs.get("files"), list) else []
+    file_names = " ".join(
+        str(file.get("file_name") or "")
+        for file in files
+        if isinstance(file, dict)
+    )
+    release = f"{attrs.get('release') or ''} {file_names}"
+    release_hint_similarity = token_overlap(metadata["release_hints"], release_tokens(release))
+    score += release_hint_similarity * 15.0
+
+    if any(str(file.get("file_name") or "").lower().endswith(".srt") for file in files if isinstance(file, dict)):
+        score += 10.0
+    elif files:
+        score -= 5.0
+
+    return max(0.0, min(score, 100.0))
+
+
+def similarity(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left.lower(), right.lower()).ratio()
+
+
+def token_overlap(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def opensubtitles_download(
+    config: dict[str, str],
+    token: str,
+    candidate: dict[str, Any],
+) -> bytes | None:
+    attrs = candidate.get("attributes") if isinstance(candidate, dict) else None
+    files = attrs.get("files") if isinstance(attrs, dict) and isinstance(attrs.get("files"), list) else []
+    file_id = None
+    for file in files:
+        if not isinstance(file, dict):
+            continue
+        if str(file.get("file_name") or "").lower().endswith(".srt"):
+            file_id = file.get("file_id")
+            break
+        if file_id is None:
+            file_id = file.get("file_id")
+    if file_id is None:
+        return None
+
+    try:
+        response = requests.post(
+            f"{OPENSUBTITLES_API_URL}/download",
+            headers=opensubtitles_headers(config, token),
+            json={"file_id": file_id, "sub_format": "srt"},
+            timeout=SUBTITLE_SEARCH_TIMEOUT_S,
+        )
+        if response.status_code != 200:
+            return None
+        link = response.json().get("link")
+        if not isinstance(link, str) or not link.startswith("https://"):
+            return None
+        subtitle = requests.get(link, timeout=SUBTITLE_SEARCH_TIMEOUT_S)
+        if subtitle.status_code != 200 or not subtitle.content:
+            return None
+        return subtitle.content
+    except (RequestException, ValueError):
+        return None
+
+
+def save_downloaded_subtitle(content: bytes, srt_path: Path) -> bool:
+    if b"-->" not in content[:1_000_000]:
+        return False
+
+    completed_root = settings.download_complete_dir.resolve()
+    resolved = srt_path.resolve()
+    if resolved.suffix.lower() != ".srt" or not resolved.is_relative_to(completed_root):
+        return False
+
+    tmp_path = resolved.with_name(f".{resolved.name}.tmp")
+    try:
+        if resolved.exists():
+            return False
+        tmp_path.write_bytes(content)
+        os.link(tmp_path, resolved)
+        tmp_path.unlink(missing_ok=True)
+        return True
+    except FileExistsError:
+        tmp_path.unlink(missing_ok=True)
+        return False
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        return False
 
 
 def sanitize_subtitle_file(subtitle_path: Path, *, create_backup: bool) -> bool:

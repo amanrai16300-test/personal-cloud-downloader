@@ -354,6 +354,42 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         fetchSidecarData(srtURL: srtURL, videoURL: videoURL, allowExtraction: true)
     }
 
+    func searchMissingSubtitle(for videoURL: URL, completion: @escaping (String) -> Void) {
+        guard let endpoint = backendSubtitleURL(for: videoURL, path: "/api/subtitles/search"),
+              let relativePath = filesRelativePath(of: videoURL) else {
+            completion("invalid_path")
+            return
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["path": relativePath])
+
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let self,
+                  let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let status = obj["status"] as? String else {
+                completion("provider_unavailable")
+                return
+            }
+
+            if status == "found" || status == "exists" {
+                DispatchQueue.main.async {
+                    self.fetchSidecarData(
+                        srtURL: videoURL.deletingPathExtension().appendingPathExtension("srt"),
+                        videoURL: videoURL,
+                        allowExtraction: false
+                    )
+                }
+            }
+            completion(status)
+        }
+        task.resume()
+    }
+
     /// GET the `.srt`. 200 → activate overlay. 404 with `allowExtraction` →
     /// trigger a backend extract then retry once (extraction disabled on the
     /// retry so it can't loop). Anything else → silent native fallback.
@@ -435,10 +471,14 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// FastAPI port (8000) and the fixed path. Returns nil if the host is
     /// unknown.
     private func backendExtractURL(for videoURL: URL) -> URL? {
+        backendSubtitleURL(for: videoURL, path: "/api/subtitles/extract")
+    }
+
+    private func backendSubtitleURL(for videoURL: URL, path: String) -> URL? {
         guard var components = URLComponents(url: videoURL, resolvingAgainstBaseURL: false),
               components.host != nil else { return nil }
         components.port = 8000
-        components.path = "/api/subtitles/extract"
+        components.path = path
         components.query = nil
         components.fragment = nil
         return components.url

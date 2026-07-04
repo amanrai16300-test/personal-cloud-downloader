@@ -172,6 +172,23 @@ Subtitles:
 - Backend sanitizes active `.srt` and `.vtt` sidecars, removing common HTML tags/entities and ASS/SSA override tags while preserving timing.
 - Existing subtitle files get one `.bak` backup before sanitization.
 
+CloudBox online subtitle search checkpoint:
+
+- Changed files: `backend/main.py`, `ios/PersonalCloudDownloader/Views/PlayerView.swift`, `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`.
+- New backend endpoint: `POST /api/subtitles/search`.
+- Existing extraction endpoint remains: `POST /api/subtitles/extract`.
+- OpenSubtitles.com REST API is used through env-only config: `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`.
+- Missing OpenSubtitles env config returns `provider_not_configured`.
+- Existing `.srt` files are never overwritten.
+- Match scoring threshold is `72.0`.
+- Episode subtitles require exact season+episode match.
+- Below threshold returns `low_confidence`; no candidates returns `not_found`.
+- Saved subtitles use `<video>.srt`, sanitizer, and existing sidecar playback path.
+- iOS subtitle menu now shows `Find subtitles` when VLC has no sidecar or embedded subtitles.
+- `found` / `exists` refreshes and enables the existing sidecar subtitle path.
+- Checks passed: `python -m py_compile backend/main.py`; `git diff --check`.
+- Swift/Xcode build was not available locally.
+
 Network/storage:
 
 - `GET /api/network-usage` uses fixed safe server commands only.
