@@ -293,6 +293,17 @@ Home behavior:
 - Latency is measured client-side in iOS using request round-trip time.
 - Foreground reconnect works without tab switch.
 
+Latest iOS Home reconnect/performance checkpoint:
+
+- Changed file: `ios/PersonalCloudDownloader/Views/HomeView.swift`.
+- Root cause: Home first paint waited on a serial foreground chain: `/api/health` probe gate -> `GET /api/home-dashboard` -> full `GET /api/completed-files` library fetch/grouping -> one final state update. Cold launch had no persisted Home snapshot, so Home stayed in CHECKING/loading until the full chain completed.
+- Fix: Home uses a two-phase refresh. Phase 1 applies `/api/home-dashboard` immediately and keeps existing Recently Added entries visible; Phase 2 runs `CompletedFilesAPI.fetchVideos()` and applies only regrouped Recently Added entries afterward.
+- Stale safety: both phases use the existing generation guard, so old dashboard or library responses cannot overwrite newer Home state.
+- Cache-first launch: Home persists a small last-good dashboard snapshot in `UserDefaults` and renders it on first appear/cold launch. Cached data does not fake live latency; connection status and latency still refresh live.
+- Foreground reconnect: Home restarts refresh immediately on `reconnectCycle`/foreground while visible, treating `/api/home-dashboard` as the Home health check instead of waiting for the separate `/api/health` probe. `reconnectRefreshToken` remains supported.
+- Duplicate refresh prevention: Home skips refresh starts when a loop already started within about 3 seconds, preventing `onAppear`, foreground, and reconnect token from launching duplicate chains.
+- Unchanged: `RootTabView.swift`, `CompletedFilesAPI.swift`, `backend/main.py`, API response shape, Home visual design, tabs, player/progress behavior, Web Downloader, Tailscale/private/legal rules.
+
 TMDB artwork:
 
 - Backend enriches Home dashboard media with TMDB server-side using `TMDB_API_KEY`.
