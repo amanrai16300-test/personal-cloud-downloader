@@ -1098,11 +1098,10 @@ private struct VLCFullscreenView: View {
 
     /// Subtitle picker. Re-arms the auto-hide timer so changing the choice
     /// doesn't hide the controls.
-    ///   - Sidecar `.srt` present → simple "Subtitles / Off" toggle for the
-    ///     stable SwiftUI overlay (native tracks are hidden — overlay is sole
-    ///     source).
-    ///   - Otherwise → "Off" plus each embedded native track, checkmark on the
-    ///     active one.
+    ///   - Sidecar `.srt` present → overlay toggle plus provider search for a
+    ///     better full subtitle.
+    ///   - Embedded native tracks → each real VLC track, Off, and provider search.
+    ///   - No known tracks → provider search only.
     @ViewBuilder
     private var subtitleButton: some View {
         if fsVlc.hasSidecarSubtitle {
@@ -1119,16 +1118,20 @@ private struct VLCFullscreenView: View {
                 } label: {
                     Label("Off", systemImage: fsVlc.sidecarEnabled ? "" : "checkmark")
                 }
+                Button {
+                    findSubtitles()
+                    if controlsVisible { scheduleAutoHide() }
+                } label: {
+                    Label(
+                        isSearchingSubtitles ? "Searching..." : "Find better subtitles",
+                        systemImage: "magnifyingglass"
+                    )
+                }
+                .disabled(isSearchingSubtitles)
             } label: { subtitleButtonLabel(on: fsVlc.sidecarEnabled) }
             .padding(.leading, 4)
         } else if fsVlc.hasSubtitles {
             Menu {
-                Button {
-                    fsVlc.selectSubtitle(index: -1)
-                    if controlsVisible { scheduleAutoHide() }
-                } label: {
-                    Label("Off", systemImage: fsVlc.currentSubtitleIndex == -1 ? "checkmark" : "")
-                }
                 ForEach(fsVlc.subtitleTracks) { track in
                     Button {
                         fsVlc.selectSubtitle(index: track.index)
@@ -1140,6 +1143,19 @@ private struct VLCFullscreenView: View {
                         )
                     }
                 }
+                Button {
+                    fsVlc.selectSubtitle(index: -1)
+                    if controlsVisible { scheduleAutoHide() }
+                } label: {
+                    Label("Off", systemImage: fsVlc.currentSubtitleIndex == -1 ? "checkmark" : "")
+                }
+                Button {
+                    findSubtitles()
+                    if controlsVisible { scheduleAutoHide() }
+                } label: {
+                    Label(isSearchingSubtitles ? "Searching..." : "Find subtitles", systemImage: "magnifyingglass")
+                }
+                .disabled(isSearchingSubtitles)
             } label: { subtitleButtonLabel(on: fsVlc.currentSubtitleIndex != -1) }
             .padding(.leading, 4)
         } else {
@@ -1174,15 +1190,15 @@ private struct VLCFullscreenView: View {
     private func subtitleSearchFailureMessage(for status: String) -> String {
         switch status {
         case "not_found":
-            return "No matching subtitles found."
+            return "No subtitle found."
         case "low_confidence":
-            return "No confident subtitle match found."
+            return "No safe subtitle match found. Existing subtitle was kept."
         case "provider_not_configured":
             return "Subtitle search is not configured on the server."
         case "provider_unavailable":
-            return "Subtitle provider is unavailable."
+            return "Subtitle provider is unavailable right now."
         case "download_failed":
-            return "Subtitle download failed."
+            return "Subtitle download failed. Please try again."
         case "invalid_path":
             return "This video path cannot be searched."
         default:
