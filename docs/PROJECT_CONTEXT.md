@@ -2,29 +2,35 @@
 
 ## 1. Project Overview
 
-- Project name: Personal Cloud Downloader
-- Goal: Build a private personal cloud downloader, similar to a small Seedr-style tool, for legal files only.
-- Main use case: Download files on a cloud server, then stream or download them privately from a browser, VLC, iPhone, or Windows.
-- Download size rule: Keep downloads under 10GB.
-- Retention rule: Delete downloaded files quickly after use.
-- Privacy rule: qBittorrent, file streaming, and any future backend should stay private through Tailscale.
+- Project name: Personal Cloud Downloader / CloudBox.
+- Goal: private personal cloud downloader and media streamer for legal files only.
+- Main use: download legal files on a cloud server, then stream or download privately from browser, VLC, iPhone, or Windows.
+- Download size rule: keep downloads under 10GB.
+- Retention rule: delete downloaded files quickly after use.
+- Privacy rule: qBittorrent, file streaming, FastAPI, web app, and future backend services stay private through Tailscale.
+- Active production provider: Oracle Cloud Always Free A1.
+- AWS exists only as stopped historical backup.
 
-## 1a. Current Production Environment (authoritative)
+## 2. Current Production Environment
 
-This block supersedes the older AWS and early-Oracle environment details below. Oracle is the active production environment; AWS is historical/backup only.
+This section is authoritative. Use these values for current work.
 
-- Active environment: Oracle Cloud (Always Free A1).
+- Active environment: Oracle Cloud Always Free A1.
 - Server hostname: `personal-cloud-downloader-vcn`.
 - Current Tailscale IP: `100.95.39.107`.
 - Current private Oracle IP: `10.0.0.129`.
-- Public IP: not recently verified; do not assume a current public IP. Access is through Tailscale only.
-- SSH:
+- Public IP: not recently verified; do not assume a current public IP.
+- Access path: Tailscale only.
+- OS: Ubuntu 24.04.
+- VM: about 4GB RAM, about 50GB boot/root disk, about 100GB CloudBox storage volume.
+
+SSH:
 
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
 ```
 
-- Current private services (Tailscale only):
+Current private services:
 
 ```text
 FastAPI:      http://100.95.39.107:8000
@@ -34,1474 +40,46 @@ Web app:      http://100.95.39.107:8090/app/
 Files:        http://100.95.39.107:8090/files/
 ```
 
-- Current VM layout:
-  - Ubuntu 24.04
-  - approximately 50GB boot/root disk
-  - approximately 100GB CloudBox storage volume (mounted, used for downloaded media)
-  - approximately 4GB RAM
-- Historical Oracle Tailscale IP `100.92.146.101` is no longer current; treat every `100.92.146.101` reference below as historical.
-- Historical AWS Tailscale IP `100.125.15.118` is historical/backup only.
-- AWS EC2 is stopped and is not the active environment.
+Historical IP warning:
 
-> **Warning:** Do not use historical IP addresses for SSH, deployment, API calls, WebViews, or testing. Use only the current Oracle Tailscale IP `100.95.39.107`.
+- Historical Oracle Tailscale IP `100.92.146.101` is no longer current.
+- Historical AWS Tailscale IP `100.125.15.118` is backup-only history.
+- Do not use historical IP addresses for SSH, deployment, API calls, WebViews, or testing.
+- Use only current Oracle Tailscale IP `100.95.39.107`.
 
-## 2. AWS Working Setup (Historical / backup only)
+## 3. Security / Usage Rules
 
-- Current working cloud provider: AWS
-- AWS region: Asia Pacific Tokyo, `ap-northeast-1`
-- Instance name: `personal-cloud-downloader`
-- Instance ID: `i-022a0df7a98e5883c`
-- OS: Ubuntu Server 24.04 LTS
-- Current access method: private SSH through Tailscale
-- Working private SSH:
-
-```powershell
-ssh -i .\personal-cloud-downloader-key.pem ubuntu@100.125.15.118
-```
-
-- Old public SSH:
-
-```powershell
-ssh -i .\personal-cloud-downloader-key.pem ubuntu@43.206.111.90
-```
-
-- Windows project folder:
-
-```text
-C:\my space\backup\Portfolio\cloud download service
-```
-
-## 3. AWS Server Details
-
-- Public IPv4: `43.206.111.90`
-- Private IPv4: `172.31.11.141`
-- Instance type: `t3.micro`
-- Storage: 30 GiB gp3
-- SSH user: `ubuntu`
-- Key pair file: `personal-cloud-downloader-key.pem`
-- Security group name: `launch-wizard-2`
-- Security group ID: `sg-0217c5c04134315e7`
-- Completed downloads folder:
-
-```text
-/srv/personal-cloud/downloads/complete
-```
-
-- Incomplete downloads folder:
-
-```text
-/srv/personal-cloud/downloads/incomplete
-```
-
-## 4. Tailscale Private Network
-
-- Server Tailscale IP: `100.125.15.118`
-- Tailscale is required for private access from Windows and iPhone.
-- Main access should be Tailscale SSH.
-- qBittorrent, Nginx streaming, and any future backend must stay private through Tailscale.
-- Private services should bind to the server and be reachable only through Tailscale firewall rules.
-
-## 5. qBittorrent Setup
-
-- qBittorrent Web UI private URL:
-
-```text
-http://100.125.15.118:8080
-```
-
-- Completed downloads:
-
-```text
-/srv/personal-cloud/downloads/complete
-```
-
-- Incomplete downloads:
-
-```text
-/srv/personal-cloud/downloads/incomplete
-```
-
-- Usage rules:
-  - Use only for legal files.
-  - Keep downloads under 10GB.
-  - Pause or remove torrents after downloads finish.
-  - Avoid seeding unless intentionally needed.
-  - Delete completed files quickly after streaming or downloading.
-
-## 6. Nginx Private File Streaming
-
-- File streaming private URL:
-
-```text
-http://100.125.15.118:8090/files/
-```
-
-- Nginx serves files from:
-
-```text
-/srv/personal-cloud/downloads/complete
-```
-
-- Access should remain private through Tailscale.
-- Do not expose file streaming publicly on AWS.
-- Port `8090` should not be open to the public internet.
-
-## 7. iPhone / VLC Usage Flow
-
-- Connect the iPhone to Tailscale.
-- Download legal file on the AWS server through qBittorrent Web UI:
-
-```text
-http://100.125.15.118:8080
-```
-
-- After the download completes, open the private file listing:
-
-```text
-http://100.125.15.118:8090/files/
-```
-
-- Stream from browser or copy the file URL into VLC.
-- After viewing, delete the file from the server quickly.
-- Keep total file sizes small to reduce AWS outbound data transfer.
-
-## 8. Security Rules
-
-- Do not open public AWS ports `8080`, `8090`, or `8000`.
-- Public SSH was temporarily opened during setup but should not be left at `0.0.0.0/0`.
-- Temporary public SSH backup used carrier range `133.106.0.0/16` because `/32` did not work.
-- Main access should be Tailscale SSH:
-
-```powershell
-ssh -i .\personal-cloud-downloader-key.pem ubuntu@100.125.15.118
-```
-
-- UFW should allow `22`, `8080`, and `8090` only on `tailscale0`.
-- UFW may optionally allow temporary public SSH backup from `133.106.0.0/16`.
-- Do not store private keys, API private keys, PEM contents, or secret values in this repo.
-- qBittorrent, Nginx streaming, and future backend services should stay private through Tailscale.
-
-## 9. Cost and Data Transfer Notes
-
-- AWS metric to watch: `NetworkOut`.
-- Data going out from AWS to iPhone, Windows, browser, or VLC counts as outbound data transfer.
-- qBittorrent seeding and uploads also increase `NetworkOut`.
-- Keep usage small.
-- Pause or remove torrents after download.
-- Delete files quickly after use.
-- Current AWS email showed `$89` credits remaining.
-- Estimated post-free AWS cost for this downloader if running 24/7: about `$16` to `$18` per month.
-- Stopping EC2 when not using it reduces compute cost.
-
-## 10. Oracle Cloud Always Free Plan (Historical — initial provisioning)
-
-> Historical initial-provisioning record. The Oracle Tailscale IP `100.92.146.101` and public IP `138.2.31.123` here are no longer current. See "1a. Current Production Environment" for the current `100.95.39.107` / `10.0.0.129` details.
-
-
-- Goal: Move to Oracle Always Free after full testing succeeds.
-- Region/home region: Japan East Tokyo
-- Shape: `VM.Standard.A1.Flex`
-- OCPU: `2`
-- RAM: `4GB`
-- Boot volume: `100GB`
-- OS: Ubuntu 24.04
-- VCN: `personal-cloud-downloader-vcn`
-- Subnet: `personal-cloud-downloader-public-subnet`
-- VNIC: `personal-cloud-downloader-vnic`
-- Instance name: `personal-cloud-downloader`
-- Oracle A1 instance was successfully created.
-- Public IP: `138.2.31.123`
-- Private IP: `10.0.0.58`
-- Oracle Tailscale IP: `100.92.146.101`
-- SSH user: `ubuntu`
-- Main private SSH through Tailscale (current IP — historical IP was `100.92.146.101`):
-
-```powershell
-ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
-```
-
-## 11. Oracle OCI CLI Retry Script Status
-
-- OCI CLI is installed on Windows.
-- OCI CLI version: `3.84.0`
-- API key was added successfully.
-- Retry script file:
-
-```text
-oracle-a1-retry.ps1
-```
-
-- Retry script currently works and returns:
-
-```text
-Reason: Oracle A1 capacity not available yet. Waiting 30 minutes before retry.
-```
-
-- Recommended retry interval: 60 minutes.
-- Avoid aggressive retry.
-- Oracle instance has now been created, so retry script is no longer the active path unless another instance is needed later.
-
-## 12. Phase 1 Backend Progress
-
-- FastAPI backend exists in `backend/`.
-- Backend dependencies installed successfully.
-- Local Windows test uses real repo path:
-
-```text
-C:\my space\Projects\cloud_download
-```
-
-- Real `.env` is created at `backend/.env`.
-- `backend/.env` is ignored by Git.
-- `.env.example` exists at:
-
-```text
-backend/.env.example
-```
-
-- Current AWS qBittorrent is reached through Tailscale:
-
-```env
-QB_URL=http://100.125.15.118:8080
-```
-
-- Current AWS Nginx file streaming is reached through Tailscale:
-
-```env
-STREAM_BASE_URL=http://100.125.15.118:8090/files
-```
-
-- qBittorrent, Nginx, AWS access, and backend app access must remain private through Tailscale only.
-
-### Backend Endpoints Tested
-
-- `GET /api/health` works.
-- `GET /api/qbittorrent/test` works.
-- `POST /api/add-magnet` works.
-- `GET /api/torrents` works and returns simple Seedr-style fields.
-- `DELETE /api/torrents/{hash}` works.
-
-Simple torrent fields currently returned:
-
-- `hash`
-- `name`
-- `status`
-- `progress_percent`
-- `size`
-- `download_speed`
-- `eta`
-- `is_complete`
-
-### Confirmed Backend Behavior
-
-- New torrents download successfully.
-- After download completion, backend background monitor auto-pauses the torrent within about 15 seconds.
-- Seeding stops automatically after completion.
-- Completed torrent `eta` is normalized to `0`.
-- Delete endpoint removes the torrent entry and downloaded files from disk using qBittorrent delete with files.
-- Files are not deleted automatically after completion.
-- Files are deleted only when the user calls the delete endpoint.
-
-### Changed Backend Files From Phase 1
-
-- `backend/settings.py`
-- `backend/qb_client.py`
-- `backend/main.py`
-- `backend/.env.example`
-
-Latest specific backend fix:
-
-- `backend/main.py` now has a FastAPI startup background monitor.
-- The monitor polls qBittorrent every 15 seconds.
-- It auto-pauses completed, uploading, and seeding torrents when `AUTO_PAUSE_ON_COMPLETE=true`.
-- `/api/torrents` still keeps auto-pause backup behavior.
-
-### Current Test Result
-
-- Health check: OK
-- qBittorrent login test: OK
-- Add magnet: OK
-- Torrent list: OK
-- Auto-stop seeding: OK
-- Delete torrent and disk files: OK
-
-### Known Issue / Cleanup Note
-
-- Nginx `/files/` listing showed weird path-like folders such as:
-
-```text
-\
-\srv/
-\srv\personal-cloud/
-\srv\personal-cloud\downloads/
-\srv\personal-cloud\downloads\complete/
-```
-
-- Do not delete these from browser.
-- Before cleanup, inspect safely through SSH:
-
-```bash
-ls -la /srv/personal-cloud/downloads/complete
-```
-
-- This is a later cleanup task, not part of Phase 1 backend completion.
-
-## 13. Oracle Migration Status (Historical — first migration)
-
-> Historical first-migration record. IPs here (`100.92.146.101`, `138.2.31.123`, `10.0.0.58`) are superseded by "1a. Current Production Environment" (`100.95.39.107` / `10.0.0.129`).
-
-
-- Oracle A1 instance was successfully created.
-- Oracle is now the confirmed working main environment for the downloader.
-- Instance name: `personal-cloud-downloader`
-- Shape: `VM.Standard.A1.Flex`
-- OCPU: `2`
-- RAM: `4GB`
-- Public IP: `138.2.31.123`
-- Private IP: `10.0.0.58`
-- Oracle Tailscale IP: `100.92.146.101`
-- SSH user: `ubuntu`
-- Main private SSH works through Tailscale (current IP — historical IP was `100.92.146.101`):
-
-```powershell
-ssh -i "$env:USERPROFILE\.ssh\oracle-personal-cloud-downloader-key" ubuntu@100.95.39.107
-```
-
-### Completed Oracle Setup
-
-- Boot volume resized from about 47GB to 100GB.
-- Linux partition/filesystem expanded successfully.
-- Root filesystem now shows about 96GB total.
-- 2GB swap file added and persisted in `/etc/fstab`.
-- Ubuntu updated and rebooted successfully.
-- Tailscale installed and connected.
-- qBittorrent-nox installed.
-- qBittorrent Web UI works privately (current IP — historical IP was `100.92.146.101`):
-
-```text
-http://100.95.39.107:8080
-```
-
-- qBittorrent password was changed from the temporary password.
-- qBittorrent download paths were set to:
-
-```text
-Completed: /srv/personal-cloud/downloads/complete
-Incomplete: /srv/personal-cloud/downloads/incomplete
-```
-
-- qBittorrent systemd service was created and is running.
-- Nginx installed and configured for private file streaming.
-- Oracle Nginx file streaming works (current IP — historical IP was `100.92.146.101`):
-
-```text
-http://100.95.39.107:8090/files/
-```
-
-- UFW installed and enabled.
-- UFW allows only Tailscale interface access for:
-  - `22/tcp`
-  - `8080/tcp`
-  - `8090/tcp`
-  - `8000/tcp`
-- Tailscale SSH, qBittorrent, and Nginx file list were tested and confirmed working.
-- FastAPI backend was deployed on Oracle as a private systemd service (current IP — historical IP was `100.92.146.101`):
-
-```text
-http://100.95.39.107:8000
-```
-
-- Oracle FastAPI backend end-to-end test passed.
-- Legal Big Buck Bunny test magnet was added through `POST /api/add-magnet`.
-- Test torrent appeared in `GET /api/torrents`.
-- Download completed to `100%`.
-- Backend auto-paused the completed torrent.
-- Seeding stopped after completion.
-- `GET /api/completed-files` showed completed files.
-- `HEAD /files/Big Buck Bunny/Big Buck Bunny.mp4` returned `200`.
-- `DELETE /api/torrents/{hash}` removed the torrent and downloaded files.
-- Final `GET /api/torrents` showed the test torrent was removed.
-- Final `GET /api/completed-files` showed the test files were removed.
-- Final file `HEAD` returned `404`.
-
-### Oracle Security Notes
-
-- Do not expose qBittorrent, Nginx streaming, or future FastAPI port publicly.
-- Keep Oracle access through Tailscale.
-- Do not paste or commit passwords, private keys, PEM files, or secret values.
-- Oracle Cloud budget alert was created.
-- Budget name: `personal-cloud-budget`
-- Budget amount: `US$1` monthly
-- Budget status: Active
-- Budget scope: Oracle compartment/root compartment used for the Personal Cloud Downloader project.
-- Budget alert rules created:
-  - `50% Actual Spend`
-  - `100% Actual Spend`
-  - `100% Forecast Spend`
-- Budget alerts are email warnings only.
-- Budget alerts do not automatically stop or delete Oracle resources.
-- AWS EC2 instance has now been stopped to reduce cost.
-- AWS should not be used unless needed as backup.
-
-### AWS Backup Status
-
-- AWS downloader still exists, but the EC2 instance has been stopped to reduce cost.
-- AWS should not be used unless needed as backup.
-- AWS Tailscale IP is still `100.125.15.118`.
-- AWS qBittorrent and Nginx were already working.
-
-## 14. Final Status (Historical — early Oracle MVP)
-
-> Historical snapshot from the early Oracle MVP (the old Oracle Tailscale IP was `100.92.146.101`). Superseded by section "1a. Current Production Environment" (current IP `100.95.39.107`) and the "Current Final Status (authoritative)" section at the end of this document. Actionable URLs in this section have been updated to the current IP `100.95.39.107`.
-
-- Oracle is now the confirmed working main environment.
-- AWS EC2 instance is stopped and should not be used unless needed as backup.
-- Oracle budget alert is active.
-- Main cost-warning protection is now done.
-- Oracle server is created and downloader services are working through Tailscale.
-- Private SSH through Tailscale works.
-- AWS backup services existed previously, but AWS is stopped and not the active environment.
-- Oracle qBittorrent Web UI works privately through Tailscale:
-
-```text
-http://100.95.39.107:8080
-```
-
-- Oracle Nginx private file streaming works:
-
-```text
-http://100.95.39.107:8090/files/
-```
-
-- Oracle FastAPI backend is live privately through Tailscale:
-
-```text
-http://100.95.39.107:8000
-```
-
-- Private frontend UI is live through Oracle Nginx:
-
-```text
-http://100.95.39.107:8090/app/
-```
-
-- Downloads are stored under `/srv/personal-cloud/downloads`.
-- Phase 1 FastAPI backend is working on Oracle.
-- UI can add legal magnet links, show progress, show completed files, stream/download files, copy VLC links, and delete torrent/files.
-- Completed Files uses only `GET /api/completed-files`.
-- Completed Files shows only files actually on disk.
-- Completed Files filters support/extra files such as `Screens/`, images, `.nfo`, `.txt`, and sample files.
-- Completed Files auto-updates after completion with a short polling delay.
-- Copy VLC link works over HTTP/Tailscale using a clipboard fallback.
-- Delete removes torrent/files and clears Completed Files correctly.
-- Date/time display was added where available.
-- If real time data is unavailable, the UI shows `Time unavailable.`
-- Completed Files may update after a short polling delay. This is acceptable for now.
-- Backend can add magnets, list simple torrent status, auto-stop seeding, and delete torrents plus disk files when requested.
-- AWS was stopped to reduce cost.
-- Oracle migration backend testing is complete.
-- Simple Seedr-style UI MVP is live on Oracle.
-
-### 2026-06-03 CloudBox / Personal Cloud Downloader Progress Update
-
-- iOS app renamed to `CloudBox`.
-- Custom app icon added from `assets/app-icon.png`.
-- AppIcon asset catalog added under `ios/PersonalCloudDownloader/Assets.xcassets/AppIcon.appiconset/`.
-- XcodeGen display name fixed using `targets > PersonalCloudDownloader > info > properties > CFBundleDisplayName: CloudBox`.
-- GitHub Actions workflow should use `main` and `"feature/**"` so future feature branches trigger automatically.
-- Historical: at this milestone the VLC fake-landscape player was kept because real landscape was unreliable with iPhone rotation lock. Superseded — real iOS fullscreen landscape now works (see "Real Landscape Player" section near the end); the fake `rotationEffect(90°)` was removed.
-- VLC fullscreen UI was polished:
-  - custom top clock
-  - nPlayer-style top nav timeline
-  - X has separate space
-  - timeline starts after X
-  - amber/gold progress background
-  - subtitle button bottom-left
-  - Fit/Cover bottom-right
-  - bottom bar transport-only
-- VLC gestures were added:
-  - left vertical swipe controls brightness
-  - right vertical swipe controls volume
-  - overlay preview for brightness and volume
-  - horizontal swipe seeks
-  - brightness/volume sync after app foreground works
-- VLC resume now persists using stable `CompletedFile.path`, `timeMs`, and `durationMs`.
-- Backend video progress storage was added:
-  - `POST /api/video-progress`
-  - `GET /api/video-progress`
-  - stores `path`, `timeMs`, `durationMs`, `watchedPercent`, and `updatedAt`
-- Videos list now shows a progress bar and watched badge when progress is `>= 70%`.
-- Single-file torrent grouping was fixed:
-  - qB add uses `root_folder: "true"` for future downloads
-  - existing loose root videos display as one-video folder groups
-- Delete behavior was fixed:
-  - `DELETE /api/torrents/{torrent_hash}` uses qB delete-with-files
-  - safely removes the selected torrent package from the completed downloads root
-  - cleans video, folder, `.srt`, `.vtt`, sidecar files, and empty leftovers
-- Real `/files/` root confirmed:
-  - `/srv/personal-cloud/downloads/complete/`
-- Real Downloader web UI path confirmed:
-  - historical old path: `/var/www/personal-cloud/app/app.js`
-  - verified current path: `/home/ubuntu/personal-cloud-downloader/backend/app.js`
-- Important deployment note:
-  - Web Downloader changes:
-    - local file: `frontend/app.js`
-    - live Oracle path: `/home/ubuntu/personal-cloud-downloader/backend/app.js`
-    - requires manual copy/deploy to Oracle
-  - Backend changes:
-    - local file: `backend/main.py`
-    - live Oracle path: `/home/ubuntu/personal-cloud-downloader/backend/main.py`
-    - requires manual deploy and `sudo systemctl restart personal-downloader-api.service`
-  - iOS native changes:
-    - require new IPA build/install
-    - use the manual GitHub Actions IPA workflow when needed
-  - GitHub Actions macOS IPA builds are manual-only and should be run only when needed.
-  - Web and backend fixes can still be deployed manually to Oracle.
-  - Native iOS fixes still require a new IPA after Actions billing/budget is available again.
-- Downloader queue ordering work:
-  - file: `frontend/app.js`
-  - `renderTorrents(torrents)` is the real visible render path
-  - marker added: `queue-order-2026-06-03`
-  - active/current downloads should show above completed/old downloads
-  - if not visible, verify the served JS with `/app/app.js`, because wrong deploy path caused earlier confusion
-- Downloader custom delete confirmation modal is complete.
-- It uses an in-page DOM modal, not `window.confirm()`, so it works in PC browser and iOS WKWebView.
-- `frontend/app.js` changes must be manually deployed to `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
-
-## 15. Next Steps (Historical — early Oracle MVP)
-
-> Historical. The current next-steps list is in "Next Steps (authoritative)" at the end of this document. The old Oracle Tailscale IP was `100.92.146.101`; current is `100.95.39.107`. The `.env` example below has been updated to the current IP.
-
-- Keep AWS services private through Tailscale.
-- Confirm AWS public SSH is not left open to `0.0.0.0/0`.
-- Continue using Tailscale SSH as the main admin path.
-- Keep AWS stopped unless needed as backup.
+- Use only for legal files.
+- Keep downloads under 10GB.
+- Delete completed files quickly after streaming or downloading.
 - Pause or remove torrents after completion.
-- Delete completed files quickly.
-- Keep local `backend/.env` pointed at Oracle values:
-
-```env
-QB_URL=http://100.95.39.107:8080
-STREAM_BASE_URL=http://100.95.39.107:8090/files
-```
-
-- Keep future backend access private through Tailscale, including any service on port `8000`.
-- Continue real phone testing against the live UI.
-- Optional: polish the UI after more real phone testing.
-- Optional: reduce polling delay later if needed.
-- Optional: add authentication only if access ever goes beyond Tailscale.
-
-# PROJECT_CONTEXT.md iOS App Update Snippet
-
-Created: 2026-06-01  
-Project: Personal Cloud Downloader
-
----
-
-Copy this section into:
-
-```text
-docs/PROJECT_CONTEXT.md
-```
-
-Do not replace the whole file.
-
----
-
-```md
-## iOS App Direction
-
-A future private iOS companion app is planned for the Personal Cloud Downloader.
-
-Direction:
-- Existing web downloader at `/app/` must remain unchanged and usable from laptop/PC.
-- The iOS app is an extra mobile layer, not a replacement.
-- App sections: Home, Downloader, Videos, qBittorrent, Files, Settings/Tailscale helper.
-- Downloader keeps full file/download management controls: add magnet, progress, completed files, date/time, size, stream/download, copy VLC link, delete.
-- Videos is only a clean nPlayer/VLC-style video library and player.
-- Videos should play from the existing Nginx `/files/` streaming links.
-- qBittorrent and Files open inside the app through web views.
-- Tailscale remains separate, with app helper/shortcut only.
-- Oracle remains the downloader/storage/streaming server.
-- iPhone must not run torrent downloading locally.
-- Use SwiftUI, WKWebView, URLSession/Codable, and later MobileVLCKit/VLC-style player.
-- Use Taste Skill for design creation/redesign guidance.
-- Use Impeccable for design critique/polish/harden.
-- Keep everything private through Tailscale and legal-files-only.
-
-Full docs:
-- `docs/IOS_APP_DIRECTION_LOCK.md`
-- `docs/IOS_APP_PLAN.md`
-- `docs/IOS_APP_ARCHITECTURE.md`
-- `docs/IOS_APP_DESIGN_SYSTEM.md`
-- `docs/IOS_APP_DEVELOPMENT_PHASES.md`
-- `docs/IOS_APP_API_CONTRACT.md`
-- `docs/IOS_APP_AI_PROMPTS.md`
-- `docs/IOS_APP_CHECKLISTS.md`
-```
-
-## iOS App Phase 1 Status (web panel milestone)
-
-- iOS companion app work is on branch `feature/ios-companion-app`.
-- iOS source was created under `ios/PersonalCloudDownloader/`.
-- XcodeGen setup was added with `project.yml`.
-- Generated files are ignored:
-  - `ios/PersonalCloudDownloader.xcodeproj/`
-  - `ios/PersonalCloudDownloader/Info.plist`
-- SwiftUI app shell exists with a TabView.
-- Tabs exist for Home, Downloader, Videos, qBittorrent, Files, and Settings.
-- Reusable WKWebView support was added using `WebView` and `WebScreen`.
-- ATS HTTP loading support was added for private Tailscale URLs.
-- Downloader tab loads `http://100.92.146.101:8090/app/`.
-- qBittorrent tab loads `http://100.92.146.101:8080`.
-- Files tab loads `http://100.92.146.101:8090/files/`.
-- Historical (this milestone only): Home, Videos, and Settings were still placeholders. Superseded — Home is now a native aggregated dashboard and Videos is a full native media library/player.
-- No backend, frontend web app, Oracle server, Nginx, qBittorrent, or Tailscale behavior was changed.
-- Existing browser web downloader remains the main working app.
-
-## iOS App Home and Settings Status (native milestone)
-
-- Home tab is now a native SwiftUI dashboard.
-- Home shows app title, private cloud downloader subtitle, Tailscale connection reminder, Oracle server IP, screen guide, and safety note.
-- Settings tab is now a native SwiftUI Settings / Tailscale Helper screen.
-- Settings shows server URLs, Tailscale-only privacy note, and an Open Tailscale helper button using `tailscale://`.
-- Downloader, qBittorrent, and Files remain WKWebView tabs.
-- Historical (this milestone only): Videos was still a placeholder. Superseded — Videos is now a full native media library and player.
-- No video player, API integration, torrent logic, backend change, frontend web app change, Oracle change, Nginx change, qBittorrent change, or Tailscale change was made.
-- Existing browser web downloader remains unchanged and usable.
-
-## Development Tooling: code-review-graph
-
-- code-review-graph is being used as a code context/review helper for this project.
-- Purpose: help AI coding tools understand the relevant files and affected code paths without reading the whole repo.
-- It is a development workflow tool only.
-- It is not part of the Personal Cloud Downloader app runtime.
-- It should not change backend, frontend, iOS app behavior, Oracle, Nginx, qBittorrent, or Tailscale.
-- It should be used when reviewing changes, finding affected files, or preparing safer coding prompts.
-
-## iOS App Phase 2 Videos Library Status (native milestone)
-
-- Phase 2 native Videos library was added.
-- Videos tab fetches from `http://100.92.146.101:8000/api/completed-files`.
-- A `CompletedFile` model matches the real backend JSON keys:
-  - `name`
-  - `path`
-  - `url`
-  - `modified_at`
-- `backend/main.py` was read-only only to confirm JSON field names.
-- `backend/main.py` was not modified.
-- Videos filters video files client-side by extension: `mp4`, `mov`, `m4v`, `mkv`, `avi`, `webm`.
-- Videos screen has loading, error with retry, empty state, list state, and pull-to-refresh.
-- Video rows show title and modified date when available.
-- Size is not shown because `/api/completed-files` currently does not return size.
-- Tapping a video currently shows "Video player will be added later."
-- No playback was added yet.
-- No AVPlayer, MobileVLCKit, `/api/videos`, delete, download, copy link, torrent logic, backend change, frontend web app change, Oracle change, Nginx change, qBittorrent change, or Tailscale change was made.
-- Videos remains a clean video library, not a file manager.
-- code-review-graph is only development tooling, not app runtime.
-
-## iOS App Phase 3 Player Core Status (player milestone)
-
-- Phase 3 player core is complete.
-- `PlayerView` was added as the dedicated video player route.
-- `VideosView` now navigates to `PlayerView` using `NavigationLink` / `navigationDestination`.
-- `CompletedFile` now supports `Hashable` and `streamURL` resolution.
-- `backend/main.py` was read-only only to confirm `CompletedFile.url` is generated as a stream link; not modified.
-- Deployed `CompletedFile.url` is an absolute, percent-encoded Nginx `/files/` URL: `http://100.92.146.101:8090/files/...`.
-- AVPlayer / AVKit playback was added for `mp4`, `mov`, `m4v`.
-- MobileVLCKit dependency setup was added with CocoaPods:
-  - `ios/Podfile`
-  - `pod 'MobileVLCKit', '~> 3.6.0'`
-- CocoaPods generated files are ignored:
-  - `ios/Pods/`
-  - `ios/PersonalCloudDownloader.xcworkspace/`
-- `Podfile.lock` should be committed after `pod install` creates it.
-- `VLCPlayerView` was added for VLC playback.
-- VLC engine is used for `mkv`, `avi`, `webm`.
-- `VLCPlayerController` owns `VLCMediaPlayer` and manages playback state.
-- VLC playback supports auto-play on open, stop on leave, play/pause, progress/time display, seek slider, and forward/back 10 second skip.
-- AVPlayer branch remains intact.
-- Videos remains a clean video library/player, not a file manager.
-- No Delete, Download, or Copy Link controls were added to Videos.
-- No backend endpoint changes were made.
-- No `/api/videos` endpoint was created.
-- No frontend web app, Oracle, Nginx, qBittorrent, or Tailscale behavior was changed.
-- Existing web downloader remains unchanged and usable.
-- Fullscreen, rotation, and error-state polish are not complete yet.
-
-## iOS App Player Polish State-Handling Status (after Phase 3 player core)
-
-- Player Polish state handling was added after the Phase 3 player core.
-- VLC branch now has user-friendly playback states: loading/buffering, ready, failed, and ended.
-- VLC branch UI:
-  - buffering spinner while loading
-  - playback-failed overlay with a Retry button
-  - ended overlay with a Replay button
-- VLC play/pause, seek slider, forward/back 10 second skip, auto-play on open, and stop-on-leave remain intact.
-- AVPlayer branch now has basic state handling too: loading, ready, failed, and ended.
-- AVPlayer branch keeps the system `VideoPlayer` controls.
-- AVPlayer ended state shows Replay and auto-dismisses if playback resumes from the system controls.
-- AVPlayer failed state shows Retry.
-- VLC branch was not changed during the AVPlayer state work.
-- Videos list was not changed.
-- No backend, frontend web app, Oracle, Nginx, qBittorrent, Tailscale, or API endpoint behavior was changed.
-- No Delete, Download, or Copy Link controls were added to Videos.
-- Fullscreen and rotation are still not complete.
-
-## iOS App Player Polish Fullscreen and Orientation Decision Status (after state-handling)
-
-- Player Polish fullscreen mode was added.
-- `PlayerView` now has fullscreen support using `fullScreenCover`.
-- Fullscreen works for both the AVPlayer branch and the VLC branch.
-- Inline and fullscreen player UI share extracted reusable player subviews.
-- AVPlayer branch keeps `mp4`, `mov`, `m4v` behavior.
-- VLC branch keeps `mkv`, `avi`, `webm` behavior.
-- VLC play/pause, seek slider, forward/back 10 second skip, and loading/error/ended overlays remain intact.
-- VLC drawable handling was improved so the player can reclaim the drawable when switching between inline and fullscreen.
-- Orientation setup was inspected.
-- `ios/project.yml` has no explicit orientation keys.
-- The app already supports landscape by default.
-- No forced rotation code was added.
-- No app-wide orientation settings were changed.
-- Historical decision (superseded): use zero-config orientation for now; the user rotates the device manually in fullscreen.
-- Historical (superseded): forced auto-landscape rotation was intentionally deferred. This is no longer the case — real iOS fullscreen landscape now works via `OrientationHelper` and `UIWindowScene.requestGeometryUpdate` (see "Real Landscape Player" section near the end).
-- No backend, frontend web app, Videos list, Oracle, Nginx, qBittorrent, Tailscale, or API behavior was changed.
-- No Delete, Download, or Copy Link controls were added to Videos.
-
-## iOS App Player Polish UI Status (after fullscreen and orientation decision)
-
-- Player Polish UI step was completed.
-- Only `PlayerView` layout/modifiers were changed.
-- Player screen spacing was cleaned up with shared layout constants.
-- Title area was improved with clearer hierarchy and tighter grouping.
-- Inline player surface now has rounded corners and a subtle hairline border.
-- Fullscreen player remains full-bleed and square.
-- Fullscreen button placement and tap target were improved.
-- VLC controls were visually reorganized:
-  - slider/time group above
-  - transport controls below
-  - larger play/pause button
-  - consistent skip button tap targets
-- Time/progress spacing was aligned.
-- AV and VLC overlay UI was deduplicated for consistent loading, failed, and ended states.
-- Error and ended overlays were visually clarified.
-- URL caption was made less distracting.
-- AVPlayer logic was not changed.
-- VLC logic was not changed.
-- Fullscreen behavior was not changed.
-- Zero-config orientation decision was not changed.
-- Videos list was not changed.
-- No backend, frontend web app, Oracle, Nginx, qBittorrent, Tailscale, or API behavior was changed.
-- No Delete, Download, or Copy Link controls were added to Videos.
-- Build was not verified yet because the current environment is Windows without Xcode.
-
-## iOS App GitHub Actions Build Verification Status (after Player Polish UI)
-
-- GitHub Actions iOS build check workflow was added: `.github/workflows/ios-build.yml`.
-- The workflow runs on a macOS runner and performs `xcodegen generate`, `pod install`, and an `xcodebuild` compile check.
-- The iOS app can now be build-checked without owning a Mac by using a GitHub Actions macOS runner.
-- First CI failure was caused by `ContentUnavailableView` requiring iOS 17.
-- `VideosView` empty state was changed to an iOS 16-compatible SwiftUI view.
-- Deployment target remains iOS 16.0.
-- Latest GitHub Actions run passed successfully.
-- XcodeGen generation passed.
-- CocoaPods install passed.
-- MobileVLCKit 3.6.0 installed and linked successfully.
-- `xcodebuild` compile check passed for iOS Simulator.
-- This confirms compile/link success only.
-- Real device testing, runtime playback testing, Tailscale runtime access, AVPlayer playback, VLC playback, fullscreen behavior, and actual iPhone testing are still pending.
-
-## iOS App Device Runtime Testing Checklist Status (after GitHub Actions build verification)
-
-- New doc was created: `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
-- Purpose: a real iPhone runtime verification checklist for the current iOS app status.
-- It covers Tailscale pre-flight.
-- It covers WKWebView tabs: Downloader, qBittorrent, Files.
-- It covers native Videos fetch of `/api/completed-files`.
-- It covers AVPlayer playback.
-- It covers VLC playback.
-- It covers fullscreen and manual landscape.
-- It covers Settings / Open Tailscale.
-- It includes pass/fail definitions.
-- It includes failure evidence to collect.
-- It includes must-not-change rules during testing.
-- It includes a triage rule: if Safari cannot reach Oracle over Tailscale, fix network first before blaming the app.
-- This is a test plan only; runtime / device testing is still NOT complete.
-- CI compile success remains compile/link only.
-- Real iPhone playback, Tailscale runtime access, AVPlayer playback, VLC playback, fullscreen behavior, and device testing remain pending.
-- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
-- No Delete, Download, or Copy Link controls were added to Videos.
-
-## iOS App Personal iPhone Install Plan Status (after device runtime testing checklist)
-
-- New doc was created: `docs/IOS_PERSONAL_INSTALL_PLAN.md`.
-- Purpose: explains how the user can install and use the iOS app on their own iPhone without owning a Mac.
-- Current constraint: the user does not own a Mac.
-- Key fact: the GitHub Actions macOS runner can build the app, but signing and installation are still needed.
-- The plan compares four paths:
-  - Apple Developer Program + GitHub Actions signed IPA
-  - TestFlight
-  - Remote Mac
-  - Free Apple ID + Sideloadly/AltStore
-- Recommended path: try Free Apple ID + Sideloadly first for personal use; upgrade to the Apple Developer Program only if 7-day re-signing becomes annoying.
-- Runtime/device testing is still required using `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
-- No signing workflow has been created yet.
-- No `project.yml` bundle ID change has been made yet.
-- Real iPhone runtime testing is still NOT complete.
-- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
-- No new iOS feature was added.
-
-## iOS App Unsigned Device IPA Plan Status (after personal iPhone install plan)
-
-- New doc was created: `docs/IOS_UNSIGNED_DEVICE_IPA_PLAN.md`.
-- Purpose: a plan for creating an unsigned real-device iPhone IPA artifact using GitHub Actions for Sideloadly/AltStore.
-- Key idea:
-  - the current simulator build cannot install on iPhone
-  - a separate device build is needed using a generic iOS device destination
-  - signing stays disabled in CI
-  - manually package `Payload/*.app` into an unsigned `.ipa`
-- The existing `iOS Build Check` workflow remains unchanged and should stay as the compile/link gate.
-- The future workflow should be separate and `workflow_dispatch`-only.
-- MobileVLCKit arm64 device-link is still unverified and is the main unknown.
-- Recommended order:
-  1. Add a separate unsigned device IPA workflow later.
-  2. Run it manually.
-  3. Confirm device arm64 / MobileVLCKit link.
-  4. Download the artifact.
-  5. Install with Sideloadly/AltStore.
-  6. Run `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
-- No unsigned IPA workflow has been created yet.
-- No `project.yml` bundle ID change has been made yet.
-- Real iPhone install/runtime testing is still NOT complete.
-- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
-- No new iOS feature was added.
-
-## iOS App Unsigned Device IPA Workflow Status (after unsigned device IPA plan)
-
-- New workflow was created: `.github/workflows/ios-unsigned-ipa.yml`.
-- Purpose: a manual GitHub Actions workflow to build a real-device unsigned iPhone IPA artifact for Sideloadly/AltStore.
-- Workflow trigger is `workflow_dispatch` only.
-- The existing `iOS Build Check` workflow remains unchanged.
-- Workflow uses:
-  - macos-15
-  - `xcodegen generate`
-  - `pod install`
-  - `xcodebuild archive` for generic iOS device
-  - Release configuration
-  - signing disabled
-  - manual `Payload/*.app` to `.ipa` packaging
-  - artifact upload
-- It does NOT use `xcodebuild -exportArchive`.
-- It does NOT sign the app.
-- It does NOT install the app on iPhone.
-- It does NOT verify runtime playback or device behavior.
-- MobileVLCKit arm64 device-link is still unverified until the workflow is manually run.
-- Real iPhone install/runtime testing is still NOT complete.
-- No iOS Swift code, `project.yml`, `Podfile`, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
-- No new iOS feature was added.
-
-## iOS App Unsigned Device IPA Workflow Verification Status (after unsigned device IPA workflow creation)
-
-- The manual GitHub Actions workflow `.github/workflows/ios-unsigned-ipa.yml` passed.
-- The workflow successfully built a real-device iPhone archive.
-- The workflow successfully created an unsigned IPA artifact.
-- MobileVLCKit arm64 device link is now verified by CI.
-- This confirms device build/link success only.
-- The IPA is still unsigned.
-- The app is not installed on iPhone yet.
-- Sideloadly/AltStore install is still pending.
-- Real iPhone runtime testing is still NOT complete.
-- AVPlayer runtime playback, VLC runtime playback, fullscreen behavior, Tailscale runtime access, and the real device checklist are still pending.
-- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
-- No new iOS feature was added.
-
-## iOS App Personal iPhone Install Success Status (after unsigned device IPA workflow verification)
-
-- The unsigned IPA artifact was downloaded from GitHub Actions.
-- The app was installed on the user's iPhone using Sideloadly on Windows.
-- The Apple Devices app was needed so Windows/Sideloadly could detect the iPhone.
-- Developer Mode was required and enabled on the iPhone.
-- The app now opens on the iPhone.
-- This confirms personal iPhone install success.
-- This does NOT confirm runtime app behavior yet.
-- Tailscale runtime access, WKWebView tabs, Videos fetch, AVPlayer playback, VLC playback, fullscreen behavior, landscape behavior, and the full device checklist are still pending.
-- Runtime testing must continue using `docs/IOS_DEVICE_TEST_CHECKLIST.md`.
-- No code, backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
-- No new iOS feature was added.
-
-## iOS App VLC Fullscreen/Player Runtime-Verified Status (after personal iPhone install success)
-
-- Real iPhone runtime testing verified these VLC player fixes.
-- Inline VLC playback works.
-- VLC resume position works (same video resumes during the session).
-- VLC fullscreen video now renders correctly.
-- The separate fullscreen VLC player approach fixed the blank fullscreen / drawable issue.
-- Closing fullscreen returns to inline playback correctly.
-- VLC fullscreen controls auto-hide works.
-- VLC fullscreen close button accessibility was improved and verified.
-- VLC fake-landscape fullscreen works, including with device rotation lock ON.
-- VLC aspect/ratio selector exists (Fit, Zoom/Aspect Fill, 16:9, 4:3, 1:1, Stretch).
-- Zoom / Aspect Fill was improved and is acceptable for now.
-- Remaining issues (NOT done):
-  - Subtitles still not working.
-  - qBittorrent WebView error still remains.
-  - The full device runtime checklist (`docs/IOS_DEVICE_TEST_CHECKLIST.md`) is not completely finished yet.
-- No backend, frontend web app, Oracle, Nginx, qBittorrent, or Tailscale change was made.
-
-## iOS App VLC Subtitle Overlay + Backend Extraction Status (after VLC fullscreen/player runtime-verified)
-
-- VLC subtitles now work via an app-rendered sidecar `.srt` SwiftUI overlay, runtime-verified on a real iPhone.
-- The overlay is drawn by the app (screen-space), NOT native VLC SPU, so it stays bottom-centered and stable in Cover / Aspect Fill (native VLC subtitles shift with the crop).
-- The fullscreen ratio control is now a Fit ⇄ Cover toggle; the earlier 16:9 / 4:3 / 1:1 / Stretch / crop-Zoom modes were removed.
-- Backend change WAS made this milestone: new endpoint `POST /api/subtitles/extract`.
-  - It validates the path under the completed-downloads dir and rejects traversal.
-  - It uses `ffprobe` to detect subtitle streams and `ffmpeg` to convert the first text track (English-preferred) into `<video>.srt` beside the video.
-  - It returns statuses: `extracted`, `exists`, `no_text_subtitles`, `image_subtitles_only`, `ffmpeg_unavailable`, `extraction_failed`.
-  - It does not overwrite an existing `.srt`, and it does not run in the background or hook download completion.
-- `ffmpeg`/`ffprobe` extraction works on the Oracle server (`ffmpeg` was added to the server install checklist in `scripts/install-server.sh`).
-- iOS flow verified end-to-end: `.srt` 404 → `POST /api/subtitles/extract` → backend creates `.srt` → iOS retries `.srt` once → SwiftUI overlay activates.
-- Native VLC embedded subtitle fallback still exists when extraction is unavailable.
-- Image-based subtitles (PGS/VobSub/DVD/DVB) remain unsupported for extraction without OCR; those videos keep the native fallback.
-- New files: `ios/PersonalCloudDownloader/Services/SRTSubtitleParser.swift`. Changed: `VLCPlayerView.swift`, `PlayerView.swift`, `backend/main.py`, `scripts/install-server.sh`.
-- Remaining issues (NOT done):
-  - qBittorrent WebView error still remains.
-  - The full device runtime checklist (`docs/IOS_DEVICE_TEST_CHECKLIST.md`) is not confirmed complete unless verified separately.
-- No frontend web app, qBittorrent, or Tailscale behavior was changed.
-
-## 2026-06-04 Backend Stabilization and Subtitle Cleanup
-
-- Backend completed-files auto-folder behavior is verified.
-- Loose completed videos directly under `/srv/personal-cloud/downloads/complete/` are auto-moved into same-stem folders during `/api/completed-files`.
-- Matching same-stem `.srt` and `.vtt` files are moved with the video.
-- `/api/completed-files` crash from missing `resolve_safe_download_target` was fixed.
-- Delete behavior was updated to work with auto-foldered downloads.
-- Deleting a torrent now removes the qBittorrent entry and safely removes related completed folders/files under the completed downloads root.
-- Old orphan folders were manually cleaned once through SSH.
-- Downloader queue ordering is verified working.
-- Downloader custom delete confirmation modal is verified working.
-- Subtitle cleanup was handled server-side and did not require a new IPA.
-- Backend sanitizes active `.srt` / `.vtt` sidecar files under the completed downloads root.
-- Sanitizer removes:
-  - HTML-style tags like `<i>`, `</i>`, `<b>`, `</b>`, `<u>`, `</u>`
-  - common HTML entities like `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`
-  - ASS/SSA override tags like `{\an8}`, `{\pos(...)}`, `{\move(...)}`, `{\fad(...)}`
-- Subtitle timing lines, numbering lines, and WEBVTT headers are preserved.
-- Existing subtitle files get one `.bak` backup before modification.
-- Verified server checks:
-  - `/api/health` returns `200 OK`
-  - `/api/completed-files` returns `200 OK`
-  - grep for HTML subtitle tags returns no result
-  - grep for ASS override tags returns no result
-- Confirmed in CloudBox player:
-  - subtitles no longer show raw `<i>` text
-  - subtitles no longer show raw `{\an8}` text
-- No new IPA was required for this subtitle cleanup because it was handled by backend subtitle file sanitization.
-- GitHub Actions macOS IPA builds are manual-only and should be run only when needed.
-- Web and backend fixes can still be deployed manually to Oracle.
-- Native iOS fixes still require a new IPA build/install.
-- Deployment notes:
-  - Web Downloader changes:
-    - local file: `frontend/app.js`
-    - live Oracle path: `/home/ubuntu/personal-cloud-downloader/backend/app.js`
-    - requires manual copy/deploy to Oracle
-  - Backend changes:
-    - local file: `backend/main.py`
-    - live Oracle path: `/home/ubuntu/personal-cloud-downloader/backend/main.py`
-    - requires manual deploy and `sudo systemctl restart personal-downloader-api.service`
-  - iOS native changes:
-    - require new IPA build/install
-    - use the manual GitHub Actions IPA workflow when needed
-- qBittorrent WebView issue was later fixed enough for the page to load in app.
-
-## Latest CloudBox UI + Thumbnail Progress
-
-- Home dashboard redesign was updated to match the provided reference design.
-- Home now uses a dark navy/black premium dashboard style.
-- Home includes:
-  - large CloudBox hero card
-  - server status card
-  - updated time card
-  - Downloader / Videos / Files cards
-  - Open Tailscale action
-  - private access note
-- Historical: at this milestone Home pulled separate `/api/health`, `/api/torrents`, and `/api/completed-files` requests. This is superseded — current Home uses one aggregated `GET /api/home-dashboard` (see "Current Home Dashboard API" section near the end).
-- Home status logic at this milestone (historical):
-  - Server Online depended only on `/api/health`
-  - Downloader failure did not mark server offline
-  - Videos/Files failure did not mark server offline
-  - refresh race protection prevented old failed refreshes from overwriting newer good status
-- Removed misleading `Private Link / Check VPN` card.
-- Kept only real `Open Tailscale` action using `tailscale://`.
-
-## Videos UI Update
-
-- Videos folder list was restyled to match the provided reference design.
-- Folder cards now use a premium dark/glass style.
-- Folder-detail video list was restyled to match the provided reference design.
-- Folder-detail rows now show:
-  - thumbnail area
-  - video title
-  - real modified date when available
-  - watch progress bar/status from existing progress data
-  - duration badge only when real duration exists
-- No fake sizes, dates, durations, or thumbnails are used.
-- Folder grouping, video navigation, playback, progress, subtitles, and refresh behavior remain unchanged.
-
-## Dynamic Video Thumbnail Update
-
-- Dynamic video thumbnails are now implemented and verified.
-- Backend generates one `.jpg` thumbnail per video using `ffmpeg`.
-- Thumbnail cache path:
-
-```text
-/srv/personal-cloud/downloads/complete/_cloudbox-thumbnails/
-```
-
-- Backend reuses existing thumbnails and does not regenerate them repeatedly.
-- `/api/completed-files` now returns optional `thumbnail_url`.
-- Existing API fields remain unchanged:
-  - `name`
-  - `path`
-  - `url`
-  - `modified_at`
-- `_cloudbox-thumbnails` is not returned as a normal video/folder item.
-- iOS `CompletedFile` model now supports optional `thumbnail_url`.
-- iOS Videos folder-detail rows display real thumbnails with `AsyncImage`.
-- If `thumbnail_url` is missing or image loading fails, the existing styled placeholder remains.
-- Future downloads should get thumbnails automatically when `/api/completed-files` runs.
-- Backend now detects bad/tiny generated thumbnails under 2KB.
-- Bad/tiny thumbnails are deleted and regenerated automatically.
-- ffmpeg thumbnail generation now tries multiple timestamps:
-  - 10s
-  - 30s
-  - 60s
-  - 1s fallback
-- Existing good thumbnails are reused and not regenerated repeatedly.
-- Thumbnail generation failure for one video does not crash `/api/completed-files`.
-- Verified server checks:
-  - `/api/health` returns `200 OK`
-  - `/api/completed-files` returns `thumbnail_url`
-  - thumbnail `.jpg` files were created
-  - `thumbnail_url` appears in `/api/completed-files`
-  - `_cloudbox-thumbnails` does not appear as a normal `name` or `path` item
-  - bad Squid Game thumbnails around 581-685 bytes were regenerated into valid larger thumbnails above 2KB
-- Confirmed in CloudBox: real video thumbnails show correctly in the Videos folder-detail list.
-- Confirmed in CloudBox: thumbnails show for the new series.
-- Deployment note: this feature required both:
-  - backend deploy to Oracle for thumbnail generation and `thumbnail_url`
-  - new IPA build/install for iOS thumbnail display.
-
-## Network Dashboard Update
-
-- New native iOS `Network` tab was added.
-- Bottom tabs are now:
-  - Home
-  - Downloader
-  - Videos
-  - Network
-  - More
-- qBittorrent was moved into `More`.
-- qBittorrent WebView behavior and URL remain unchanged:
-
-```text
-http://100.92.146.101:8080
-```
-
-- Backend endpoint added:
-  - `GET /api/network-usage`
-- Backend uses fixed safe commands only:
-  - `vnstat -i enp0s6 --json`
-  - fallback: `vnstat -i enp0s6`
-  - storage: `df -B1 /`
-  - optional completed downloads path: `df -B1 /srv/personal-cloud/downloads/complete`
-- No client command input is accepted.
-- Network tab shows:
-  - monthly outgoing / TX upload usage
-  - estimated monthly total
-  - today's RX / TX / total / average rate
-  - daily usage list
-- Monthly summary card now focuses on TX/upload/outgoing usage only.
-- The label is now `Monthly Outgoing` / `TX this month`.
-- Today and daily usage sections still show normal usage data.
-- Daily usage list now shows newest dates first.
-- Daily usage list is limited to latest 10 records.
-- Storage card added in Network tab:
-  - Used
-  - Total
-  - Available
-  - Percentage
-  - progress bar
-- Network tab auto-refresh behavior:
-  - network and storage refresh together every 12 seconds while visible
-  - refreshes when app becomes active
-  - stops refresh timer when leaving the tab
-  - avoids overlapping refresh requests
-- Pull-to-refresh still works.
-- Reload error behavior fixed:
-  - old successful data stays visible during refresh
-  - failed refresh with old data shows only small warning
-  - full error appears only when no data has loaded yet
-- Verified on real iPhone:
-  - Network tab works
-  - Storage card works
-  - live refresh works
-  - daily list newest-first works
-  - max 10 daily rows works
-  - qBittorrent works from More
-- Deployment notes:
-  - Backend changes require deploying `backend/main.py` to Oracle and restarting:
-
-```bash
-sudo systemctl restart personal-downloader-api.service
-```
-
-  - iOS Network tab changes require new IPA build/install.
-  - GitHub Actions IPA workflow remains manual-only.
-
-## qBittorrent WebView Status
-
-- qBittorrent URL remains:
-
-```text
-http://100.92.146.101:8080
-```
-
-- iPhone Safari can open qBittorrent successfully, confirming server/Tailscale is working.
-- CloudBox WebView fix was added:
-  - shared `WKWebView` uses persistent `WKWebsiteDataStore.default()`
-  - `NSURLErrorDomain -999` cancelled navigation is no longer shown as a failed-load screen
-  - popup / `target=_blank` handling stays inside app WebView
-  - qB redirect reload loop was reduced by comparing requested URL instead of redirected current URL
-- qB page now loads in the app.
-- Remaining qB limitation:
-  - after fully closing/reopening the app, qB login page may still return because qB session/cookie may be session-only
-  - true auto-login is not implemented
-  - no qB username/password is hardcoded in the app
-
-## VLC Audio Track Selector Update
-
-- VLC player now supports multi-audio track selection for videos such as MKV, AVI, and WEBM.
-- Audio tracks are detected from MobileVLCKit real audio track indexes/names.
-- No fake audio tracks are added.
-- Audio icon appears next to the subtitle icon in fullscreen VLC controls.
-- Audio icon is hidden when there is only one or no selectable audio track.
-- Selecting a track applies it through VLC player audio track index.
-- Verified working on real iPhone with a multi-audio video.
-- Subtitle behavior, playback, fullscreen, Fit/Cover, gestures, resume, and progress behavior remain unchanged.
-- Changed files for this milestone:
-  - `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`
-  - `ios/PersonalCloudDownloader/Views/PlayerView.swift`
-
-## CloudBox UI Polish Update
-
-- Emil Kowalski design-engineering skill was used as a micro-polish guide.
-- Taste Skill and Impeccable remain part of the design workflow.
-- Goal was to make CloudBox feel more handcrafted, premium, and non-generic.
-- UI polish was applied screen by screen, not as a full app redesign.
-- Network tab was polished:
-  - dark CloudBox background
-  - stronger header hierarchy
-  - premium metric/storage cards
-  - clearer storage progress bar
-  - cleaner daily usage rows
-  - refined loading, error, and refresh-failed states
-- Videos screen was polished:
-  - removed inert search/filter icons
-  - improved folder cards
-  - improved loose video cards
-  - improved folder-detail header and rows
-  - improved thumbnail alignment, dividers, loading, empty, and error states
-  - added subtle 120ms press feedback
-- More tab was polished:
-  - custom CloudBox dark background
-  - premium More hero/header panel
-  - card-style rows
-  - aligned icons
-  - softer chevrons
-  - subtle press feedback
-- Player controls were polished:
-  - subtle 120ms press feedback on fullscreen, replay, skip/play, close, and Fit/Cover controls
-  - refined playback failure card
-  - refined invalid stream URL state
-- Additional visible polish:
-  - Home hero/status/action area made more visually distinct
-  - Network daily usage pills wrap better on narrow screens
-  - bottom tab accent tint unified to CloudBox blue
-  - bottom tab bar at this milestone used native `UITabBarAppearance` with a darker CloudBox surface, stronger selected tint, muted inactive tabs, and custom label weights (Historical — superseded by the custom SwiftUI floating pill bar described in "CloudBox UI Refresh" near the end)
-- Behavior stayed unchanged:
-  - APIs
-  - navigation destinations
-  - downloader behavior
-  - qBittorrent behavior
-  - playback
-  - subtitles
-  - audio selector
-  - thumbnails
-  - progress saving
-
-## TMDB Trends Backend and Script Update
-
-- A legal TMDB-only Trends feature was added.
-- No torrent scraping is used.
-- No 1337x or torrent index is used.
-- No magnet links, info hashes, seeds, leechers, torrent links, or download links are shown.
-- Backend endpoint added:
-  - `GET /api/trends`
-- Endpoint behavior:
-  - reads only `/tmp/trends.json`
-  - does not call TMDB directly
-  - returns `{ "error": "data not available" }` if the file is missing or malformed
-- Trends script added:
-  - `scripts/fetch_trends.py`
-- Script reads:
-  - `TMDB_API_KEY`
-- Script writes:
-  - `/tmp/trends.json`
-- `/tmp/trends.json` format:
-  - `updated_at`
-  - `global_movies`
-  - `global_series`
-  - `india_movies`
-  - `india_series`
-- Each item includes:
-  - `title`
-  - `poster_url`
-  - `rating`
-  - `release_year`
-  - `trailer_url`
-  - `media_type`
-  - `language`
-- Rating comes from TMDB `vote_average` and is shown directly on cards.
-- Trailer links are YouTube URLs only when a safe official trailer is found.
-- Trailer lookup prefers:
-  - `site == YouTube`
-  - `official == true`
-  - `type == Trailer`
-  - English/Hindi when available
-- Reviews, clips, featurettes, teasers, reactions, interviews, songs, and promos are avoided where possible.
-- If no good official trailer exists, `trailer_url` is `null`.
-
-## TMDB Trends Source and Filtering Logic
-
-- Global Movies merge multiple TMDB sources:
-  - `/trending/movie/week`
-  - `/movie/now_playing`
-  - `/movie/popular`
-  - `/discover/movie`
-- Global Series merge multiple TMDB sources:
-  - `/trending/tv/week`
-  - `/tv/on_the_air`
-  - `/tv/popular`
-  - `/discover/tv`
-- Results are deduplicated by TMDB `id`.
-- Scoring prefers:
-  - TMDB popularity
-  - vote count
-  - rating
-  - recency
-  - weekly trending source bonus
-- Global Movies freshness rule:
-  - dated titles older than 730 days are excluded
-  - missing-date titles may still be allowed when date is unavailable
-- Global Series freshness rule:
-  - old series are excluded unless TMDB provides recent activity such as `last_air_date`, `next_episode_to_air.air_date`, or `last_episode_to_air.air_date`
-  - old popular/trending series no longer pass by popularity alone
-- India Movies and India Series:
-  - use TMDB discover
-  - use `with_origin_country=IN`
-  - allow Hindi and English originals only
-  - exclude Tamil, Telugu, Malayalam, Kannada, Bengali, and other regional-language originals
-  - use fallback date windows when the first range returns too few items
-- India fallback examples:
-  - Movies: 120, 180, then 365 days
-  - TV: 90, 180, then 365 days
-- Current verified section sizes after latest script run:
-  - `global_movies`: 15
-  - `global_series`: 15
-  - `india_movies`: 12
-  - `india_series`: 12
-
-## TMDB Trends Cron and Reboot Safety
-
-- TMDB API key is stored on Oracle in:
-  - `/home/ubuntu/.config/cloudbox/tmdb.env`
-- The env file uses:
-  - `export TMDB_API_KEY="..."`
-- The key must not be committed to Git.
-- Trends cron is installed with:
-  - 6-hour update
-  - reboot recreation
-  - 300-second timeout protection
-- Current cron lines:
-
-```cron
-0 */6 * * * cd /home/ubuntu/personal-cloud-downloader && . /home/ubuntu/.config/cloudbox/tmdb.env && /usr/bin/timeout 300 /usr/bin/python3 scripts/fetch_trends.py >> /tmp/cloudbox-trends.log 2>&1
-@reboot sleep 60 && cd /home/ubuntu/personal-cloud-downloader && . /home/ubuntu/.config/cloudbox/tmdb.env && /usr/bin/timeout 300 /usr/bin/python3 scripts/fetch_trends.py >> /tmp/cloudbox-trends.log 2>&1
-```
-
-- The `@reboot` job recreates `/tmp/trends.json` after server restart.
-- The `timeout 300` wrapper prevents TMDB requests from hanging forever.
-- Verified checks:
-  - `python3 scripts/fetch_trends.py` writes `/tmp/trends.json`
-  - `/tmp/cloudbox-trends.log` shows `Wrote /tmp/trends.json`
-  - `GET /api/trends` returns JSON
-  - no `fetch_trends.py` process remains stuck after a run
-
-## iOS Native Trends Update
-
-- Native iOS Trends screen was added.
-- Trends is placed inside the `More` tab.
-- Bottom tabs remain:
-  - Home
-  - Downloader
-  - Videos
-  - Network
-  - More
-- More destinations now include:
-  - Trends
-  - qBittorrent
-  - Files
-  - Settings
-- iOS endpoint used:
-  - `\(CompletedFilesAPI.baseURL)/api/trends`
-- iOS calls backend only.
-- No TMDB API key is stored in iOS.
-- No TMDB API calls are made directly from iOS.
-- iOS Trends models/services added inside:
-  - `ios/PersonalCloudDownloader/TrendsView.swift`
-- Model/service names:
-  - `TrendsView`
-  - `TrendsViewModel`
-  - `TrendsAPI`
-  - `TrendsResponse`
-  - `TrendItem`
-  - `TrendsErrorResponse`
-  - `TrendsAPIError`
-- Trends shows four sections:
-  - Global Movies
-  - Global Series
-  - India Movies
-  - India Series
-- Each card shows:
-  - poster or placeholder
-  - title
-  - TMDB rating directly on card
-  - release year
-  - Trailer button when available
-- The large technical header was replaced with a compact CloudBox-style header.
-- Header now shows:
-  - `Fresh picks`
-  - `Updated every 6 hours`
-  - formatted last update time
-- Raw ISO timestamp is no longer shown.
-- `TMDB metadata only` was removed from visual focus.
-- Trailer button layout was fixed:
-  - fixed-height custom control
-  - enough bottom padding
-  - title max 2 lines
-  - safe on small iPhone
-- Trailer opening behavior:
-  - no `UIApplication.shared.open`
-  - no forced YouTube app opening
-  - trailer opens inside app using `SFSafariViewController` sheet
-  - Video Lite custom scheme was not guessed
-- Pull-to-refresh, loading, error, and empty states remain.
-- CloudBox dark premium style is preserved.
-- Changed iOS files:
-  - `ios/PersonalCloudDownloader/RootTabView.swift`
-  - `ios/PersonalCloudDownloader/TrendsView.swift`
-- Native Trends changes require new IPA build/install.
-- Latest IPA build should use branch:
-  - `feature/tmdb-trends`
-
-## Web Trends Update
-
-- Web Trends feature was added to the existing web app.
-- Local file:
-  - `frontend/app.js`
-- Live Oracle frontend file:
-  - `/home/ubuntu/personal-cloud-downloader/backend/app.js`
-- Web Trends functions include:
-  - `installTrendsHomeEntry`
-  - `installTrendsStyles`
-  - `openTrendsView`
-  - `closeTrendsView`
-  - `loadTrends`
-  - `renderTrendsView`
-  - `renderTrendSection`
-  - `renderTrendCard`
-  - `formatTrendRating`
-- Web Trends shows:
-  - Global Movies
-  - Global Series
-  - India Movies
-  - India Series
-- Web Trends uses `/api/trends`.
-- Existing downloader UI and behavior remain unchanged.
-
-## Branch and Deployment Status
-
-> Historical: `feature/tmdb-trends` was the active branch during the Trends milestone. It is no longer the current branch. The current active branch is `feature/home-dashboard-v3` — see "Branch and Status Summary (current)" near the end.
-
-- Trends-milestone branch (historical):
-  - `feature/tmdb-trends`
-- `feature/ios-trends` was not created/pushed as a remote branch and should not be used for deployment.
-- Use `feature/tmdb-trends` for:
-  - Trends script deploy
-  - iOS Trends IPA build
-- Oracle project folder:
-  - `/home/ubuntu/personal-cloud-downloader`
-- This Oracle folder is not a Git repository.
-- For Oracle deploys, use clone-copy method from `/tmp`.
-- Script-only deploy requires:
-  - copy `scripts/fetch_trends.py`
-  - run `python3 -m py_compile scripts/fetch_trends.py`
-  - run script with TMDB env
-  - no backend restart
-  - no IPA unless iOS files changed
-- Backend deploy requires:
-  - copy `backend/main.py`
-  - restart `personal-downloader-api.service`
-- Web frontend deploy requires:
-  - copy `frontend/app.js` to `/home/ubuntu/personal-cloud-downloader/backend/app.js`
-- iOS native changes require:
-  - manual GitHub Actions IPA build
-  - install with Sideloadly
-- Manual IPA build path:
-  - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
-  - branch: use the current active branch (`feature/home-dashboard-v3`) for the latest IPA; `feature/tmdb-trends` was only for the historical Trends work
-
-## Deployment Notes
-
-- Current verified Oracle layout:
-  - local backend file: `backend/main.py`
-  - live Oracle backend file: `/home/ubuntu/personal-cloud-downloader/backend/main.py`
-  - local web frontend file: `frontend/app.js`
-  - live Oracle web frontend file: `/home/ubuntu/personal-cloud-downloader/backend/app.js`
-  - local Trends script: `scripts/fetch_trends.py`
-  - live Oracle Trends script: `/home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py`
-  - generated Trends data: `/tmp/trends.json`
-  - TMDB env file: `/home/ubuntu/.config/cloudbox/tmdb.env`
-- Backend changes require deploying `backend/main.py` to Oracle and restarting:
-
-```bash
-sudo systemctl restart personal-downloader-api.service
-```
-
-- Web frontend changes require copying `frontend/app.js` to `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
-- Trends script-only changes require copying `scripts/fetch_trends.py`, running `python3 -m py_compile scripts/fetch_trends.py`, and running the script with the TMDB env.
-- iOS UI/model/WebView changes require new IPA build/install.
-- GitHub Actions IPA workflow is manual-only now, so backend/frontend/docs pushes do not automatically create IPA builds.
-- Manual IPA build path:
-  - GitHub -> Actions -> iOS Unsigned Device IPA -> Run workflow
-
----
-
-# CURRENT STATE (authoritative — newest sections below)
-
-> The sections below reflect the latest confirmed CloudBox state. Where they conflict with older sections above, these win. Older sections are kept as historical milestones.
-
-## Current Deployment Paths and Rules (verified)
+- Avoid seeding unless intentionally needed.
+- Keep qBittorrent, Nginx file streaming, FastAPI, web app, and future services private through Tailscale.
+- Do not expose ports `8080`, `8090`, or `8000` publicly.
+- UFW should allow `22`, `8080`, `8090`, and `8000` only on `tailscale0`.
+- Do not store private keys, API keys, passwords, PEM contents, tokens, or secret values in this repo.
+- Oracle budget alert exists for cost warning only; alerts do not stop resources.
+- AWS EC2 is stopped and should not be used unless needed as backup.
+
+## Mythos-Level Prompt Standard + Code Review Graph Workflow
+
+- For this project, "Mythos-level" does not mean long.
+- It means prompts must be short, exact, evidence-first, root-cause-focused, and designed to solve the exact CloudBox problem with the smallest safe edit.
+- Every coding/debugging prompt must start with: `Start with the most related file to this task. Stop and ask before reading any other file.`
+- For non-trivial debugging, trace the exact broken path before coding: file -> UI/view/template -> handler/view model -> state/data/API request -> backend/helper -> condition causing the bug.
+- Require the exact root cause before code changes.
+- Use the Code Review Graph MCP first when the affected file is unknown or the bug may cross multiple files.
+- Prefer graph-guided file discovery over rereading the whole repository.
+- If the target file is already known, start there first and use the graph only if that file does not explain the bug.
+- For very small known-file changes, skip graph exploration and keep the prompt ultra-short.
+- Minimal useful evidence:
+  - backend/API: request URL, payload, status code, response body, exact backend error.
+  - iOS: affected screen, exact tap/path, visible error, relevant console/build error if available.
+  - web UI: affected URL, exact button/action, console error, network request/response if needed.
+- For tricky bugs only, include a short internal council: Bug Hunter, UX Reviewer, State/API Reviewer, Minimal Fix Reviewer.
+- For simple text/UI/CSS/SwiftUI changes, skip the council and keep the prompt ultra-short.
+
+## 4. Current Deployment Paths and Rules
 
 Verified current paths:
 
@@ -1514,25 +92,229 @@ Live Oracle web frontend:  /home/ubuntu/personal-cloud-downloader/backend/app.js
 
 Local Trends script:  scripts/fetch_trends.py
 Live Trends script:   /home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py
+
+Generated Trends data:  /tmp/trends.json
+TMDB env file:          /home/ubuntu/.config/cloudbox/tmdb.env
 ```
 
 Deployment rules:
 
-- Backend changes:
-  - copy `backend/main.py` to the live Oracle backend path
-  - run a Python compile check (`python3 -m py_compile backend/main.py`)
-  - restart `personal-downloader-api.service`
-- Web changes:
-  - copy `frontend/app.js` to the live `backend/app.js`
-  - no backend restart normally required
-- Native iOS changes:
-  - build a new unsigned IPA through the manual GitHub Actions workflow
-  - install through Sideloadly
-- Documentation-only changes:
-  - no Oracle deploy
-  - no IPA build
+- Backend changes: copy `backend/main.py` to live backend path, run `python3 -m py_compile backend/main.py`, then restart `personal-downloader-api.service`.
+- Web changes: copy `frontend/app.js` to live `backend/app.js`; normally no backend restart.
+- Trends script-only changes: copy `scripts/fetch_trends.py`, run `python3 -m py_compile scripts/fetch_trends.py`, then run with TMDB env.
+- Native iOS changes: build new unsigned IPA through manual GitHub Actions workflow, then install through Sideloadly.
+- Documentation-only changes: no Oracle deploy and no IPA build.
+- Oracle project folder `/home/ubuntu/personal-cloud-downloader` is not a Git repo; use clone-copy/manual deploy discipline.
 
-## Markdown Converter (current)
+Backend restart command:
+
+```bash
+sudo systemctl restart personal-downloader-api.service
+```
+
+## 5. Current Backend / API Status
+
+Backend framework: FastAPI.
+
+Core endpoints:
+
+- `GET /api/health`
+- `GET /api/qbittorrent/test`
+- `POST /api/add-magnet`
+- `GET /api/torrents`
+- `DELETE /api/torrents/{hash}`
+- `GET /api/completed-files`
+- `POST /api/video-progress`
+- `GET /api/video-progress`
+- `POST /api/subtitles/extract`
+- `GET /api/network-usage`
+- `GET /api/trends`
+- `GET /api/home-dashboard`
+- `POST /api/convert-markdown`
+- `POST /api/convert-markdown-url`
+
+Torrent behavior:
+
+- New torrents download successfully through qBittorrent.
+- Backend monitor auto-pauses completed, uploading, and seeding torrents when enabled.
+- `/api/torrents` returns simple Seedr-style fields: `hash`, `name`, `status`, `progress_percent`, `size`, `download_speed`, `eta`, `is_complete`.
+- Completed `eta` is normalized to `0`.
+- Delete endpoint removes qBittorrent entry and downloaded files.
+- Files are not auto-deleted after completion; deletion happens only when user calls delete.
+
+Completed files and media:
+
+- Completed downloads root: `/srv/personal-cloud/downloads/complete`.
+- `/api/completed-files` returns files actually on disk.
+- It filters support/extra files such as screenshots, images, `.nfo`, `.txt`, and samples.
+- Loose root videos auto-move into same-stem folders during `/api/completed-files`.
+- Matching same-stem `.srt` and `.vtt` sidecars move with video.
+- `_cloudbox-thumbnails` is excluded from normal file/folder results.
+- Optional `thumbnail_url` is returned for videos.
+
+Thumbnails:
+
+- Backend generates one `.jpg` thumbnail per video using `ffmpeg`.
+- Thumbnail cache path: `/srv/personal-cloud/downloads/complete/_cloudbox-thumbnails/`.
+- Existing good thumbnails are reused.
+- Bad/tiny thumbnails under 2KB are deleted and regenerated.
+- Generation tries timestamps `10s`, `30s`, `60s`, then `1s`.
+- Thumbnail failure for one video does not crash `/api/completed-files`.
+
+Subtitles:
+
+- `POST /api/subtitles/extract` validates path under completed-downloads root.
+- Uses `ffprobe` to detect subtitle streams and `ffmpeg` to convert first text track, English-preferred, into `<video>.srt`.
+- Return statuses include `extracted`, `exists`, `no_text_subtitles`, `image_subtitles_only`, `ffmpeg_unavailable`, `extraction_failed`.
+- Does not overwrite existing `.srt`.
+- Does not run in background or hook download completion.
+- Image-based subtitles are unsupported for extraction without OCR; native VLC fallback may still apply.
+- Backend sanitizes active `.srt` and `.vtt` sidecars, removing common HTML tags/entities and ASS/SSA override tags while preserving timing.
+- Existing subtitle files get one `.bak` backup before sanitization.
+
+Network/storage:
+
+- `GET /api/network-usage` uses fixed safe server commands only.
+- Commands include `vnstat -i enp0s6 --json`, fallback `vnstat -i enp0s6`, `df -B1 /`, and optional `df -B1 /srv/personal-cloud/downloads/complete`.
+- No client command input is accepted.
+
+## 6. Current iOS App Status
+
+- App name: CloudBox.
+- Source: `ios/PersonalCloudDownloader/`.
+- UI stack: SwiftUI, WKWebView, URLSession/Codable, AVPlayer/AVKit, MobileVLCKit.
+- Display name fixed through XcodeGen.
+- App icon asset exists under `ios/PersonalCloudDownloader/Assets.xcassets/AppIcon.appiconset/`.
+- Bottom tabs: Home, Downloader, Videos, Network, More.
+- qBittorrent, Files, Settings, Trends are reached from More.
+- ATS HTTP loading supports private Tailscale URLs.
+- Tailscale remains a separate app; CloudBox has helper/open action only.
+- iPhone never runs torrent downloading locally.
+
+Current app capabilities:
+
+- Home dashboard with aggregated backend data, Continue Watching, Recently Added, TMDB artwork, movie playback, and series folder navigation.
+- Downloader tab loads web UI at `/app/`.
+- Videos tab is native media library/player.
+- Network tab shows live network/storage usage.
+- Trends screen shows legal TMDB metadata only.
+- Markdown Converter supports file picker, Photos picker, paste URL, preview, Copy, Share, Save `.md`, Retry, and Clear.
+- qBittorrent and Files use WKWebView.
+- Settings includes Tailscale helper and endpoint/privacy info.
+
+Install/build:
+
+- Manual GitHub Actions workflow builds unsigned device IPA.
+- Personal install method: download unsigned IPA and install with Sideloadly on Windows.
+- Apple Devices app may be needed for Windows/Sideloadly device detection.
+- Developer Mode must be enabled on iPhone.
+- Native iOS changes require a new IPA build/install.
+
+qBittorrent WebView:
+
+- Shared `WKWebView` uses persistent `WKWebsiteDataStore.default()`.
+- `NSURLErrorDomain -999` cancelled navigation is not shown as failed-load screen.
+- Popup/`target=_blank` handling stays inside app WebView.
+- Redirect reload loop was reduced.
+- Remaining limitation: after fully closing/reopening app, qB login page may return because qB session/cookie may be session-only.
+- No qB username/password is hardcoded in app.
+
+## 7. Current Web Downloader Status
+
+- Local web frontend: `frontend/app.js`.
+- Live Oracle frontend: `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
+- Web app URL: `http://100.95.39.107:8090/app/`.
+- Web UI can add legal magnet links, show progress, show completed files, stream/download files, copy VLC links, delete torrents/files, and show Trends.
+- Completed Files uses `GET /api/completed-files`.
+- Completed Files auto-updates after completion with short polling delay.
+- Copy VLC link works over HTTP/Tailscale with clipboard fallback.
+- Custom delete confirmation modal is in-page DOM, not `window.confirm()`, so it works in browser and iOS WKWebView.
+- Queue ordering shows active/current downloads above completed/old downloads.
+- `frontend/app.js` injects `installCloudBoxTheme()`.
+- Theme is self-contained in `app.js`; `index.html` and `style.css` remain unchanged.
+- The themed `app.js` is deployed to Oracle.
+
+## 8. Current Home Dashboard + TMDB Artwork
+
+Backend endpoint: `GET /api/home-dashboard`.
+
+Aggregated response includes:
+
+- `server`: online, Oracle/Tokyo location, real uptime, last-updated timestamp, API/qBittorrent/storage service status.
+- `library`: playable-video count, indexed/completed-file count, storage used bytes, storage total bytes.
+- `downloads`: real active torrent count.
+- `network`: current RX bytes/second, current TX bytes/second.
+- `continue_watching`.
+- `recently_added`.
+
+Implementation:
+
+- Reuses existing video, progress, thumbnail, qBittorrent, storage, and network helpers.
+- `video_id` equals safe relative path used by existing player flow.
+- Absolute filesystem paths are never exposed.
+- Continue Watching selects most recently watched unfinished video.
+- Continue Watching excludes missing videos and videos at or above 90% watched.
+- Continue Watching returns saved position, duration, and normalized progress from `0.0` to `1.0`.
+- Filename parsing removes release noise, detects year, detects `S01E05` and `1x05`, uses parent-folder metadata as fallback, and removes dangling punctuation.
+- Recently Added returns up to 40 newest raw playable videos.
+- iOS groups episodes into unique series/movie entries and displays up to 8 unique entries.
+- Movies open existing player directly.
+- Series open existing Videos folder/detail episode picker.
+- VLC resume position is seeded through existing progress store before opening.
+- Existing AVPlayer/VLC routing is preserved.
+
+Home behavior:
+
+- Current Home uses one aggregated `GET /api/home-dashboard`.
+- Latency is measured client-side in iOS using request round-trip time.
+- Foreground reconnect works without tab switch.
+
+TMDB artwork:
+
+- Backend enriches Home dashboard media with TMDB server-side using `TMDB_API_KEY`.
+- Movie search uses `/search/movie`; series search uses `/search/tv`.
+- Search uses normalized title, media type, and year when available.
+- Exact normalized-title match is required.
+- Conflicting years are rejected.
+- Missing key, network failure, non-200 response, parse failure, or no match returns `null` safely.
+- Successful and no-match results use in-process TTL cache.
+- TMDB failures do not fail `/api/home-dashboard`.
+- API key is never returned to iOS.
+- Images are not permanently downloaded.
+- Returned artwork fields: `tmdb_id`, `poster_url`, `backdrop_url`.
+- iOS priority for Continue Watching: backdrop, poster, local thumbnail, placeholder.
+- iOS priority for Recently Added: poster, local thumbnail, placeholder.
+
+TMDB env:
+
+```text
+/home/ubuntu/.config/cloudbox/tmdb.env
+```
+
+Current env format for systemd compatibility:
+
+```text
+TMDB_API_KEY=...
+```
+
+FastAPI systemd drop-in:
+
+```text
+/etc/systemd/system/personal-downloader-api.service.d/tmdb.conf
+```
+
+Drop-in uses:
+
+```text
+EnvironmentFile=/home/ubuntu/.config/cloudbox/tmdb.env
+```
+
+Important follow-up:
+
+- TMDB Trends cron must be retested after `tmdb.env` format changed from `export TMDB_API_KEY=...` to `TMDB_API_KEY=...`.
+- Do not claim Trends cron remains verified after this env-format change unless retested.
+
+## 9. Current Markdown Converter
 
 Backend:
 
@@ -1542,261 +324,240 @@ Backend:
 - Image preprocessing includes orientation correction, grayscale/contrast/sharpness improvements, and safe OCR cleanup.
 - File upload limit is 25MB.
 - OCR/Markdown formatting creates headings, sections, bullets, numbered lists, and cleaner paragraphs where safely detectable.
-- Bad/blank conversions return an empty result safely.
+- Bad/blank conversions return empty result safely.
 
 URL conversion:
 
 - `POST /api/convert-markdown-url`
 - Accepts public `http://` and `https://` URLs.
-- Blocks: empty URLs, invalid schemes, localhost, loopback, private/internal IPs, link-local/internal hosts.
-- Download timeout and a 5MB HTML limit are enforced.
+- Blocks empty URLs, invalid schemes, localhost, loopback, private/internal IPs, and link-local/internal hosts.
+- Enforces download timeout and 5MB HTML limit.
 - Downloaded HTML and converted Markdown are not persisted.
-- Current limitations: no login-only pages, no JavaScript browser rendering, no browser automation, no AI cleanup; converted pages may still contain navigation/footer noise.
+- Limitations: no login-only pages, no JavaScript browser rendering, no browser automation, no AI cleanup; converted pages may contain navigation/footer noise.
 
 iOS:
 
 - File picker, Photos picker, paste URL.
-- Rendered Markdown preview, Copy, Share, Save `.md`, Retry, Clear.
+- Rendered Markdown preview.
+- Copy, Share, Save `.md`, Retry, Clear.
 - Empty-result and friendly error states.
-- Keyboard does not auto-open; Done, Convert, outside tap, and scroll can dismiss the keyboard.
-- UI is a CloudBox document-workbench design; preview is dark and readable.
-- Action bar clearance above the custom floating tab bar was fixed.
+- Keyboard does not auto-open.
+- Done, Convert, outside tap, and scroll can dismiss keyboard.
+- UI is CloudBox document-workbench style; preview is dark/readable.
+- Action bar clearance above custom floating tab bar was fixed.
 
-## Real Landscape Player (current — replaces fake landscape)
+## 10. Current Player / Real Landscape / Timeline Status
 
-> Supersedes the earlier fake-landscape / zero-config-orientation decisions above.
+Playback:
 
-- Branch milestone: `feature/real-landscape-player`.
+- AVPlayer/AVKit handles `mp4`, `mov`, `m4v`.
+- MobileVLCKit handles `mkv`, `avi`, `webm`.
+- Videos remain clean library/player, not file manager.
+- No Delete, Download, or Copy Link controls in native Videos.
+- VLC supports auto-play, stop-on-leave, play/pause, progress/time display, seeking, 10-second skip, loading/failed/ended overlays, replay, resume, subtitles, audio selector, gestures, and Fit/Cover.
+- Multi-audio track selection uses MobileVLCKit real track indexes/names.
+- Audio icon appears only when more than one selectable audio track exists.
+- Subtitle overlay uses app-rendered sidecar `.srt` SwiftUI overlay, stable in Cover/Aspect Fill.
+- Native VLC embedded subtitle fallback still exists when extraction is unavailable.
+
+Real landscape:
+
 - Real iOS fullscreen landscape works on iPhone.
-- The fake VLC `rotationEffect(90°)` landscape was removed.
-- `OrientationHelper` uses:
-  - portrait mask for normal app screens
-  - landscape-only mask while the fullscreen player is open
-  - portrait restore when the player closes
+- Fake VLC `rotationEffect(90°)` landscape was removed.
+- `OrientationHelper` uses portrait mask for normal screens, landscape-only mask while fullscreen player is open, and portrait restore on close.
 - iOS 16+ `UIWindowScene.requestGeometryUpdate` is used.
-- Orientation updates target the topmost presented view controller because fullscreen uses `fullScreenCover`.
-- `UIWindowScene.keyWindow` is valid for the deployment target.
+- Orientation updates target topmost presented view controller because fullscreen uses `fullScreenCover`.
 - `project.yml` allows Portrait, LandscapeLeft, LandscapeRight.
 - Normal tabs remain portrait.
-- Existing controls remain: timeline, brightness/volume gestures, subtitles, audio selector, Fit/Cover, close, resume, auto-hide.
 
-Timeline scrub-time preview:
+Timeline scrub preview:
 
-- Branch milestone: `feature/timeline-scrub-time-preview`.
-- While dragging the fullscreen timeline, a floating timestamp follows the slider thumb.
-- Uses `MM:SS` or `H:MM:SS`; the timestamp disappears after release.
-- Existing seek behavior is unchanged. Verified working on iPhone.
+- While dragging fullscreen timeline, a floating timestamp follows slider thumb.
+- Uses `MM:SS` or `H:MM:SS`.
+- Timestamp disappears after release.
+- Existing seek behavior is unchanged.
+- Verified working on iPhone.
 
-## CloudBox UI Refresh (current)
-
-- Branch milestone: `feature/home-dashboard-redesign-v2`.
+## 11. Current UI System
 
 Completed redesigns:
 
-- Home dashboard
-- Custom floating bottom navigation
-- More control hub
-- Network infrastructure monitor
-- Videos media library
-- Markdown Converter document workbench
-- Trends discovery/radar screen
-- Downloader web UI
-
-Design workflow: UI/UX Pro, Taste, Impeccable, Emil Kowalski motion/design-engineering guidance. Goal: handcrafted, premium, non-generic CloudBox UI.
+- Home dashboard.
+- Custom floating bottom navigation.
+- More control hub.
+- Network infrastructure monitor.
+- Videos media library.
+- Markdown Converter document workbench.
+- Trends discovery/radar screen.
+- Downloader web UI.
 
 Visual language:
 
-- deep navy background
-- one restrained corner bloom
-- flat raised surfaces
-- white low-opacity hairlines
-- premium blue accent
-- tinted icon chips
-- tracked uppercase captions
-- monospaced infrastructure labels
-- restrained motion with Reduce Motion support
-- no excessive glow or generic gradient-card dashboard style
+- Deep navy background.
+- One restrained corner bloom.
+- Flat raised surfaces.
+- White low-opacity hairlines.
+- Premium blue accent.
+- Tinted icon chips.
+- Tracked uppercase captions.
+- Monospaced infrastructure labels.
+- Restrained motion with Reduce Motion support.
+- Avoids excessive glow and generic gradient-card dashboard style.
 
 Bottom navigation:
 
-- The default system tab bar styling was replaced by a custom SwiftUI floating pill bar.
-- Tabs remain: Home, Downloader, Videos, Network, More.
+- Default system tab bar replaced by custom SwiftUI floating pill bar.
+- Tabs: Home, Downloader, Videos, Network, More.
 - Selected-state chip uses `matchedGeometryEffect`.
-- Light haptic and press feedback are included.
-- Accessibility labels and selected traits are included.
-- The custom bar respects the home indicator.
-- Pushed screens may require explicit bottom clearance because SwiftUI safe-area inset propagation is inconsistent.
+- Light haptic and press feedback included.
+- Accessibility labels and selected traits included.
+- Custom bar respects home indicator.
+- Pushed screens may need explicit bottom clearance because SwiftUI safe-area inset propagation is inconsistent.
 
-More page:
+Network UI:
 
-- The default Form was replaced by a CloudBox control hub.
-- Includes endpoints, privacy, and Tailscale sections.
-- Existing values and the Tailscale action remain unchanged.
+- Infrastructure telemetry layout: monitor panel, summary tiles, storage, month/today metrics, daily rows, raw counters.
+- Existing calculations unchanged.
+- Foreground reconnect hang fixed with stale-request cancellation, refresh generation, loading reset, 750ms Tailscale wake-up wait, auto-refresh restart, inactive cancellation, and 10-second client timeout.
+- Verified on iPhone.
 
-Network page:
+Videos UI:
 
-- Redesigned into infrastructure telemetry: monitor panel, summary tiles, storage, month/today metrics, daily rows, raw counters.
-- Existing metrics/calculations remain unchanged.
-- Foreground reconnect hang was fixed:
-  - stale request is cancelled
-  - refresh generation is advanced
-  - loading state is reset
-  - waits 750ms for Tailscale wake-up
-  - restarts auto-refresh
-  - leaving active cancels requests
-  - the network request has a 10-second client timeout
-- Verified on iPhone: no tab switch is required after foregrounding; reconnect now works.
+- Premium folder and folder-detail UI.
+- Shows real thumbnails, progress, duration only when real duration exists, modified date when available.
+- Folder grouping, thumbnails, progress, navigation, playback, and refresh behavior unchanged.
 
-Videos:
+More UI:
 
-- Redesigned media library and folder-detail UI.
-- Folder grouping, thumbnails, progress, navigation, playback, and refresh remain unchanged.
+- Form replaced by CloudBox control hub.
+- Includes endpoints, privacy, Tailscale action, Trends, qBittorrent, Files, and Settings.
 
-Trends:
+## 12. Current Trends Status
 
-- Redesigned into CloudBox discovery/radar style.
-- Existing TMDB data, four sections, trailers, refresh, and Safari sheet remain unchanged.
+Purpose:
 
-Downloader web UI:
-
-- `frontend/app.js` now injects `installCloudBoxTheme()`.
-- The theme is self-contained in `app.js`; `index.html` and `style.css` remain unchanged.
-- The theme applies to the desktop browser and the iPhone WebView.
-- Existing add-magnet, queue ordering, delete modal, completed files, and Trends behavior remain unchanged.
-- The themed `app.js` was deployed manually to Oracle.
-
-## Current Home Dashboard API
-
-- Branches/milestones: `feature/home-dashboard-api`; latest integrated work: `feature/home-dashboard-v3`.
-
-Backend endpoint: `GET /api/home-dashboard`. One aggregated response containing:
-
-- `server`: online, Oracle/Tokyo location, real uptime, last-updated timestamp, API/qBittorrent/storage service status.
-- `library`: playable-video count, indexed/completed-file count, storage used bytes, storage total bytes.
-- `downloads`: real active torrent count.
-- `network`: current RX bytes/second, current TX bytes/second.
-- `continue_watching`.
-- `recently_added`.
-
-Implementation details:
-
-- Reuses existing video, progress, thumbnail, qBittorrent, storage, and network helpers.
-- `video_id` equals the safe relative path already used by the existing player flow.
-- Absolute filesystem paths are never exposed.
-- Continue Watching:
-  - selects the most recently watched unfinished video
-  - excludes missing videos
-  - excludes videos at or above the 90% watched threshold
-  - returns saved position and duration
-  - returns normalized progress from 0.0 to 1.0
-- Filename parsing:
-  - removes release noise
-  - detects year
-  - detects `S01E05` and `1x05`
-  - uses parent-folder metadata as fallback
-  - removes dangling punctuation
-- Recently Added:
-  - the backend returns up to 40 newest raw playable videos
-  - iOS groups episodes into unique series/movie entries
-  - iOS displays up to 8 unique entries after grouping
-- Movies open the existing player directly.
-- Series show one card and open the existing Videos folder/detail episode picker.
-- Continue Watching remains a separate resumable card above Recently Added.
-- VLC resume position is seeded through the existing progress store before opening.
-- Existing AVPlayer/VLC routing is preserved.
-
-Confirmed server test examples:
-
-- real server/service/storage/network data returned
-- normalized progress fixed
-- `Sector 36` parses correctly
-- `Raakh` episode title/subtitle/year parse correctly
-- recently-added grouping now fills available unique cards correctly
-
-## Current Home TMDB Artwork
+- Legal TMDB-only Trends feature.
+- No torrent scraping.
+- No 1337x or torrent index.
+- No magnet links, info hashes, seeds, leechers, torrent links, or download links.
 
 Backend:
 
-- Home dashboard media enrichment uses TMDB server-side, with the existing `TMDB_API_KEY`.
-- Search is based on normalized title, movie/TV media type, and year when available.
-- Movie uses `/search/movie`; series uses `/search/tv`.
-- Exact normalized-title match is required; conflicting years are rejected.
-- Missing key, network failure, non-200 response, parse failure, or no match returns `null` safely.
-- Successful and no-match results use an in-process TTL cache.
-- TMDB failures do not fail `/api/home-dashboard`.
-- The API key is never returned to iOS; images are not permanently downloaded.
+- `GET /api/trends`.
+- Reads only `/tmp/trends.json`.
+- Does not call TMDB directly.
+- Returns `{ "error": "data not available" }` if file is missing or malformed.
 
-Returned artwork: `tmdb_id`, `poster_url`, `backdrop_url`; the existing local thumbnail fallback remains.
+Script:
 
-iOS artwork priority:
+- Local/live script: `scripts/fetch_trends.py`.
+- Reads `TMDB_API_KEY`.
+- Writes `/tmp/trends.json`.
+- Cron intended cadence: every 6 hours plus reboot recreation with 300-second timeout.
+- Must be retested after `tmdb.env` format changed to plain assignment.
 
-- Continue Watching: backdrop → poster → local thumbnail → placeholder.
-- Recently Added: poster → local thumbnail → placeholder.
+Data format:
 
-System configuration:
+- `updated_at`
+- `global_movies`
+- `global_series`
+- `india_movies`
+- `india_series`
 
-- TMDB env file: `/home/ubuntu/.config/cloudbox/tmdb.env`.
-- The current file uses plain assignment for systemd compatibility:
+Each item:
 
-```text
-TMDB_API_KEY=...
-```
+- `title`
+- `poster_url`
+- `rating`
+- `release_year`
+- `trailer_url`
+- `media_type`
+- `language`
 
-- The FastAPI service loads it through a systemd drop-in:
+Filtering:
 
-```text
-/etc/systemd/system/personal-downloader-api.service.d/tmdb.conf
-```
+- Global Movies merge trending, now playing, popular, and discover.
+- Global Series merge trending, on the air, popular, and discover.
+- Results deduplicate by TMDB `id`.
+- Scoring prefers popularity, vote count, rating, recency, and weekly trending source bonus.
+- Global Movies exclude dated titles older than 730 days.
+- Global Series exclude old series unless TMDB provides recent activity.
+- India Movies/Series use `with_origin_country=IN`, allow Hindi/English originals, and exclude regional-language originals.
+- Trailer lookup prefers YouTube, official, trailer type, and English/Hindi when available.
+- Reviews, clips, featurettes, teasers, reactions, interviews, songs, and promos are avoided where possible.
 
-- The drop-in uses:
+iOS:
 
-```text
-EnvironmentFile=/home/ubuntu/.config/cloudbox/tmdb.env
-```
+- Trends screen lives under More.
+- iOS calls backend only; no TMDB API key in iOS.
+- Models/services live in `ios/PersonalCloudDownloader/TrendsView.swift`.
+- Shows Global Movies, Global Series, India Movies, India Series.
+- Cards show poster/placeholder, title, TMDB rating, release year, and Trailer button when available.
+- Trailer opens in app via `SFSafariViewController` sheet.
 
-Important follow-up (Trends cron):
+Web:
 
-- The old Trends cron sourced this file as a shell script when it used `export TMDB_API_KEY=...`.
-- Because the file now uses a plain assignment, the cron must export sourced values (for example with `set -a` / `set +a`) before claiming the reboot/6-hour Trends refresh still works.
-- Do NOT claim the Trends cron remains verified after this env-format change unless it has been retested.
+- Web Trends lives in existing web app.
+- Uses `/api/trends`.
+- Existing downloader behavior unchanged.
 
-## Current Home Behavior (replaces older Home status)
+## 13. Branch and Build Status
 
-> Supersedes older statements that Home used separate `/api/health`, `/api/torrents`, and `/api/completed-files`.
+Current active branch:
 
-- Current Home uses one aggregated `GET /api/home-dashboard`.
-- Latency is measured client-side in iOS using request round-trip time.
-- Home currently supports: server status, services, latency, library counts, active downloads, storage, live network rates, Continue Watching, Recently Added, TMDB artwork, movie playback, series folder navigation, foreground reconnect.
+- `feature/home-dashboard-v3`
 
-## Branch and Status Summary (current)
+Prior completed milestone branches:
 
-- Current active Home work branch: `feature/home-dashboard-v3`.
-- Prior completed milestone branches:
-  - `feature/real-landscape-player`
-  - `feature/home-dashboard-redesign-v2`
-  - `feature/timeline-scrub-time-preview`
-  - `feature/home-dashboard-api`
-- `feature/tmdb-trends` is historical and is NOT the current branch.
+- `feature/real-landscape-player`
+- `feature/home-dashboard-redesign-v2`
+- `feature/timeline-scrub-time-preview`
+- `feature/home-dashboard-api`
+- `feature/tmdb-trends` is historical and not the current branch.
 
-## Current Final Status (authoritative)
+Build/deploy status:
 
-- Oracle is production. AWS remains stopped as backup.
-- Current Tailscale IP is `100.95.39.107` (see "1a. Current Production Environment").
-- Working: backend, web downloader, qBittorrent, Nginx/files, the native iOS app, AVPlayer/VLC player, subtitles, audio selector, real landscape, Network, Trends, Markdown Converter, Home dashboard, TMDB artwork, Continue Watching, Recently Added, movie playback, and series folder navigation.
-- The Downloader web theme is deployed.
-- The Home dashboard API and TMDB artwork are deployed.
-- The latest Home and series-grouping UI require the corresponding latest IPA if not yet installed.
+- GitHub Actions iOS build check passed historically for simulator compile/link.
+- Manual unsigned device IPA workflow passed historically for real-device archive and MobileVLCKit arm64 link.
+- GitHub Actions IPA workflow is manual-only.
+- Latest Home and series-grouping UI require corresponding latest IPA if not installed yet.
+- Backend/frontend/docs pushes do not automatically create IPA builds.
+- Manual IPA build path: GitHub Actions -> iOS Unsigned Device IPA -> Run workflow -> branch `feature/home-dashboard-v3`.
+
+## 14. Historical Milestones
+
+- AWS MVP proved qBittorrent, Nginx file streaming, and FastAPI through Tailscale; AWS is now stopped backup only.
+- Oracle A1 production migration completed; Tailscale SSH, qBittorrent, Nginx `/files/`, FastAPI, UFW, swap, storage, and budget alert were configured.
+- Phase 1 backend added health, qBittorrent test, add magnet, torrents list, auto-pause, and delete-with-files.
+- Simple Seedr-style web UI went live on Oracle.
+- iOS app was created with SwiftUI shell, WKWebView tabs, native Home/Settings, native Videos library, AVPlayer/VLC playback, fullscreen, subtitle overlay, audio selector, and real landscape.
+- GitHub Actions added simulator build check and manual unsigned device IPA build; personal iPhone install works through Sideloadly.
+- Backend stabilization fixed completed-files auto-foldering, delete cleanup, subtitle sanitization, thumbnails, and network usage.
+- Dynamic thumbnails were verified on iPhone.
+- qBittorrent WebView was improved enough to load in app, with session-login limitation remaining.
+- TMDB Trends backend/script, iOS Trends screen, and Web Trends were added as metadata-only discovery.
+- CloudBox UI refresh redesigned Home, bottom nav, More, Network, Videos, Markdown Converter, Trends, and Downloader.
+- Home dashboard API and TMDB artwork enrichment were deployed.
+- Current production IP changed to `100.95.39.107`; older Oracle/AWS Tailscale IPs are historical only.
+
+## 15. Current Final Status
+
+- Oracle is production.
+- AWS remains stopped as historical backup.
+- Current Tailscale IP is `100.95.39.107`.
+- Working: backend, web downloader, qBittorrent, Nginx/files, native iOS app, AVPlayer/VLC player, subtitles, audio selector, real landscape, Network, Trends, Markdown Converter, Home dashboard, TMDB artwork, Continue Watching, Recently Added, movie playback, and series folder navigation.
+- Downloader web theme is deployed.
+- Home dashboard API and TMDB artwork are deployed.
+- Latest Home and series-grouping UI require corresponding latest IPA if not installed yet.
 - Everything remains private through Tailscale.
 
-## Next Steps (authoritative)
+## 16. Known Follow-ups / Next Steps
 
-- Verify the latest `feature/home-dashboard-v3` IPA end to end.
-- Verify the TMDB Trends cron after the env-file format change (plain assignment vs `export`).
+- Verify latest `feature/home-dashboard-v3` IPA end to end.
+- Retest TMDB Trends cron after `tmdb.env` format changed from `export TMDB_API_KEY=...` to `TMDB_API_KEY=...`.
 - Merge stable branches when ready.
-- Keep the legal-files-only, under-10GB, quick-delete policy.
+- Keep legal-files-only, under-10GB, quick-delete policy.
 - Continue manual Oracle backup/deploy discipline.
 - Optional: AVPlayer cross-device resume parity.
-- Optional: a stronger persistent TMDB artwork cache if needed.
-- Optional: clean up duplicated historical context sections later.
-
-## Deployment Notes
+- Optional: stronger persistent TMDB artwork cache if needed.
+- Optional: clean up remaining historical notes later if they stop being useful.
