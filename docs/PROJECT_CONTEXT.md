@@ -505,7 +505,8 @@ Web:
 
 Current active branch:
 
-- `feature/home-dashboard-v3`
+- Working IPA branch: `feature/series-progress-fix-current-ui`.
+- Base/current UI branch: `feature/video-thumbnails-v2`.
 
 Prior completed milestone branches:
 
@@ -515,6 +516,22 @@ Prior completed milestone branches:
 - `feature/home-dashboard-api`
 - `feature/tmdb-trends` is historical and not the current branch.
 
+Remaining important branches after cleanup:
+
+- `main`
+- `feature/video-thumbnails-v2`
+- `feature/series-progress-fix-current-ui`
+- `feature/app-icon-update`
+
+Latest series folder progress fix:
+
+- Fix commit: `d1fd237 Fix series folder progress refresh`.
+- Changed file: `ios/PersonalCloudDownloader/Views/VideosView.swift`.
+- Root cause: Home opened series folders through `FolderVideosView(folder: folder, progressByPath: [:])`; `FolderVideosView` rendered from an immutable incoming progress snapshot and did not refresh progress itself, so Home-opened folders showed stale/missing watched time, progress, and duration after returning from `PlayerView`.
+- Fix: `FolderVideosView` now owns local `@State refreshedProgressByPath`, seeds from incoming `progressByPath`, renders rows from `refreshedProgressByPath[video.path]`, and refreshes/merges progress on appear/return using `CompletedFilesAPI.fetchVideoProgress()` and `VLCPlayerController.localProgressSnapshot()`.
+- Merge key is `video.path`; latest progress is chosen by `updatedDate`, with `timeMs` fallback.
+- Impact: Home-opened series folders now update progress after watching, normal Videos tab folders still work, and no backend, API contract, HomeView, player controls, navigation, TMDB/artwork, or unrelated styling changed.
+
 Build/deploy status:
 
 - GitHub Actions iOS build check passed historically for simulator compile/link.
@@ -522,7 +539,8 @@ Build/deploy status:
 - GitHub Actions IPA workflow is manual-only.
 - Latest Home and series-grouping UI require corresponding latest IPA if not installed yet.
 - Backend/frontend/docs pushes do not automatically create IPA builds.
-- Manual IPA build path: GitHub Actions -> iOS Unsigned Device IPA -> Run workflow -> branch `feature/home-dashboard-v3`.
+- For current working IPA builds, use `feature/series-progress-fix-current-ui`.
+- Do not use old/deleted Home dashboard v3/redesign branches for current UI builds.
 
 ## 14. Historical Milestones
 
@@ -548,12 +566,12 @@ Build/deploy status:
 - Working: backend, web downloader, qBittorrent, Nginx/files, native iOS app, AVPlayer/VLC player, subtitles, audio selector, real landscape, Network, Trends, Markdown Converter, Home dashboard, TMDB artwork, Continue Watching, Recently Added, movie playback, and series folder navigation.
 - Downloader web theme is deployed.
 - Home dashboard API and TMDB artwork are deployed.
-- Latest Home and series-grouping UI require corresponding latest IPA if not installed yet.
+- Latest Home, current UI, and series folder progress fix require corresponding latest IPA if not installed yet.
 - Everything remains private through Tailscale.
 
 ## 16. Known Follow-ups / Next Steps
 
-- Verify latest `feature/home-dashboard-v3` IPA end to end.
+- Verify latest `feature/series-progress-fix-current-ui` IPA end to end.
 - Retest TMDB Trends cron after `tmdb.env` format changed from `export TMDB_API_KEY=...` to `TMDB_API_KEY=...`.
 - Merge stable branches when ready.
 - Keep legal-files-only, under-10GB, quick-delete policy.
