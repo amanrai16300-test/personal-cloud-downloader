@@ -1549,6 +1549,13 @@ FFMPEG_TIMEOUT_S = 120
 OPENSUBTITLES_API_URL = "https://api.opensubtitles.com/api/v1"
 SUBTITLE_SEARCH_MIN_CONFIDENCE = 72.0
 SUBTITLE_SEARCH_TIMEOUT_S = 20
+SRT_PARTIAL_MIN_BYTES = 5_000
+SRT_PARTIAL_MIN_CUES = 80
+SRT_LATE_FIRST_CUE_SECONDS = 10 * 60
+SRT_SHORT_VIDEO_SECONDS = 20 * 60
+SRT_TIMING_RE = re.compile(
+    r"^\s*(\d{1,2}):([0-5]\d):([0-5]\d)(?:[,.](\d{1,3}))?\s*-->"
+)
 
 
 @app.post("/api/subtitles/extract")
@@ -1600,8 +1607,10 @@ def search_subtitle(payload: ExtractSubtitleRequest) -> dict[str, Any]:
 
     srt_path = video_path.with_suffix(".srt")
     if srt_path.exists():
-        sanitize_subtitle_file(srt_path, create_backup=True)
-        return {"status": "exists", "url": srt_stream_url(srt_path)}
+        existing_quality = classify_srt_quality(srt_path, video_path)
+        if existing_quality == "full/usable":
+            sanitize_subtitle_file(srt_path, create_backup=True)
+            return {"status": "exists", "url": srt_stream_url(srt_path)}
 
     config = opensubtitles_config()
     if config is None:
@@ -1633,10 +1642,12 @@ def search_subtitle(payload: ExtractSubtitleRequest) -> dict[str, Any]:
     content = opensubtitles_download(config, token, best_candidate)
     if content is None:
         return {"status": "download_failed"}
-    if srt_path.exists():
+    if srt_path.exists() and classify_srt_quality(srt_path, video_path) == "full/usable":
         sanitize_subtitle_file(srt_path, create_backup=True)
         return {"status": "exists", "url": srt_stream_url(srt_path)}
-    if not save_downloaded_subtitle(content, srt_path):
+    if classify_srt_quality_bytes(content, probe_video_duration(video_path)) != "full/usable":
+        return {"status": "low_confidence", "score": round(best_score, 2)}
+    if not save_downloaded_subtitle(content, srt_path, replace_existing_partial=True):
         return {"status": "download_failed"}
 
     sanitize_subtitle_file(srt_path, create_backup=True)
@@ -1912,7 +1923,72 @@ def opensubtitles_download(
         return None
 
 
-def save_downloaded_subtitle(content: bytes, srt_path: Path) -> bool:
+def classify_srt_quality(srt_path: Path, video_path: Path) -> str:
+    try:
+        content = srt_path.read_text(encoding="utf-8")
+        byte_size = srt_path.stat().st_size
+    except (OSError, UnicodeDecodeError):
+        return "invalid_or_empty"
+    return classify_srt_quality_content(content, byte_size, probe_video_duration(video_path))
+
+
+def classify_srt_quality_bytes(content: bytes, video_duration: float | None) -> str:
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = content.decode("latin-1")
+        except UnicodeDecodeError:
+            return "invalid_or_empty"
+    return classify_srt_quality_content(text, len(content), video_duration)
+
+
+def classify_srt_quality_content(
+    content: str,
+    byte_size: int,
+    video_duration: float | None,
+) -> str:
+    if not content.strip() or "-->" not in content:
+        return "invalid_or_empty"
+
+    cue_starts = [
+        srt_timestamp_seconds(match)
+        for line in content.splitlines()
+        if (match := SRT_TIMING_RE.match(line)) is not None
+    ]
+    cue_starts = [seconds for seconds in cue_starts if seconds is not None]
+    if not cue_starts:
+        return "invalid_or_empty"
+
+    first_cue_seconds = min(cue_starts)
+    video_is_short = video_duration is not None and video_duration <= SRT_SHORT_VIDEO_SECONDS
+    if (
+        byte_size < SRT_PARTIAL_MIN_BYTES
+        or len(cue_starts) < SRT_PARTIAL_MIN_CUES
+        or (first_cue_seconds > SRT_LATE_FIRST_CUE_SECONDS and not video_is_short)
+    ):
+        return "partial_or_forced"
+
+    return "full/usable"
+
+
+def srt_timestamp_seconds(match: re.Match[str]) -> float | None:
+    try:
+        hours = int(match.group(1))
+        minutes = int(match.group(2))
+        seconds = int(match.group(3))
+        millis = int((match.group(4) or "0").ljust(3, "0"))
+    except (TypeError, ValueError):
+        return None
+    return hours * 3600 + minutes * 60 + seconds + millis / 1000
+
+
+def save_downloaded_subtitle(
+    content: bytes,
+    srt_path: Path,
+    *,
+    replace_existing_partial: bool = False,
+) -> bool:
     if b"-->" not in content[:1_000_000]:
         return False
 
@@ -1923,10 +1999,17 @@ def save_downloaded_subtitle(content: bytes, srt_path: Path) -> bool:
 
     tmp_path = resolved.with_name(f".{resolved.name}.tmp")
     try:
-        if resolved.exists():
+        existing = resolved.exists()
+        if existing and not replace_existing_partial:
             return False
         tmp_path.write_bytes(content)
-        os.link(tmp_path, resolved)
+        if existing:
+            backup_path = subtitle_backup_path(resolved)
+            if not backup_path.exists():
+                shutil.copy2(resolved, backup_path)
+            os.replace(tmp_path, resolved)
+        else:
+            os.link(tmp_path, resolved)
         tmp_path.unlink(missing_ok=True)
         return True
     except FileExistsError:
