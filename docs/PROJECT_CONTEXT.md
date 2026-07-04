@@ -395,6 +395,19 @@ Playback:
 - Subtitle overlay uses app-rendered sidecar `.srt` SwiftUI overlay, stable in Cover/Aspect Fill.
 - Native VLC embedded subtitle fallback still exists when extraction is unavailable.
 
+Latest iOS VLC player preference memory checkpoint:
+
+- Changed files: `ios/PersonalCloudDownloader/Views/PlayerView.swift`, `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`.
+- Commit confirmed/pushed: `99e190a Fix Home reconnect and VLC player preferences`; verified on iPhone after building/installing the new IPA.
+- Earlier failed tests used an installed app without the preference code because the first attempt had a compile blocker: `PlayerPreference: Codable` stored `AspectMode?`, but `AspectMode` did not originally conform to `Codable`. Compile fix: `AspectMode` now conforms to `Codable`.
+- Ratio memory: VLC ratio/aspect mode is saved per video using the same stable `video.path` / resume-key strategy as playback position. On reopen, fullscreen passes drawable size to the VLC controller so restored aspect mode applies to real VLC rendering, not only button/UI state.
+- Subtitle memory is saved per video and distinguishes no saved preference, explicit Off, sidecar subtitle, and embedded subtitle track.
+- Sidecar restore enables the app-rendered sidecar overlay and keeps native VLC subtitles off.
+- Embedded restore saves track name plus fallback index, waits until VLC exposes tracks, retries until the chosen track can be applied, and confirms actual VLC SPU selection before latching.
+- Missing saved subtitle track or missing sidecar fails safely without crash; explicit Off suppresses sidecar default and embedded auto-select; no saved preference keeps previous default behavior.
+- Temporary `[VLC_PREF]` debug logs were used/kept for device verification if still present; removable after confirmation.
+- Unchanged: backend, subtitle search API, video progress API, Home dashboard API shape, Downloader, Network, legal-files-only, Tailscale-private, under-10GB, quick-delete rules.
+
 Real landscape:
 
 - Real iOS fullscreen landscape works on iPhone.
