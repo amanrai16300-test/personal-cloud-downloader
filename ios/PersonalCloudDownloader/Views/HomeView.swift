@@ -43,6 +43,11 @@ struct HomeView: View {
     @State private var dashboard = HomeDashboardState()
     @State private var refreshTask: Task<Void, Never>?
     @State private var refreshGeneration = 0
+    /// When the current refresh loop was started — dedupes overlapping
+    /// onAppear/foreground/reconnect-token triggers.
+    @State private var lastRefreshStart: Date?
+    /// Whether Home is the visible tab; foreground restarts only apply then.
+    @State private var isVisible = false
     /// Pushed when a media card is tapped — the matched real `CompletedFile`,
     /// which drives PlayerView's stream URL and AVPlayer/VLC routing.
     @State private var selectedVideo: CompletedFile?
@@ -106,9 +111,12 @@ struct HomeView: View {
                 await refreshDashboard()
             }
             .onAppear {
+                isVisible = true
+                loadCachedDashboardIfNeeded()
                 startRefreshLoop()
             }
             .onDisappear {
+                isVisible = false
                 stopRefreshLoop()
             }
             .onChange(of: scenePhase) { phase in
@@ -117,7 +125,12 @@ struct HomeView: View {
                 }
             }
             .onChange(of: reconnectCycle) { _ in
-                stopRefreshLoop()
+                // Foreground: restart immediately — the dashboard fetch itself
+                // is Home's health check, so it never waits on the /api/health
+                // probe gate. Hidden tabs stay stopped (onDisappear already did).
+                if isVisible {
+                    startRefreshLoop()
+                }
             }
             .onChange(of: reconnectRefreshToken) { _ in
                 startRefreshLoop()
@@ -788,17 +801,23 @@ struct HomeView: View {
         VLCPlayerController.importProgressSnapshot([matched.path: progress])
     }
 
-    // MARK: Refresh loop (unchanged behavior)
+    // MARK: Refresh loop
 
     private func startRefreshLoop() {
-        startRefreshLoop(foregroundReconnect: false)
-    }
-
-    private func startRefreshLoop(foregroundReconnect: Bool) {
+        // Dedupe: onAppear, foreground reconnect, and the reconnect token can
+        // all fire within moments of each other. If a loop is already running
+        // and its refresh started seconds ago, keep it instead of restarting
+        // the whole fetch chain.
+        if refreshTask != nil,
+           let last = lastRefreshStart,
+           Date().timeIntervalSince(last) < 3 {
+            return
+        }
         refreshTask?.cancel()
         refreshGeneration += 1
+        lastRefreshStart = Date()
         refreshTask = Task {
-            await refreshDashboard(foregroundReconnect: foregroundReconnect)
+            await refreshDashboard()
 
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: refreshInterval)
@@ -815,40 +834,65 @@ struct HomeView: View {
     }
 
     private func refreshDashboard() async {
-        await refreshDashboard(foregroundReconnect: false)
-    }
-
-    private func refreshDashboard(foregroundReconnect: Bool) async {
         let generation = await MainActor.run {
             refreshGeneration += 1
             dashboard.isRefreshing = true
-            dashboard.isReconnecting = foregroundReconnect
-            if !dashboard.hasLoaded || foregroundReconnect {
+            if !dashboard.hasLoaded {
                 dashboard.serverStatus = .loading
             }
             return refreshGeneration
         }
 
-        if foregroundReconnect {
-            try? await Task.sleep(nanoseconds: 750_000_000)
-            guard !Task.isCancelled else { return }
-        }
+        let result = await fetchDashboard()
 
-        let result = foregroundReconnect
-            ? await fetchDashboardWithRetries()
-            : await fetchDashboard()
-
-        // Resolve Recently Added grouping off the main actor: match each item to
-        // its real CompletedFile and group by torrent folder (the same identity
-        // VideosView uses). TV episodes sharing a folder collapse into one series
-        // entry; everything else stays an individual (movie) card.
-        let entries = await makeRecentlyAddedEntries(from: result?.response.recentlyAdded ?? [])
-
+        // Phase 1: apply the dashboard as soon as it arrives — first paint
+        // never waits for the library fetch. The current Recently Added
+        // entries stay on screen until the regrouped set lands.
         await MainActor.run {
             guard generation == refreshGeneration else { return }
-            dashboard.isReconnecting = false
-            dashboard = makeState(from: result, recentlyAddedEntries: entries)
+            dashboard = makeState(from: result, recentlyAddedEntries: dashboard.recentlyAddedEntries)
         }
+
+        guard let response = result?.response else { return }
+
+        // Phase 2: resolve Recently Added grouping off the main actor: match
+        // each item to its real CompletedFile and group by torrent folder (the
+        // same identity VideosView uses). TV episodes sharing a folder collapse
+        // into one series entry; everything else stays an individual (movie)
+        // card. Guarded by the same generation so a stale grouping can never
+        // overwrite a newer refresh.
+        let entries = await makeRecentlyAddedEntries(from: response.recentlyAdded ?? [])
+        await MainActor.run {
+            guard generation == refreshGeneration else { return }
+            dashboard.recentlyAddedEntries = entries
+        }
+    }
+
+    // MARK: Cache-first launch
+
+    private static let dashboardCacheKey = "homeDashboardCacheV1"
+
+    /// Render the last-good dashboard snapshot immediately on a cold launch,
+    /// before any network round-trip. Connection status and latency always come
+    /// from a live fetch, so they stay in the "checking" state; Recently Added
+    /// shows ungrouped fallback cards until the live refresh regroups series.
+    private func loadCachedDashboardIfNeeded() {
+        guard !dashboard.hasLoaded,
+              let data = UserDefaults.standard.data(forKey: Self.dashboardCacheKey),
+              let cached = try? JSONDecoder().decode(HomeDashboardResponse.self, from: data)
+        else { return }
+
+        var state = makeState(
+            from: DashboardFetch(response: cached, latencyMs: 0),
+            recentlyAddedEntries: (cached.recentlyAdded ?? [])
+                .prefix(Self.recentlyAddedDisplayLimit)
+                .enumerated()
+                .map { RecentlyAddedEntry(kind: .movie($0.element), sortDate: backendOrderDate(at: $0.offset)) }
+        )
+        state.serverStatus = .loading
+        state.latencyMs = nil
+        state.isRefreshing = true
+        dashboard = state
     }
 
     /// Build the view state from a fetch outcome, preserving the existing
@@ -961,20 +1005,6 @@ struct HomeView: View {
         return videos.first { normalizePath($0.path) == normalizePath(target) || normalizePath($0.name) == normalizePath(target) }
     }
 
-    private func fetchDashboardWithRetries() async -> DashboardFetch? {
-        for attempt in 1...3 {
-            if let result = await fetchDashboard() {
-                return result
-            }
-            guard attempt < 3 else { break }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if Task.isCancelled {
-                return nil
-            }
-        }
-        return nil
-    }
-
     /// One aggregated request. Measures the round-trip time client-side for the
     /// latency readout (the backend deliberately does not compute latency).
     private func fetchDashboard() async -> DashboardFetch? {
@@ -990,6 +1020,9 @@ struct HomeView: View {
                 return nil
             }
             let decoded = try JSONDecoder().decode(HomeDashboardResponse.self, from: data)
+            // Persist the raw (small, secret-free) payload as the last-good
+            // snapshot for instant cold-launch rendering.
+            UserDefaults.standard.set(data, forKey: Self.dashboardCacheKey)
             return DashboardFetch(response: decoded, latencyMs: Int(elapsedNs / 1_000_000))
         } catch {
             return nil

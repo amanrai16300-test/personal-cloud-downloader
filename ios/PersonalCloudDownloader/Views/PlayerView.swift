@@ -752,6 +752,16 @@ private struct VLCFullscreenView: View {
             wallClockText = Self.wallClockFormatter.string(from: Date())
             restoreSavedAdjustments()
             scheduleAutoHide()
+            // Give the controller its surface size up front so a RESTORED
+            // Fit/Cover preference is applied to the actual rendering —
+            // previously only the ratio button ever provided it.
+            fsVlc.updateAspectDrawableSize(landscapeSize)
+        }
+        // The cover can appear before the device finishes rotating to real
+        // landscape; re-record the settled size so a restored Cover crops to
+        // the true landscape aspect, not the pre-rotation frame.
+        .onChange(of: landscapeSize) { size in
+            fsVlc.updateAspectDrawableSize(size)
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
@@ -1106,7 +1116,6 @@ private struct VLCFullscreenView: View {
             if fsVlc.hasSidecarSubtitle {
                 Button {
                     fsVlc.setSidecarEnabled(true)
-                    fsVlc.selectSubtitle(index: -1)
                     if controlsVisible { scheduleAutoHide() }
                 } label: {
                     Label("Subtitles", systemImage: fsVlc.sidecarEnabled ? "checkmark" : "")
@@ -1115,12 +1124,13 @@ private struct VLCFullscreenView: View {
             ForEach(fsVlc.subtitleTracks) { track in
                 Button {
                     fsVlc.setSidecarEnabled(false)
-                    fsVlc.selectSubtitle(index: track.index)
+                    fsVlc.selectSubtitle(track: track)
                     if controlsVisible { scheduleAutoHide() }
                 } label: {
                     Label(
                         track.name,
-                        systemImage: !fsVlc.sidecarEnabled && fsVlc.currentSubtitleIndex == track.index ? "checkmark" : ""
+                        systemImage: !(fsVlc.hasSidecarSubtitle && fsVlc.sidecarEnabled)
+                            && fsVlc.currentSubtitleIndex == track.index ? "checkmark" : ""
                     )
                 }
             }
@@ -1131,7 +1141,8 @@ private struct VLCFullscreenView: View {
             } label: {
                 Label(
                     "Off",
-                    systemImage: !fsVlc.sidecarEnabled && fsVlc.currentSubtitleIndex == -1 ? "checkmark" : ""
+                    systemImage: !(fsVlc.hasSidecarSubtitle && fsVlc.sidecarEnabled)
+                        && fsVlc.currentSubtitleIndex == -1 ? "checkmark" : ""
                 )
             }
             Button {
@@ -1147,7 +1158,11 @@ private struct VLCFullscreenView: View {
             }
             .disabled(isSearchingSubtitles)
         } label: {
-            subtitleButtonLabel(on: fsVlc.sidecarEnabled || fsVlc.currentSubtitleIndex != -1 || isSearchingSubtitles)
+            subtitleButtonLabel(
+                on: (fsVlc.hasSidecarSubtitle && fsVlc.sidecarEnabled)
+                    || fsVlc.currentSubtitleIndex != -1
+                    || isSearchingSubtitles
+            )
         }
         .padding(.leading, 4)
     }

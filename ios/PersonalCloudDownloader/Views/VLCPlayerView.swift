@@ -37,6 +37,8 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }
     private static let savedPositionsDefaultsKey = "vlc.savedPlaybackPositions.v1"
     private static var savedPositions: [String: SavedPosition] = loadSavedPositions()
+    private static let savedPreferencesDefaultsKey = "vlc.playerPreferences.v1"
+    private static var savedPreferences: [String: PlayerPreference] = loadSavedPreferences()
 
     /// The key currently loaded, captured in `start` so `stop` can persist the
     /// position against the right key without the call site passing it back.
@@ -44,6 +46,20 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private var currentResumeKey: String?
 
     private var lastPeriodicPersistMs = 0
+
+    private struct PlayerPreference: Codable {
+        var aspectMode: AspectMode? = nil
+        var subtitle: SubtitlePreference? = nil
+    }
+
+    private enum SubtitlePreference: Codable, Equatable {
+        case sidecar
+        case embedded(name: String, fallbackIndex: Int32)
+        case off
+    }
+
+    private var savedSubtitlePreference: SubtitlePreference?
+    private var didApplySavedSubtitlePreference = false
 
     private static func normalizeResumeKey(_ key: String) -> String {
         key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -59,6 +75,31 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private static func writeSavedPositions() {
         guard let data = try? JSONEncoder().encode(savedPositions) else { return }
         UserDefaults.standard.set(data, forKey: savedPositionsDefaultsKey)
+    }
+
+    private static func loadSavedPreferences() -> [String: PlayerPreference] {
+        guard let data = UserDefaults.standard.data(forKey: savedPreferencesDefaultsKey),
+              let decoded = try? JSONDecoder().decode([String: PlayerPreference].self, from: data)
+        else { return [:] }
+        return decoded
+    }
+
+    private static func writeSavedPreferences() {
+        guard let data = try? JSONEncoder().encode(savedPreferences) else { return }
+        UserDefaults.standard.set(data, forKey: savedPreferencesDefaultsKey)
+    }
+
+    private func updatePreference(_ update: (inout PlayerPreference) -> Void) {
+        guard let key = currentResumeKey else {
+            print("[VLC_PREF] save skipped: no resume key (controller \(ObjectIdentifier(self)))")
+            return
+        }
+        var preference = Self.savedPreferences[key] ?? PlayerPreference()
+        update(&preference)
+        Self.savedPreferences[key] = preference
+        Self.writeSavedPreferences()
+        // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
+        print("[VLC_PREF] save key=\(key) aspect=\(preference.aspectMode?.rawValue ?? "nil") subtitle=\(String(describing: preference.subtitle)) controller=\(ObjectIdentifier(self))")
     }
 
     private static func savePosition(_ position: SavedPosition, for key: String) {
@@ -112,7 +153,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     ///     true cover. NOTE: cropping moves VLC's subtitle anchor, so subtitles
     ///     can shift in Cover — accepted for now (Cover correctness prioritized);
     ///     a stable-subtitle Aspect Fill needs a separate overlay later.
-    enum AspectMode: String, CaseIterable {
+    enum AspectMode: String, CaseIterable, Codable {
         case fit
         case cover
 
@@ -321,6 +362,13 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
            saved.timeMs > 0 {
             pendingResume = saved
         }
+        let savedPreference = currentResumeKey.flatMap { Self.savedPreferences[$0] }
+        aspectMode = savedPreference?.aspectMode ?? .fit
+        aspectApplied = false
+        savedSubtitlePreference = savedPreference?.subtitle
+        didApplySavedSubtitlePreference = false
+        // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
+        print("[VLC_PREF] load key=\(currentResumeKey ?? "nil") found=\(savedPreference != nil) aspect=\(savedPreference?.aspectMode?.rawValue ?? "nil") subtitle=\(String(describing: savedPreference?.subtitle)) controller=\(ObjectIdentifier(self))")
 
         didAutoSelectSubtitle = false
         subtitleTracks = []
@@ -331,7 +379,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         // Reset sidecar state and look for a `.srt` beside the video.
         sidecarCues = []
         hasSidecarSubtitle = false
-        sidecarEnabled = true
+        sidecarEnabled = savedSubtitlePreference != .off
         currentSubtitleText = nil
         fetchSidecarSubtitle(for: url)
 
@@ -430,6 +478,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             // Overlay is the sole subtitle source: keep native VLC SPU off.
             self.player.currentVideoSubTitleIndex = -1
             self.currentSubtitleIndex = -1
+            self.applySavedSubtitlePreferenceIfPossible()
             self.updateCurrentCue()
         }
     }
@@ -511,7 +560,16 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Toggle the sidecar overlay on/off from the picker. Keeps native SPU off
     /// either way (overlay is the only subtitle source when a sidecar exists).
     func setSidecarEnabled(_ on: Bool) {
+        // Manual toggle supersedes any pending saved-preference restore.
+        didApplySavedSubtitlePreference = true
         sidecarEnabled = on
+        if on {
+            player.currentVideoSubTitleIndex = -1
+            currentSubtitleIndex = -1
+            updatePreference { $0.subtitle = .sidecar }
+        } else if currentSubtitleIndex == -1 {
+            updatePreference { $0.subtitle = .off }
+        }
         updateCurrentCue()
     }
 
@@ -575,6 +633,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// the fullscreen ratio button.
     func cycleAspect(drawableSize: CGSize) {
         aspectMode = aspectMode.next
+        updatePreference { $0.aspectMode = aspectMode }
         aspectApplied = false
         applyAspect(drawableSize: drawableSize)
     }
@@ -613,6 +672,20 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         }
     }
 
+    /// Record the fullscreen surface size so a RESTORED aspect mode can reach
+    /// the renderer without a ratio-button press (`cycleAspect` was previously
+    /// the only place `aspectDrawableSize` was ever set, so a restored Cover
+    /// changed the button label but never the video). Called from the
+    /// fullscreen view's onAppear and again when the landscape rotation
+    /// settles; the actual apply still defers via `reapplyAspectIfNeeded`
+    /// until VLC has parsed the video track.
+    func updateAspectDrawableSize(_ size: CGSize) {
+        guard size != .zero, size != aspectDrawableSize else { return }
+        aspectDrawableSize = size
+        aspectApplied = false
+        reapplyAspectIfNeeded()
+    }
+
     /// Re-apply the current mode once playback is underway. The crop string set
     /// before the video track is parsed can be dropped by VLC; re-applying after
     /// the first frames (when `videoSize` is non-zero) makes Cover reliable.
@@ -623,6 +696,8 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         guard v.width > 0, v.height > 0 else { return }
         applyAspect(drawableSize: aspectDrawableSize)
         aspectApplied = true
+        // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
+        print("[VLC_PREF] aspect applied mode=\(aspectMode.rawValue) surface=\(Int(aspectDrawableSize.width))x\(Int(aspectDrawableSize.height))")
     }
 
     /// Hand a freshly-duplicated C string to a VLC setter. VLC copies the value,
@@ -730,9 +805,11 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             subtitleTracks = tracks
         }
 
+        applySavedSubtitlePreferenceIfPossible()
+
         // Sidecar remains the default when present, but embedded tracks stay
         // selectable in the menu.
-        if !hasSidecarSubtitle, !didAutoSelectSubtitle, let first = tracks.first {
+        if savedSubtitlePreference == nil, !hasSidecarSubtitle, !didAutoSelectSubtitle, let first = tracks.first {
             didAutoSelectSubtitle = true
             selectSubtitle(index: first.index)
         }
@@ -743,8 +820,63 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// Select an SPU track by VLC index, or pass `-1` to turn subtitles off.
     /// Called by the picker and by the one-time auto-select.
     func selectSubtitle(index: Int32) {
+        // A manual choice supersedes any still-pending saved-preference restore
+        // (e.g. a slow sidecar arriving later must not override it).
+        didApplySavedSubtitlePreference = true
         player.currentVideoSubTitleIndex = index
         currentSubtitleIndex = index
+        if index == -1 {
+            updatePreference { $0.subtitle = .off }
+        }
+    }
+
+    func selectSubtitle(track: SubtitleTrack) {
+        didApplySavedSubtitlePreference = true
+        player.currentVideoSubTitleIndex = track.index
+        currentSubtitleIndex = track.index
+        updatePreference { $0.subtitle = .embedded(name: track.name, fallbackIndex: track.index) }
+    }
+
+    private func applySavedSubtitlePreferenceIfPossible() {
+        guard !didApplySavedSubtitlePreference, let preference = savedSubtitlePreference else { return }
+
+        switch preference {
+        case .sidecar:
+            guard hasSidecarSubtitle else { return }
+            sidecarEnabled = true
+            player.currentVideoSubTitleIndex = -1
+            currentSubtitleIndex = -1
+            didApplySavedSubtitlePreference = true
+            // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
+            print("[VLC_PREF] subtitle restored: sidecar")
+            updateCurrentCue()
+
+        case .embedded(let name, let fallbackIndex):
+            guard let track = subtitleTracks.first(where: { $0.name == name })
+                    ?? subtitleTracks.first(where: { $0.index == fallbackIndex }) else { return }
+            sidecarEnabled = false
+            player.currentVideoSubTitleIndex = track.index
+            currentSubtitleIndex = track.index
+            // VLC can drop an SPU set issued while the stream is still opening.
+            // Only latch once the player confirms; until then this re-runs on
+            // every time-changed tick, so the restore retries instead of
+            // silently failing forever.
+            if player.currentVideoSubTitleIndex == track.index {
+                didApplySavedSubtitlePreference = true
+                // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
+                print("[VLC_PREF] subtitle restored: embedded name=\(track.name) index=\(track.index)")
+            }
+            updateCurrentCue()
+
+        case .off:
+            sidecarEnabled = false
+            player.currentVideoSubTitleIndex = -1
+            currentSubtitleIndex = -1
+            didApplySavedSubtitlePreference = true
+            // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
+            print("[VLC_PREF] subtitle restored: off")
+            updateCurrentCue()
+        }
     }
 
     // MARK: Audio tracks
