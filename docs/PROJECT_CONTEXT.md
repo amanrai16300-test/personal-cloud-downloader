@@ -172,22 +172,29 @@ Subtitles:
 - Backend sanitizes active `.srt` and `.vtt` sidecars, removing common HTML tags/entities and ASS/SSA override tags while preserving timing.
 - Existing subtitle files get one `.bak` backup before sanitization.
 
-CloudBox online subtitle search checkpoint:
+CloudBox subtitle search and selection checkpoint:
 
 - Changed files: `backend/main.py`, `ios/PersonalCloudDownloader/Views/PlayerView.swift`, `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`.
-- New backend endpoint: `POST /api/subtitles/search`.
-- Existing extraction endpoint remains: `POST /api/subtitles/extract`.
-- OpenSubtitles.com REST API is used through env-only config: `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`.
-- Missing OpenSubtitles env config returns `provider_not_configured`.
-- Existing `.srt` files are never overwritten.
-- Match scoring threshold is `72.0`.
-- Episode subtitles require exact season+episode match.
-- Below threshold returns `low_confidence`; no candidates returns `not_found`.
-- Saved subtitles use `<video>.srt`, sanitizer, and existing sidecar playback path.
-- iOS subtitle menu now shows `Find subtitles` when VLC has no sidecar or embedded subtitles.
-- `found` / `exists` refreshes and enables the existing sidecar subtitle path.
-- Checks passed: `python -m py_compile backend/main.py`; `git diff --check`.
-- Swift/Xcode build was not available locally.
+- Backend subtitle search added `POST /api/subtitles/search`; existing `POST /api/subtitles/extract` remains.
+- OpenSubtitles.com REST API uses env-only config: `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`.
+- Missing OpenSubtitles env returns `provider_not_configured` before provider calls or file creation.
+- Existing full/usable `.srt` returns `exists`; existing partial/forced or invalid `.srt` no longer blocks provider search.
+- Match threshold is `72.0`; episode subtitles require exact season+episode match.
+- Low-confidence matches return `low_confidence` and do not replace the subtitle; no candidates return `not_found`.
+- Saved subtitles use `<video>.srt`, temp write/atomic replace, backup for replaced partial subtitle, and existing sanitizer.
+- Existing `.srt` is never blindly overwritten.
+- Oracle checks verified: `/api/health` returns ok; `/api/home-dashboard` returns 200 JSON after helper-conflict fix; `provider_not_configured` verified before real env values; OpenSubtitles env attached through systemd drop-in; `not_found` verified for a no-sidecar file; Thunderbolts partial sidecar search returned `low_confidence` with score around `60.48`, so backend safely kept existing subtitle.
+- Home dashboard fix: duplicate helper conflict in `backend/main.py` was fixed by renaming the Home parser helper to `clean_home_media_title`; root cause was subtitle helper `clean_media_title(text)` conflicting with the Home helper that expected three args.
+- iOS VLC subtitle menu now combines all subtitle sources instead of choosing sidecar OR embedded.
+- Sidecar-only menu: `Subtitles`, `Off`, `Find better subtitles`.
+- Embedded-only menu: each VLC embedded subtitle track, `Off`, `Find subtitles`.
+- Sidecar + embedded menu: `Subtitles`, every VLC embedded track, `Off`, `Find better subtitles`.
+- No subtitles menu: `Off`, `Find subtitles`.
+- Selecting sidecar uses the existing sidecar overlay path; selecting embedded tracks uses real VLC track names/indexes.
+- `Find subtitles` and `Find better subtitles` both call existing `/api/subtitles/search`.
+- Thunderbolts was verified conceptually: sidecar plus embedded tracks should be selectable; embedded English can be selected instead of the partial sidecar.
+- Checks passed: `python3 -m py_compile backend/main.py`; `git diff --check`.
+- Swift compile unavailable locally.
 
 Network/storage:
 
