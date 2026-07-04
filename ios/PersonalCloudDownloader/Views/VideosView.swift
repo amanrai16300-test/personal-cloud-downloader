@@ -487,11 +487,18 @@ enum VideoGrouping {
 /// picker screen for grouped series — no duplicate episode list.
 struct FolderVideosView: View {
     let folder: VideoFolder
-    let progressByPath: [String: VideoProgress]
+    private let initialProgressByPath: [String: VideoProgress]
+    @State private var refreshedProgressByPath: [String: VideoProgress]
     private let background = Color(red: 0.008, green: 0.022, blue: 0.055)
     private let panel = Color(red: 0.035, green: 0.065, blue: 0.125)
     private let muted = Color(red: 0.56, green: 0.64, blue: 0.78)
     private let premiumBlue = Color(red: 0.30, green: 0.59, blue: 1.0)
+
+    init(folder: VideoFolder, progressByPath: [String: VideoProgress]) {
+        self.folder = folder
+        self.initialProgressByPath = progressByPath
+        _refreshedProgressByPath = State(initialValue: progressByPath)
+    }
 
     var body: some View {
         ScrollView {
@@ -501,7 +508,7 @@ struct FolderVideosView: View {
                 VStack(spacing: 0) {
                     ForEach(folder.videos) { video in
                         NavigationLink(value: video) {
-                            row(video, progress: progressByPath[video.path])
+                            row(video, progress: refreshedProgressByPath[video.path])
                         }
                         .buttonStyle(CloudBoxPressStyle())
 
@@ -526,10 +533,52 @@ struct FolderVideosView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .onAppear {
+            if refreshedProgressByPath.isEmpty, !initialProgressByPath.isEmpty {
+                refreshedProgressByPath = initialProgressByPath
+            }
+            Task { await refreshProgress() }
+        }
     }
 
     private func row(_ video: CompletedFile, progress: VideoProgress?) -> some View {
         FolderVideoRow(video: video, progress: progress)
+    }
+
+    @MainActor
+    private func refreshProgress() async {
+        let backendProgress = (try? await CompletedFilesAPI.fetchVideoProgress()) ?? [:]
+        let localProgress = VLCPlayerController.localProgressSnapshot()
+        let merged = Self.mergeProgressByPath(
+            seed: refreshedProgressByPath.isEmpty ? initialProgressByPath : refreshedProgressByPath,
+            backend: backendProgress,
+            local: localProgress,
+            videos: folder.videos
+        )
+        await MainActor.run {
+            refreshedProgressByPath = merged
+        }
+    }
+
+    private static func mergeProgressByPath(
+        seed: [String: VideoProgress],
+        backend: [String: VideoProgress],
+        local: [String: VideoProgress],
+        videos: [CompletedFile]
+    ) -> [String: VideoProgress] {
+        var merged = seed
+        for video in videos {
+            let path = video.path
+            let candidates = [merged[path], backend[path], local[path]].compactMap { $0 }
+            guard let latest = candidates.max(by: { lhs, rhs in
+                if let lhsDate = lhs.updatedDate, let rhsDate = rhs.updatedDate {
+                    return lhsDate < rhsDate
+                }
+                return lhs.timeMs < rhs.timeMs
+            }) else { continue }
+            merged[path] = latest
+        }
+        return merged
     }
 
     private var folderHeader: some View {
