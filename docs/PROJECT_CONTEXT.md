@@ -408,6 +408,14 @@ Latest iOS VLC player preference memory checkpoint:
 - Temporary `[VLC_PREF]` debug logs were used/kept for device verification if still present; removable after confirmation.
 - Unchanged: backend, subtitle search API, video progress API, Home dashboard API shape, Downloader, Network, legal-files-only, Tailscale-private, under-10GB, quick-delete rules.
 
+Latest iOS player audio/accessibility checkpoint:
+
+- Changed files: `ios/PersonalCloudDownloader/Views/PlayerView.swift`, `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`.
+- Root cause: hidden `MPVolumeView` was visually hidden but still exposed to iOS accessibility, causing VoiceOver/volume speech popup during volume gesture or saved-volume restore. VLC playback had no app-owned `AVAudioSession` activation, so MobileVLCKit stop/teardown could deactivate the shared audio session during fullscreen dismiss/remount or after exit, causing muted/broken audio.
+- Fix: `MPVolumeView` is now hidden from accessibility on both SwiftUI and UIKit sides; saved volume restore skips redundant `setVolume` when saved volume is effectively equal to current system volume; VLC start activates `AVAudioSession` with `.playback` and `.moviePlayback` before `player.play()`; no `setActive(false)` is added on exit; temporary `[PLAYER_AUDIO]` logs were removed after cleanup.
+- Unchanged: backend, APIs, Home, Downloader, Network, subtitles API, `project.yml`, player resume, subtitles, audio selector, gestures, Fit/Cover, real landscape, timeline, and progress saving.
+- Status: native iOS change; requires new IPA build/install before installed app reflects the fix. Do not claim final iPhone verification unless it has already been tested on device.
+
 Real landscape:
 
 - Real iOS fullscreen landscape works on iPhone.
