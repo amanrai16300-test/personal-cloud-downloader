@@ -401,10 +401,9 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         do {
             try session.setCategory(.playback, mode: .moviePlayback)
             try session.setActive(true)
-            // TEMPORARY diagnostic — remove once exit-audio fix is verified on device.
-            print("[PLAYER_AUDIO] session active: category=playback mode=moviePlayback")
         } catch {
-            print("[PLAYER_AUDIO] session activation FAILED: \(error)")
+            // Non-fatal: playback still starts; VLC's internal session
+            // handling remains the fallback if activation is refused.
         }
     }
 
