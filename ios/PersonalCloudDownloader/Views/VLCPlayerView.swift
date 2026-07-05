@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 import MobileVLCKit
 
 /// Owns the `VLCMediaPlayer` for one playback screen and publishes its
@@ -383,7 +384,28 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         currentSubtitleText = nil
         fetchSidecarSubtitle(for: url)
 
+        activateAudioSession()
         player.play()
+    }
+
+    /// Own the audio session instead of relying on MobileVLCKit's internal
+    /// management: VLC deactivates the shared session on `stop()`, and the
+    /// fullscreen⇄inline hand-off runs the new controller's `start` BEFORE the
+    /// old controller's teardown, so that deactivation can land under live
+    /// playback and leave audio muted/broken. Re-asserting `.playback` +
+    /// active here on every `start` makes each (re)start begin with a valid,
+    /// active session. No matching deactivation on exit — deliberate, so a
+    /// late `stop()` from a dying controller can't kill the next player's audio.
+    private func activateAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+            // TEMPORARY diagnostic — remove once exit-audio fix is verified on device.
+            print("[PLAYER_AUDIO] session active: category=playback mode=moviePlayback")
+        } catch {
+            print("[PLAYER_AUDIO] session activation FAILED: \(error)")
+        }
     }
 
     /// Try to fetch and parse a sidecar `.srt` beside the video — e.g.

@@ -712,6 +712,9 @@ private struct VLCFullscreenView: View {
                 .frame(width: 120, height: 32)
                 .opacity(0.001)
                 .allowsHitTesting(false)
+                // Hidden volume plumbing only — must never be a VoiceOver
+                // element, or its slider gets focused and spoken mid-playback.
+                .accessibilityHidden(true)
 
             // State overlay (spinner / replay) centered over the video.
             overlay
@@ -881,17 +884,26 @@ private struct VLCFullscreenView: View {
 
         if defaults.object(forKey: savedVolumeKey) != nil {
             let savedVolume = Float(clamp(defaults.double(forKey: savedVolumeKey)))
-            _ = SystemVolumeController.shared.setVolume(savedVolume)
+            applySavedVolumeIfNeeded(savedVolume)
         }
 
         syncAdjustmentState()
         DispatchQueue.main.async {
             if defaults.object(forKey: savedVolumeKey) != nil {
                 let savedVolume = Float(clamp(defaults.double(forKey: savedVolumeKey)))
-                _ = SystemVolumeController.shared.setVolume(savedVolume)
+                applySavedVolumeIfNeeded(savedVolume)
             }
             syncAdjustmentState()
         }
+    }
+
+    /// Only touch the system volume when the saved value actually differs from
+    /// the current one. A redundant set fires the MPVolumeView slider's
+    /// `.valueChanged` action, which can surface a system/VoiceOver volume
+    /// announcement on every fullscreen open for no user-visible change.
+    private func applySavedVolumeIfNeeded(_ savedVolume: Float) {
+        guard abs(savedVolume - SystemVolumeController.shared.volume) > 0.01 else { return }
+        _ = SystemVolumeController.shared.setVolume(savedVolume)
     }
 
     private func syncAdjustmentState() {
@@ -1348,6 +1360,9 @@ private struct SystemVolumeView: UIViewRepresentable {
         let view = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 120, height: 32))
         view.showsRouteButton = false
         view.showsVolumeSlider = true
+        // Off-screen control used only to drive system volume; hide it (and its
+        // UISlider) from the accessibility tree so VoiceOver never announces it.
+        view.accessibilityElementsHidden = true
         DispatchQueue.main.async {
             SystemVolumeController.shared.attach(volumeView: view)
         }
