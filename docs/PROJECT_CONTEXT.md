@@ -416,6 +416,20 @@ Latest iOS player audio/accessibility checkpoint:
 - Unchanged: backend, APIs, Home, Downloader, Network, subtitles API, `project.yml`, player resume, subtitles, audio selector, gestures, Fit/Cover, real landscape, timeline, and progress saving.
 - Status: native iOS change; requires new IPA build/install before installed app reflects the fix. Do not claim final iPhone verification unless it has already been tested on device.
 
+Latest iOS fullscreen player overlay fixes checkpoint:
+
+- Changed file: `ios/PersonalCloudDownloader/Views/PlayerView.swift`.
+- `VLCPlayerView.swift` was untouched because fullscreen chrome and sidecar subtitle overlay live in `PlayerView.swift`.
+- Fixed battery clipping by moving the iOS-style battery indicator inward only when the landscape safe inset is insufficient; clock and top timeline positions remain unchanged.
+- Fixed lock trap by replacing fragile locked tap-toggle behavior with reliable `revealUnlockControl` behavior: any tap/swipe while locked reveals unlock, only unlock button exits locked mode, and unlock restores controls/auto-hide.
+- Added current-style translucent horizontal bottom backdrop behind lock/subtitle/transport/audio/Fit controls; timeline remains top-only.
+- Added manual sidecar subtitle controls in fullscreen: drag subtitle text up/down to adjust vertical position; pinch subtitle text to scale subtitle size; clamp position and scale safely; gestures are inert while locked.
+- Added subtitle avoidance so when player controls are visible, sidecar subtitles lift above the bottom overlay; when controls hide, subtitles return to the manual position.
+- Native VLC embedded subtitles are unaffected.
+- Subtitle position/scale currently persist through global `UserDefaults` keys, not per-video, because per-video `PlayerPreference` lives in `VLCPlayerView.swift` and was intentionally not touched.
+- Unchanged: backend, APIs, Home, Videos library, Downloader, Network, `project.yml`, top timeline, centered device clock, unlocked gestures, audio selector, Fit/Cover, resume/progress saving, real landscape.
+- Status: Swift compile not verified on Windows; requires iOS build/device verification.
+
 Real landscape:
 
 - Real iOS fullscreen landscape works on iPhone.
