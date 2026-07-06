@@ -760,8 +760,10 @@ private struct VLCFullscreenView: View {
                     fontSize: 16 * subtitleScale,
                     interactive: !isLocked
                 )
-                .gesture(subtitleDragGesture)
+                .contentShape(Rectangle())
+                .highPriorityGesture(subtitleDragGesture)
                 .simultaneousGesture(subtitlePinchGesture)
+                .allowsHitTesting(!isLocked)
                 .padding(.bottom, subtitleBottomPadding)
             }
             .animation(.easeInOut(duration: 0.2), value: controlsVisible)
@@ -780,21 +782,26 @@ private struct VLCFullscreenView: View {
             }
 
             // Locked: the ONLY interactive element is this small unlock control,
-            // in the same circle style as the other overlay buttons. Tapping the
-            // video toggles it; it auto-hides like the normal controls.
+            // in the same circle style as the other overlay buttons. Any locked
+            // touch reveals it; it auto-hides like the normal controls.
             if isLocked && unlockControlVisible {
-                HStack {
-                    Button(action: unlockControls) {
-                        Image(systemName: "lock.fill")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .background(.black.opacity(0.45), in: Circle())
-                            .contentShape(Circle())
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    HStack {
+                        Button(action: unlockControls) {
+                            Image(systemName: "lock.open.fill")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 52, height: 52)
+                                .background(.black.opacity(0.45), in: Circle())
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(PlayerPressStyle())
+                        Spacer()
                     }
-                    .buttonStyle(PlayerPressStyle())
                     .padding(.leading, 16 + safeInsets.leading)
-                    Spacer()
+                    .padding(.trailing, 16 + safeInsets.trailing)
+                    .padding(.bottom, 8 + safeInsets.bottom)
                 }
                 .transition(.opacity)
             }
@@ -937,10 +944,14 @@ private struct VLCFullscreenView: View {
     /// are up so subtitles are never hidden behind them. When controls hide,
     /// this falls back to the manual position.
     private var subtitleBottomPadding: CGFloat {
-        // Bottom bar occupies ~(safeInsets.bottom + 70)pt: 8 bottom padding +
-        // backdrop-padded 56pt row + 6 top padding; +12 gap above it.
-        let lifted = safeInsets.bottom + 82
-        return controlsVisible && !isLocked ? max(lifted, subtitleDistance) : subtitleDistance
+        // Bottom bar occupies ~70pt plus the home-indicator inset; keep extra
+        // clearance for the backdrop and combine it with the user's manual
+        // distance so dragging remains visible while controls are up.
+        let controlsLift = safeInsets.bottom + 96
+        if controlsVisible && !isLocked {
+            return clampedSubtitleDistance(subtitleDistance + controlsLift)
+        }
+        return subtitleDistance
     }
 
     /// Keep the subtitle block on screen: never under the home indicator, never
@@ -962,6 +973,7 @@ private struct VLCFullscreenView: View {
     private var subtitleDragGesture: some Gesture {
         DragGesture()
             .onChanged { value in
+                guard !isLocked else { return }
                 if subtitleDragStartDistance == nil {
                     subtitleDragStartDistance = subtitleDistance
                 }
@@ -970,6 +982,7 @@ private struct VLCFullscreenView: View {
                 subtitleDistance = clampedSubtitleDistance(start - value.translation.height)
             }
             .onEnded { _ in
+                guard !isLocked else { return }
                 subtitleDragStartDistance = nil
                 UserDefaults.standard.set(Double(subtitleDistance), forKey: savedSubtitleDistanceKey)
             }
@@ -979,6 +992,7 @@ private struct VLCFullscreenView: View {
     private var subtitlePinchGesture: some Gesture {
         MagnificationGesture()
             .onChanged { value in
+                guard !isLocked else { return }
                 if subtitlePinchStartScale == nil {
                     subtitlePinchStartScale = subtitleScale
                 }
@@ -986,6 +1000,7 @@ private struct VLCFullscreenView: View {
                 subtitleScale = clampedSubtitleScale(start * value)
             }
             .onEnded { _ in
+                guard !isLocked else { return }
                 subtitlePinchStartScale = nil
                 UserDefaults.standard.set(Double(subtitleScale), forKey: savedSubtitleScaleKey)
             }
@@ -1004,7 +1019,10 @@ private struct VLCFullscreenView: View {
     private var videoAreaGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard !isLocked else { return }
+                guard !isLocked else {
+                    revealUnlockControl()
+                    return
+                }
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
                 let isHorizontalSwipe = abs(horizontal) >= 44 && abs(horizontal) > abs(vertical) * 1.5

@@ -416,19 +416,16 @@ Latest iOS player audio/accessibility checkpoint:
 - Unchanged: backend, APIs, Home, Downloader, Network, subtitles API, `project.yml`, player resume, subtitles, audio selector, gestures, Fit/Cover, real landscape, timeline, and progress saving.
 - Status: native iOS change; requires new IPA build/install before installed app reflects the fix. Do not claim final iPhone verification unless it has already been tested on device.
 
-Latest iOS fullscreen player overlay fixes checkpoint:
+Latest iOS fullscreen overlay fix checkpoint:
 
 - Changed file: `ios/PersonalCloudDownloader/Views/PlayerView.swift`.
-- `VLCPlayerView.swift` was untouched because fullscreen chrome and sidecar subtitle overlay live in `PlayerView.swift`.
-- Fixed battery clipping by moving the iOS-style battery indicator inward only when the landscape safe inset is insufficient; clock and top timeline positions remain unchanged.
-- Fixed lock trap by replacing fragile locked tap-toggle behavior with reliable `revealUnlockControl` behavior: any tap/swipe while locked reveals unlock, only unlock button exits locked mode, and unlock restores controls/auto-hide.
-- Added current-style translucent horizontal bottom backdrop behind lock/subtitle/transport/audio/Fit controls; timeline remains top-only.
-- Added manual sidecar subtitle controls in fullscreen: drag subtitle text up/down to adjust vertical position; pinch subtitle text to scale subtitle size; clamp position and scale safely; gestures are inert while locked.
-- Added subtitle avoidance so when player controls are visible, sidecar subtitles lift above the bottom overlay; when controls hide, subtitles return to the manual position.
-- Native VLC embedded subtitles are unaffected.
-- Subtitle position/scale currently persist through global `UserDefaults` keys, not per-video, because per-video `PlayerPreference` lives in `VLCPlayerView.swift` and was intentionally not touched.
-- Unchanged: backend, APIs, Home, Videos library, Downloader, Network, `project.yml`, top timeline, centered device clock, unlocked gestures, audio selector, Fit/Cover, resume/progress saving, real landscape.
-- Status: Swift compile not verified on Windows; requires iOS build/device verification.
+- Fixed locked unlock button placement: unlock now appears in the bottom safe-area region near the normal Lock slot, with a larger 52x52 tap target, so it is not hidden by the iPhone landscape bezel/corner.
+- Locked touch now reveals unlock during swipe/touch start, not only at gesture end.
+- Fixed sidecar subtitle manual drag by attaching high-priority drag to the actual fullscreen `SubtitleOverlay`; hit testing is disabled while locked.
+- Fixed subtitle lift behavior: when bottom controls are visible, subtitle position now adds bottom chrome clearance + safe inset to the manual subtitle distance; when controls hide, subtitle returns to manual position.
+- Root causes: unlock was rendered in a leading overlay instead of the bottom safe controls area; subtitle drag lost priority to fullscreen video gestures; subtitle lift used too-small fixed clearance and did not combine correctly with manual offset.
+- Unchanged: `VLCPlayerView.swift`, backend, APIs, Home, Videos library, Downloader, Network, `project.yml`, top timeline, centered device clock, battery behavior, audio selector, Fit/Cover, resume/progress saving, real landscape.
+- Status: Swift compile not verified on Windows; `git diff --check` passed except CRLF warning.
 
 Real landscape:
 
