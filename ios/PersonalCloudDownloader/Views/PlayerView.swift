@@ -1055,13 +1055,14 @@ private struct VLCFullscreenView: View {
         min(max(value, 0), 1)
     }
 
-    /// Hide the controls after `autoHideDelay`, but only while playing — paused
-    /// playback keeps them up so the user isn't left with a frozen, bare frame.
+    /// Hide the controls after `autoHideDelay`, but only while playing and not
+    /// actively scrubbing — paused playback or an active timeline drag keeps
+    /// them up so the user isn't left with a frozen, bare frame.
     /// Re-arming cancels any previously scheduled hide.
     private func scheduleAutoHide() {
         autoHideTask?.cancel()
         let task = DispatchWorkItem {
-            if fsVlc.isPlaying {
+            if fsVlc.isPlaying && !fsVlc.isScrubbing {
                 controlsVisible = false
             }
         }
@@ -1183,7 +1184,11 @@ private struct VLCFullscreenView: View {
 
                 TimelineSlider(
                     progress: $fsVlc.progress,
-                    onScrubBegan: { fsVlc.beginScrubbing() },
+                    onScrubBegan: {
+                        controlsVisible = true
+                        autoHideTask?.cancel()
+                        fsVlc.beginScrubbing()
+                    },
                     onScrubEnded: { fraction in
                         fsVlc.endScrubbing(to: fraction)
                         if controlsVisible { scheduleAutoHide() }
