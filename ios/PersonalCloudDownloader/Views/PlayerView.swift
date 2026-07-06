@@ -750,23 +750,43 @@ private struct VLCFullscreenView: View {
             // Sidecar `.srt` subtitle overlay — bottom-centered. Holds its position
             // in BOTH Fit and Cover (native VLC subtitles shift with the Cover
             // crop). Draggable up/down and pinch-zoomable (sidecar overlay only —
-            // native VLC embedded subtitles are untouched); lifts above the
-            // bottom bar when controls are up, then returns to the user's manual
-            // position when they hide. Gestures are inert while locked.
-            VStack {
-                Spacer()
-                SubtitleOverlay(
-                    text: fsVlc.currentSubtitleText,
-                    fontSize: 16 * subtitleScale,
-                    interactive: !isLocked
-                )
-                .contentShape(Rectangle())
-                .highPriorityGesture(subtitleDragGesture)
-                .simultaneousGesture(subtitlePinchGesture)
-                .allowsHitTesting(!isLocked)
-                .padding(.bottom, subtitleBottomPadding)
+            // native VLC embedded subtitles render inside the drawable and cannot
+            // be controlled at runtime); lifts above the bottom bar when controls
+            // are up, then returns to the user's manual position when they hide.
+            //
+            // The gesture HOST is this persistent strip, not the cue text: the
+            // text view exists only while a cue is on screen, so gestures hung
+            // off it were destroyed (and cancelled mid-drag/pinch) at every gap
+            // between cues. The strip lives as long as the sidecar source is
+            // active, so a drag/pinch survives cue changes; it only ACCEPTS new
+            // touches while text is actually visible, so tapping the empty band
+            // still toggles the controls normally.
+            if fsVlc.hasSidecarSubtitle && fsVlc.sidecarEnabled {
+                VStack {
+                    Spacer()
+                    SubtitleOverlay(
+                        text: fsVlc.currentSubtitleText,
+                        fontSize: 16 * subtitleScale,
+                        interactive: true
+                    )
+                    // Bottom-anchored so the text sits exactly where it used to;
+                    // the 44pt min height just widens the grab/pinch target.
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .bottom)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(subtitleDragGesture)
+                    .simultaneousGesture(subtitlePinchGesture)
+                    .allowsHitTesting(!isLocked && !(fsVlc.currentSubtitleText ?? "").isEmpty)
+                    .padding(.bottom, subtitleBottomPadding)
+                }
+                .animation(.easeInOut(duration: 0.2), value: controlsVisible)
+                // If the host is torn down mid-gesture (subtitles switched off),
+                // onEnded never fires — clear the anchors so the next drag/pinch
+                // doesn't resume from a stale start value.
+                .onDisappear {
+                    subtitleDragStartDistance = nil
+                    subtitlePinchStartScale = nil
+                }
             }
-            .animation(.easeInOut(duration: 0.2), value: controlsVisible)
 
             if controlsVisible && !isLocked {
                 // nPlayer-style chrome: a translucent top bar (close, times,

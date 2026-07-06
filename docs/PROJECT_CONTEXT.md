@@ -427,6 +427,23 @@ Latest iOS fullscreen overlay fix checkpoint:
 - Unchanged: `VLCPlayerView.swift`, backend, APIs, Home, Videos library, Downloader, Network, `project.yml`, top timeline, centered device clock, battery behavior, audio selector, Fit/Cover, resume/progress saving, real landscape.
 - Status: Swift compile not verified on Windows; `git diff --check` passed except CRLF warning.
 
+Latest fullscreen sidecar subtitle drag/resize checkpoint:
+
+- Changed file: `ios/PersonalCloudDownloader/Views/PlayerView.swift`.
+- Actual visible sidecar subtitle render path: `VLCPlayerController.updateCurrentCue()` -> publishes `currentSubtitleText` when sidecar `.srt` is active -> `VLCFullscreenView` body `ZStack` -> `SubtitleOverlay` -> visible `Text` in `PlayerView.swift`.
+- There is no duplicate/dead fullscreen sidecar subtitle view; the inline overlay in `vlcSurface` does not mount in fullscreen.
+- Root cause: subtitle drag/pinch gestures were attached to the per-cue `Text` view, but `SubtitleOverlay` only renders text while a cue is active. SRT cue gaps destroy/recreate the text view, cancelling gestures and making drag/pinch unreliable. Pinch was also too hard because the text hit area was too small.
+- Fix: drag/pinch/contentShape now live on a persistent bottom-anchored subtitle strip that exists while sidecar subtitle source is active, not on the temporary cue `Text`.
+- Subtitle strip has a realistic 44pt minimum grab/pinch area; visible text remains visually in the same place.
+- Drag uses `highPriorityGesture` and pinch uses `simultaneousGesture` on the subtitle strip only, so parent video gestures do not steal subtitle manipulation.
+- Subtitle gestures are disabled while locked.
+- Stale gesture anchors reset safely when the host disappears.
+- Subtitle lift uses `subtitleBottomPadding` as the single source of truth: manual distance + bottom chrome clearance when controls are visible and unlocked.
+- Drag, pinch resize, and bottom-overlay avoidance now target the actual sidecar subtitle text visible during playback.
+- Important limitation: if a video uses native VLC embedded subtitles instead of a sidecar `.srt`, SwiftUI cannot move, resize, or lift those subtitles because they are rendered inside the VLC drawable. Use Find subtitles / sidecar subtitles for controllable subtitle positioning.
+- Unchanged: subtitle menu/search/track selection, native VLC embedded subtitle rendering, battery, lock/unlock behavior, top timeline, centered device clock, Fit/Cover, resume/progress saving, real landscape, backend/API/Home/Videos/Downloader/Network/`project.yml`.
+- Status: Swift compile not verified on Windows; requires iOS build/device verification.
+
 Real landscape:
 
 - Real iOS fullscreen landscape works on iPhone.
