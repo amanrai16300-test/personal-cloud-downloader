@@ -444,6 +444,25 @@ Latest fullscreen sidecar subtitle drag/resize checkpoint:
 - Unchanged: subtitle menu/search/track selection, native VLC embedded subtitle rendering, battery, lock/unlock behavior, top timeline, centered device clock, Fit/Cover, resume/progress saving, real landscape, backend/API/Home/Videos/Downloader/Network/`project.yml`.
 - Status: Swift compile not verified on Windows; requires iOS build/device verification.
 
+Subtitle gesture controls branch checkpoint:
+
+- Branch: `feature/subtitle-gesture-controls`.
+- Changed file: `ios/PersonalCloudDownloader/Views/PlayerView.swift`.
+- Debug SIDE marker/yellow border was removed.
+- Adjustable subtitle gesture path applies only to sidecar SwiftUI subtitles, not native VLC embedded subtitles.
+- Sidecar render path: `VLCFullscreenView` -> `fsVlc: VLCPlayerController` -> sidecar `.srt` beside video -> SwiftUI `SubtitleOverlay`.
+- When sidecar subtitles are active, native VLC SPU is forced off.
+- Native VLC embedded subtitles render inside the VLC drawable and remain unchanged.
+- Native VLC live subtitle move/resize is not safely supported: freetype styling is fixed at `VLCLibrary` init; `sub-margin` is a per-media input option set at start; MobileVLCKit exposes no reliable runtime subtitle position/size API.
+- Subtitle gestures are hidden UI: no visible handles, badges, borders, sliders, or debug UI; subtitle remains plain movie-style text; drag on visible sidecar subtitle moves it up/down; pinch on visible sidecar subtitle resizes it.
+- Gesture host is a persistent invisible strip around `SubtitleOverlay`, so gestures survive SRT cue gaps.
+- Hit testing is enabled only when cue text is visible and player is unlocked; empty band still lets normal tap-to-controls work.
+- Subtitle lift uses `controlsVisible && !isLocked`: manual distance + `safeInsets.bottom` + bottom chrome clearance while controls are visible, then returns to manual position when controls hide.
+- Drag distance and text scale persist globally in `UserDefaults`, not per-video.
+- Existing native embedded subtitle path still works; use Find subtitles / sidecar subtitles for adjustable subtitles.
+- Unchanged: subtitle search API, native VLC embedded rendering, battery, lock/unlock, top timeline, centered clock, Fit/Cover, audio selector, resume/progress saving, real landscape, backend/API/Home/Videos/Downloader/Network/`project.yml`.
+- Status: Swift compile not verified on Windows; requires Mac/iOS build verification.
+
 Real landscape:
 
 - Real iOS fullscreen landscape works on iPhone.
