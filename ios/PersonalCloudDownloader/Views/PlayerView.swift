@@ -642,6 +642,20 @@ private struct VLCFullscreenView: View {
     @State private var isSearchingSubtitles = false
     @State private var subtitleSearchMessage: String?
 
+    /// Lock mode: hides all chrome and swallows gestures so nothing can seek,
+    /// pause, or adjust by accident. Only the small unlock control responds.
+    @State private var isLocked = false
+
+    /// Whether the unlock control is currently shown while locked. Tapping the
+    /// video toggles it; it auto-hides like the normal controls.
+    @State private var unlockControlVisible = true
+    @State private var unlockHideTask: DispatchWorkItem?
+
+    /// Battery snapshot for the top bar indicator. -1 / .unknown until
+    /// monitoring is enabled in `onAppear`; the indicator hides itself then.
+    @State private var batteryLevel: Float = UIDevice.current.batteryLevel
+    @State private var batteryState: UIDevice.BatteryState = UIDevice.current.batteryState
+
     /// Seconds the controls stay visible before auto-hiding during playback.
     private let autoHideDelay: TimeInterval = 3
     private let adjustmentOverlayHideDelay: TimeInterval = 0.8
@@ -731,7 +745,7 @@ private struct VLCFullscreenView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: controlsVisible)
 
-            if controlsVisible {
+            if controlsVisible && !isLocked {
                 // nPlayer-style chrome: a translucent top bar (close, times,
                 // title, subtitle menu, timeline) across the top, and a
                 // translucent bottom bar (transport) across the bottom, with a floating
@@ -740,6 +754,26 @@ private struct VLCFullscreenView: View {
                     topBar
                     Spacer(minLength: 0)
                     bottomBar
+                }
+                .transition(.opacity)
+            }
+
+            // Locked: the ONLY interactive element is this small unlock control,
+            // in the same circle style as the other overlay buttons. Tapping the
+            // video toggles it; it auto-hides like the normal controls.
+            if isLocked && unlockControlVisible {
+                HStack {
+                    Button(action: unlockControls) {
+                        Image(systemName: "lock.fill")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(.black.opacity(0.45), in: Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(PlayerPressStyle())
+                    .padding(.leading, 16 + safeInsets.leading)
+                    Spacer()
                 }
                 .transition(.opacity)
             }
@@ -753,6 +787,11 @@ private struct VLCFullscreenView: View {
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .onAppear {
             wallClockText = Self.wallClockFormatter.string(from: Date())
+            // Battery monitoring only while the fullscreen player is up
+            // (disabled again in onDisappear).
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            batteryLevel = UIDevice.current.batteryLevel
+            batteryState = UIDevice.current.batteryState
             restoreSavedAdjustments()
             scheduleAutoHide()
             // Give the controller its surface size up front so a RESTORED
@@ -774,6 +813,16 @@ private struct VLCFullscreenView: View {
         .onReceive(wallClockTimer) { date in
             wallClockText = Self.wallClockFormatter.string(from: date)
         }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIDevice.batteryLevelDidChangeNotification)
+        ) { _ in
+            batteryLevel = UIDevice.current.batteryLevel
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIDevice.batteryStateDidChangeNotification)
+        ) { _ in
+            batteryState = UIDevice.current.batteryState
+        }
         .alert("Subtitles", isPresented: Binding(
             get: { subtitleSearchMessage != nil },
             set: { if !$0 { subtitleSearchMessage = nil } }
@@ -787,6 +836,8 @@ private struct VLCFullscreenView: View {
         .onDisappear {
             autoHideTask?.cancel()
             adjustmentOverlayHideTask?.cancel()
+            unlockHideTask?.cancel()
+            UIDevice.current.isBatteryMonitoringEnabled = false
             fsVlc.teardown()
         }
     }
@@ -815,9 +866,53 @@ private struct VLCFullscreenView: View {
         }
     }
 
+    // MARK: Lock
+
+    /// Enter lock mode: chrome down, gestures swallowed, only the small unlock
+    /// control (auto-hiding like the normal controls) stays interactive.
+    private func lockControls() {
+        isLocked = true
+        controlsVisible = false
+        autoHideTask?.cancel()
+        unlockControlVisible = true
+        scheduleUnlockHide()
+    }
+
+    /// Exit lock mode and restore the normal controls exactly as before.
+    private func unlockControls() {
+        isLocked = false
+        unlockHideTask?.cancel()
+        controlsVisible = true
+        scheduleAutoHide()
+    }
+
+    /// Tap while locked: show/hide the unlock control (mirrors `toggleControls`).
+    private func toggleUnlockControl() {
+        unlockControlVisible.toggle()
+        if unlockControlVisible {
+            scheduleUnlockHide()
+        } else {
+            unlockHideTask?.cancel()
+        }
+    }
+
+    /// Auto-hide the unlock control while playing, same delay/behavior as the
+    /// normal controls' `scheduleAutoHide`.
+    private func scheduleUnlockHide() {
+        unlockHideTask?.cancel()
+        let task = DispatchWorkItem {
+            if fsVlc.isPlaying {
+                unlockControlVisible = false
+            }
+        }
+        unlockHideTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + autoHideDelay, execute: task)
+    }
+
     private var videoAreaGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                guard !isLocked else { return }
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
                 let isHorizontalSwipe = abs(horizontal) >= 44 && abs(horizontal) > abs(vertical) * 1.5
@@ -842,6 +937,14 @@ private struct VLCFullscreenView: View {
                 let vertical = value.translation.height
                 let isHorizontalSwipe = abs(horizontal) >= 44 && abs(horizontal) > abs(vertical) * 1.5
                 let isTap = hypot(horizontal, vertical) < 12
+
+                // Locked: swipes (seek/brightness/volume) are swallowed; a tap
+                // only toggles the unlock control.
+                if isLocked {
+                    if isTap { toggleUnlockControl() }
+                    videoGestureMode = .undecided
+                    return
+                }
 
                 if videoGestureMode == .horizontal || isHorizontalSwipe {
                     if horizontal > 0 {
@@ -1019,6 +1122,11 @@ private struct VLCFullscreenView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(maxWidth: .infinity, alignment: .center)
+                // Battery sits at the trailing edge of the clock row; the clock
+                // itself stays centered above the timeline.
+                .overlay(alignment: .trailing) {
+                    BatteryIndicatorView(level: batteryLevel, state: batteryState)
+                }
 
             HStack(spacing: 0) {
                 Button(action: closeFullscreen) {
@@ -1098,6 +1206,7 @@ private struct VLCFullscreenView: View {
         .frame(maxWidth: .infinity)
         .overlay(alignment: .leading) {
             HStack(spacing: 8) {
+                lockButton
                 subtitleButton
                 if fsVlc.hasSelectableAudioTracks {
                     audioButton
@@ -1222,6 +1331,21 @@ private struct VLCFullscreenView: View {
             .frame(width: 44, height: 44)
             .background(.black.opacity(0.45), in: Circle())
             .contentShape(Circle())
+    }
+
+    /// Lock button, same circle style as the subtitle/audio buttons. Locks the
+    /// player against accidental taps/gestures/seeking.
+    private var lockButton: some View {
+        Button(action: lockControls) {
+            Image(systemName: "lock.open")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(.black.opacity(0.45), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(PlayerPressStyle())
+        .padding(.leading, 4)
     }
 
     /// Audio track picker. Shown only when VLC reports more than one real audio
@@ -1428,6 +1552,50 @@ private struct TimelineSlider: View {
                     }
             )
         }
+    }
+}
+
+/// iOS status-bar-style battery indicator: capsule outline, small cap, inner
+/// fill scaled to the charge level, plus a percentage matching the clock's
+/// caption styling. Renders nothing when the level/state is unknown (e.g.
+/// Simulator, or before monitoring is enabled) so no broken UI shows.
+private struct BatteryIndicatorView: View {
+    /// 0.0–1.0 from `UIDevice.current.batteryLevel`; -1 when unknown.
+    let level: Float
+    let state: UIDevice.BatteryState
+
+    var body: some View {
+        if state != .unknown, level >= 0 {
+            HStack(spacing: 5) {
+                Text("\(Int(round(level * 100)))%")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.9))
+
+                HStack(spacing: 1) {
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                            .stroke(.white.opacity(0.55), lineWidth: 1)
+                            .frame(width: 23, height: 11.5)
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(fillColor)
+                            .frame(width: max(2.5, 19 * CGFloat(min(max(level, 0), 1))), height: 7.5)
+                            .padding(.leading, 2)
+                    }
+                    // The small cap on the battery's right end.
+                    RoundedRectangle(cornerRadius: 0.8, style: .continuous)
+                        .fill(.white.opacity(0.55))
+                        .frame(width: 1.6, height: 4)
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// Green while charging/full, red when low, white otherwise — the standard
+    /// iOS status bar treatment.
+    private var fillColor: Color {
+        if state == .charging || state == .full { return .green }
+        return level <= 0.2 ? .red : .white
     }
 }
 
