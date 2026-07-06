@@ -733,6 +733,12 @@ private struct VLCFullscreenView: View {
             Color.clear
                 .contentShape(Rectangle())
                 .gesture(videoAreaGesture)
+                // Native embedded subtitles render inside the VLC drawable and
+                // cannot be moved/resized live, so a pinch while one is active
+                // points the user at the adjustable sidecar path instead of
+                // silently doing nothing. Never fires during sidecar rendering,
+                // with subtitles off, or while locked.
+                .simultaneousGesture(embeddedSubtitlePinchHint)
 
             SystemVolumeView()
                 .frame(width: 120, height: 32)
@@ -770,14 +776,20 @@ private struct VLCFullscreenView: View {
                         interactive: true
                     )
                     // Bottom-anchored so the text sits exactly where it used to;
-                    // the 44pt min height just widens the grab/pinch target.
+                    // the 44pt min height keeps the strip's layout position
+                    // stable between cues. No contentShape here: hit-testing is
+                    // the overlay text's own (inset-expanded) shape, so taps in
+                    // the empty band beside the text still reach the video and
+                    // toggle the controls.
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .bottom)
-                    .contentShape(Rectangle())
                     .highPriorityGesture(subtitleDragGesture)
                     .simultaneousGesture(subtitlePinchGesture)
                     .allowsHitTesting(!isLocked && !(fsVlc.currentSubtitleText ?? "").isEmpty)
                     .padding(.bottom, subtitleBottomPadding)
                 }
+                // Above the bottom chrome/scrim so the lifted subtitle is never
+                // painted over by the controls' gradient.
+                .zIndex(1)
                 .animation(.easeInOut(duration: 0.2), value: controlsVisible)
                 // If the host is torn down mid-gesture (subtitles switched off),
                 // onEnded never fires — clear the anchors so the next drag/pinch
@@ -1023,6 +1035,22 @@ private struct VLCFullscreenView: View {
                 guard !isLocked else { return }
                 subtitlePinchStartScale = nil
                 UserDefaults.standard.set(Double(subtitleScale), forKey: savedSubtitleScaleKey)
+            }
+    }
+
+    /// Pinch attempted while a NATIVE embedded subtitle track is the active
+    /// source: those render inside the VLC drawable and cannot be moved or
+    /// resized live, so surface a one-shot pointer to the adjustable sidecar
+    /// path (the existing "Subtitles" alert). Guarded so it never appears
+    /// during sidecar rendering, with subtitles off, or while locked.
+    private var embeddedSubtitlePinchHint: some Gesture {
+        MagnificationGesture()
+            .onEnded { _ in
+                guard !isLocked,
+                      fsVlc.currentSubtitleIndex != -1,
+                      !(fsVlc.hasSidecarSubtitle && fsVlc.sidecarEnabled)
+                else { return }
+                subtitleSearchMessage = "Use sidecar subtitles for move/resize."
             }
     }
 
@@ -1380,7 +1408,7 @@ private struct VLCFullscreenView: View {
                     fsVlc.setSidecarEnabled(true)
                     if controlsVisible { scheduleAutoHide() }
                 } label: {
-                    Label("Subtitles", systemImage: fsVlc.sidecarEnabled ? "checkmark" : "")
+                    Label("Subtitles (adjustable)", systemImage: fsVlc.sidecarEnabled ? "checkmark" : "")
                 }
             }
             ForEach(fsVlc.subtitleTracks) { track in
@@ -1770,7 +1798,10 @@ private struct SubtitleOverlay: View {
                 .shadow(color: .black, radius: 0.5, x: 0, y: 1)
                 .shadow(color: .black, radius: 0.5, x: 0, y: -1)
                 .padding(.horizontal, 24)
-                .contentShape(Rectangle())
+                // Invisible grab halo: the hit area extends 12pt beyond the
+                // text on every side so drag/pinch land easily, while taps
+                // farther out still fall through to the video (toggle controls).
+                .contentShape(Rectangle().inset(by: -12))
                 .frame(maxWidth: .infinity)
                 .allowsHitTesting(interactive)
                 .transition(.opacity)

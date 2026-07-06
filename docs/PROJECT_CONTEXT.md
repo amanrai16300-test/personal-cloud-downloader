@@ -463,6 +463,25 @@ Subtitle gesture controls branch checkpoint:
 - Unchanged: subtitle search API, native VLC embedded rendering, battery, lock/unlock, top timeline, centered clock, Fit/Cover, audio selector, resume/progress saving, real landscape, backend/API/Home/Videos/Downloader/Network/`project.yml`.
 - Status: Swift compile not verified on Windows; requires Mac/iOS build verification.
 
+Latest subtitle adjustment fix checkpoint:
+
+- Branch: `feature/subtitle-gesture-controls`.
+- Changed file: `ios/PersonalCloudDownloader/Views/PlayerView.swift` only.
+- No backend change and no `VLCPlayerView.swift` change.
+- Device screenshot case was native VLC embedded SPU subtitle, rendered inside VLC drawable, not the SwiftUI sidecar overlay.
+- Previous drag/pinch/lift changes had no visible effect on that video because they targeted the SwiftUI sidecar overlay, while the visible subtitle was native VLC embedded.
+- Native VLC embedded subtitles cannot be safely moved/resized live from SwiftUI/MobileVLCKit: freetype styling is fixed at `VLCLibrary` init; `sub-margin` is a per-media input option applied at load; no reliable runtime subtitle position/size API is exposed.
+- Adjustable subtitles now use the sidecar SwiftUI overlay path only.
+- Existing flows are reused: app auto-tries sidecar `.srt`; if missing, it calls existing `/api/subtitles/extract` to convert embedded text track; if extraction fails, existing Find subtitles / `/api/subtitles/search` can create/select sidecar.
+- Menu sidecar entry is labeled "Subtitles (adjustable)" when appropriate.
+- If user pinches while native embedded subtitle is active, app shows the existing alert once: "Use sidecar subtitles for move/resize."
+- Single-renderer rule remains: enabling sidecar forces native VLC SPU off; selecting embedded track disables sidecar; never show both subtitle renderers at once.
+- Sidecar gesture behavior: drag directly on subtitle text moves it vertically; pinch directly on subtitle text resizes it; gestures are disabled while locked; invisible 12pt halo around the actual text is used for touch target; taps beside subtitle text still toggle controls normally; position and scale persist globally in `UserDefaults`.
+- Bottom overlay avoidance: when `controlsVisible && !isLocked`, sidecar subtitle bottom padding adds `safeInsets.bottom` + bottom chrome clearance; when controls hide, subtitle returns to manual position; `zIndex` ensures sidecar subtitle is not painted under the bottom bar/scrim.
+- Clean display confirmed: debug marker/border/badge removed; no handles, sliders, boxes, or visible gesture UI; subtitle remains white centered movie-style text with existing thin black outline.
+- Unchanged: backend API contracts, native VLC embedded rendering, battery, lock/unlock, top timeline, centered clock, Fit/Cover, audio selector, resume/progress saving, real landscape, Home, Videos library, Downloader, Network, `project.yml`, legal-files-only/Tailscale/private rules.
+- Status: Swift compile not verified on Windows; requires Mac/iOS build verification.
+
 Real landscape:
 
 - Real iOS fullscreen landscape works on iPhone.
