@@ -801,9 +801,7 @@ private struct VLCFullscreenView: View {
             wallClockText = Self.wallClockFormatter.string(from: Date())
             // Battery monitoring only while the fullscreen player is up
             // (disabled again in onDisappear).
-            UIDevice.current.isBatteryMonitoringEnabled = true
-            batteryLevel = UIDevice.current.batteryLevel
-            batteryState = UIDevice.current.batteryState
+            refreshBatterySnapshot()
             restoreSavedAdjustments()
             scheduleAutoHide()
             // Give the controller its surface size up front so a RESTORED
@@ -828,12 +826,12 @@ private struct VLCFullscreenView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: UIDevice.batteryLevelDidChangeNotification)
         ) { _ in
-            batteryLevel = UIDevice.current.batteryLevel
+            refreshBatterySnapshot()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: UIDevice.batteryStateDidChangeNotification)
         ) { _ in
-            batteryState = UIDevice.current.batteryState
+            refreshBatterySnapshot()
         }
         .alert("Subtitles", isPresented: Binding(
             get: { subtitleSearchMessage != nil },
@@ -866,6 +864,16 @@ private struct VLCFullscreenView: View {
         onClose()
     }
 
+    /// Read battery level/state as one snapshot. Monitoring must be enabled
+    /// before `UIDevice.current.batteryLevel` returns a real value.
+    private func refreshBatterySnapshot() {
+        let device = UIDevice.current
+        if !device.isBatteryMonitoringEnabled {
+            device.isBatteryMonitoringEnabled = true
+        }
+        batteryLevel = device.batteryLevel
+        batteryState = device.batteryState
+    }
 
     /// Toggle control visibility on a video tap. Showing (re)arms the auto-hide
     /// timer; hiding cancels it.
@@ -1643,9 +1651,9 @@ private struct BatteryIndicatorView: View {
     let state: UIDevice.BatteryState
 
     var body: some View {
-        if state != .unknown, level >= 0 {
+        if let displayLevel = displayLevel, let percentage = percentage {
             HStack(spacing: 5) {
-                Text("\(Int(round(level * 100)))%")
+                Text("\(percentage)%")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.9))
 
@@ -1656,7 +1664,7 @@ private struct BatteryIndicatorView: View {
                             .frame(width: 23, height: 11.5)
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(fillColor)
-                            .frame(width: max(2.5, 19 * CGFloat(min(max(level, 0), 1))), height: 7.5)
+                            .frame(width: max(2.5, 19 * CGFloat(displayLevel)), height: 7.5)
                             .padding(.leading, 2)
                     }
                     // The small cap on the battery's right end.
@@ -1669,11 +1677,21 @@ private struct BatteryIndicatorView: View {
         }
     }
 
+    private var displayLevel: Float? {
+        guard state != .unknown, level >= 0 else { return nil }
+        return min(max(level, 0), 1)
+    }
+
+    private var percentage: Int? {
+        guard let displayLevel else { return nil }
+        return min(100, max(0, Int((Double(displayLevel) * 100).rounded(.toNearestOrAwayFromZero))))
+    }
+
     /// Green while charging/full, red when low, white otherwise — the standard
     /// iOS status bar treatment.
     private var fillColor: Color {
         if state == .charging || state == .full { return .green }
-        return level <= 0.2 ? .red : .white
+        return (displayLevel ?? 0) <= 0.2 ? .red : .white
     }
 }
 
