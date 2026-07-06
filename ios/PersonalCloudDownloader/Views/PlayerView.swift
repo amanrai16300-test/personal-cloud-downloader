@@ -656,11 +656,23 @@ private struct VLCFullscreenView: View {
     @State private var batteryLevel: Float = UIDevice.current.batteryLevel
     @State private var batteryState: UIDevice.BatteryState = UIDevice.current.batteryState
 
+    /// Manual sidecar-subtitle layout: distance of the subtitle block from the
+    /// screen bottom (drag up/down) and text scale (pinch). Persisted globally
+    /// via UserDefaults like brightness/volume — per-video would need the
+    /// PlayerPreference model in VLCPlayerController, which lives in
+    /// VLCPlayerView.swift and is out of scope for this overlay fix.
+    @State private var subtitleDistance: CGFloat = 28
+    @State private var subtitleScale: CGFloat = 1
+    @State private var subtitleDragStartDistance: CGFloat?
+    @State private var subtitlePinchStartScale: CGFloat?
+
     /// Seconds the controls stay visible before auto-hiding during playback.
     private let autoHideDelay: TimeInterval = 3
     private let adjustmentOverlayHideDelay: TimeInterval = 0.8
     private let savedBrightnessKey = "vlcFullscreenLastBrightness"
     private let savedVolumeKey = "vlcFullscreenLastVolume"
+    private let savedSubtitleDistanceKey = "vlcFullscreenSubtitleDistance"
+    private let savedSubtitleScaleKey = "vlcFullscreenSubtitleScale"
     private let wallClockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private static let wallClockFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -737,11 +749,20 @@ private struct VLCFullscreenView: View {
 
             // Sidecar `.srt` subtitle overlay — bottom-centered. Holds its position
             // in BOTH Fit and Cover (native VLC subtitles shift with the Cover
-            // crop). Lifts when controls are up so it clears the bottom bar.
+            // crop). Draggable up/down and pinch-zoomable (sidecar overlay only —
+            // native VLC embedded subtitles are untouched); lifts above the
+            // bottom bar when controls are up, then returns to the user's manual
+            // position when they hide. Gestures are inert while locked.
             VStack {
                 Spacer()
-                SubtitleOverlay(text: fsVlc.currentSubtitleText)
-                    .padding(.bottom, controlsVisible ? 96 : 28)
+                SubtitleOverlay(
+                    text: fsVlc.currentSubtitleText,
+                    fontSize: 16 * subtitleScale,
+                    interactive: !isLocked
+                )
+                .gesture(subtitleDragGesture)
+                .simultaneousGesture(subtitlePinchGesture)
+                .padding(.bottom, subtitleBottomPadding)
             }
             .animation(.easeInOut(duration: 0.2), value: controlsVisible)
 
@@ -792,6 +813,7 @@ private struct VLCFullscreenView: View {
             UIDevice.current.isBatteryMonitoringEnabled = true
             batteryLevel = UIDevice.current.batteryLevel
             batteryState = UIDevice.current.batteryState
+            restoreSavedSubtitleLayout()
             restoreSavedAdjustments()
             scheduleAutoHide()
             // Give the controller its surface size up front so a RESTORED
@@ -886,14 +908,13 @@ private struct VLCFullscreenView: View {
         scheduleAutoHide()
     }
 
-    /// Tap while locked: show/hide the unlock control (mirrors `toggleControls`).
-    private func toggleUnlockControl() {
-        unlockControlVisible.toggle()
-        if unlockControlVisible {
-            scheduleUnlockHide()
-        } else {
-            unlockHideTask?.cancel()
-        }
+    /// Any touch while locked REVEALS the unlock control and re-arms its
+    /// auto-hide. Deliberately not a toggle: a toggle could hide it on the very
+    /// tap meant to reach it, and a slightly-moved tap did nothing — either way
+    /// the user raced the auto-hide timer with no reliable way out.
+    private func revealUnlockControl() {
+        unlockControlVisible = true
+        scheduleUnlockHide()
     }
 
     /// Auto-hide the unlock control while playing, same delay/behavior as the
@@ -907,6 +928,77 @@ private struct VLCFullscreenView: View {
         }
         unlockHideTask = task
         DispatchQueue.main.asyncAfter(deadline: .now() + autoHideDelay, execute: task)
+    }
+
+    // MARK: Subtitle manual layout
+
+    /// Effective bottom padding for the sidecar subtitle overlay: the user's
+    /// manual distance, lifted above the bottom bar + backdrop while controls
+    /// are up so subtitles are never hidden behind them. When controls hide,
+    /// this falls back to the manual position.
+    private var subtitleBottomPadding: CGFloat {
+        // Bottom bar occupies ~(safeInsets.bottom + 70)pt: 8 bottom padding +
+        // backdrop-padded 56pt row + 6 top padding; +12 gap above it.
+        let lifted = safeInsets.bottom + 82
+        return controlsVisible && !isLocked ? max(lifted, subtitleDistance) : subtitleDistance
+    }
+
+    /// Keep the subtitle block on screen: never under the home indicator, never
+    /// above ~3/4 of the screen (clear of the top bar/timeline).
+    private func clampedSubtitleDistance(_ distance: CGFloat) -> CGFloat {
+        let minDistance = max(12, safeInsets.bottom + 4)
+        let maxDistance = max(minDistance, landscapeSize.height * 0.75)
+        return min(max(distance, minDistance), maxDistance)
+    }
+
+    /// Safe readable range around the existing fixed 16pt sidecar size:
+    /// 0.7×–2.0× → ~11pt–32pt.
+    private func clampedSubtitleScale(_ scale: CGFloat) -> CGFloat {
+        min(max(scale, 0.7), 2.0)
+    }
+
+    /// Drag the subtitle block up/down. Anchored to the distance at drag start
+    /// so the block tracks the finger instead of compounding per-event deltas.
+    private var subtitleDragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                if subtitleDragStartDistance == nil {
+                    subtitleDragStartDistance = subtitleDistance
+                }
+                let start = subtitleDragStartDistance ?? subtitleDistance
+                // Dragging up (negative translation) increases the distance.
+                subtitleDistance = clampedSubtitleDistance(start - value.translation.height)
+            }
+            .onEnded { _ in
+                subtitleDragStartDistance = nil
+                UserDefaults.standard.set(Double(subtitleDistance), forKey: savedSubtitleDistanceKey)
+            }
+    }
+
+    /// Pinch to scale the subtitle TEXT only — video Fit/Cover is untouched.
+    private var subtitlePinchGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                if subtitlePinchStartScale == nil {
+                    subtitlePinchStartScale = subtitleScale
+                }
+                let start = subtitlePinchStartScale ?? subtitleScale
+                subtitleScale = clampedSubtitleScale(start * value)
+            }
+            .onEnded { _ in
+                subtitlePinchStartScale = nil
+                UserDefaults.standard.set(Double(subtitleScale), forKey: savedSubtitleScaleKey)
+            }
+    }
+
+    private func restoreSavedSubtitleLayout() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: savedSubtitleDistanceKey) != nil {
+            subtitleDistance = clampedSubtitleDistance(CGFloat(defaults.double(forKey: savedSubtitleDistanceKey)))
+        }
+        if defaults.object(forKey: savedSubtitleScaleKey) != nil {
+            subtitleScale = clampedSubtitleScale(CGFloat(defaults.double(forKey: savedSubtitleScaleKey)))
+        }
     }
 
     private var videoAreaGesture: some Gesture {
@@ -938,10 +1030,11 @@ private struct VLCFullscreenView: View {
                 let isHorizontalSwipe = abs(horizontal) >= 44 && abs(horizontal) > abs(vertical) * 1.5
                 let isTap = hypot(horizontal, vertical) < 12
 
-                // Locked: swipes (seek/brightness/volume) are swallowed; a tap
-                // only toggles the unlock control.
+                // Locked: swipes (seek/brightness/volume) are swallowed; ANY
+                // touch — tap or swipe — reveals the unlock control so the
+                // user is never trapped.
                 if isLocked {
-                    if isTap { toggleUnlockControl() }
+                    revealUnlockControl()
                     videoGestureMode = .undecided
                     return
                 }
@@ -1123,9 +1216,13 @@ private struct VLCFullscreenView: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(maxWidth: .infinity, alignment: .center)
                 // Battery sits at the trailing edge of the clock row; the clock
-                // itself stays centered above the timeline.
+                // itself stays centered above the timeline. The extra inset keeps
+                // the capsule clear of the display's rounded corner: in landscape
+                // the trailing safe inset can be 0 (notch on the other side), and
+                // this row is at the very top where the corner curves in.
                 .overlay(alignment: .trailing) {
                     BatteryIndicatorView(level: batteryLevel, state: batteryState)
+                        .padding(.trailing, max(0, 28 - safeInsets.trailing))
                 }
 
             HStack(spacing: 0) {
@@ -1214,6 +1311,12 @@ private struct VLCFullscreenView: View {
             }
         }
         .overlay(alignment: .trailing) { ratioButton }
+        // Horizontal backdrop behind the whole controls row (lock, subtitle,
+        // transport, audio, Fit/Cover), in the chrome's existing translucent
+        // style. Fades in/out with the row; the timeline stays in the top bar.
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(.black.opacity(0.45), in: Capsule())
         .padding(.leading, 16 + safeInsets.leading)
         .padding(.trailing, 16 + safeInsets.trailing)
         .padding(.top, 6)
@@ -1606,11 +1709,18 @@ private struct BatteryIndicatorView: View {
 /// Cover mode (native VLC subtitles shift with the crop).
 private struct SubtitleOverlay: View {
     let text: String?
+    /// Text size; the fullscreen player scales this by the pinch-zoom factor.
+    var fontSize: CGFloat = 16
+    /// When true, the padded text box (not the full-width strip) hit-tests, so
+    /// the fullscreen drag/pinch gestures land on the subtitle only and taps
+    /// elsewhere still reach the video. Default off — the inline overlay stays
+    /// purely decorative.
+    var interactive = false
 
     var body: some View {
         if let text, !text.isEmpty {
             Text(text)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: fontSize, weight: .semibold))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -1622,8 +1732,9 @@ private struct SubtitleOverlay: View {
                 .shadow(color: .black, radius: 0.5, x: 0, y: 1)
                 .shadow(color: .black, radius: 0.5, x: 0, y: -1)
                 .padding(.horizontal, 24)
+                .contentShape(Rectangle())
                 .frame(maxWidth: .infinity)
-                .allowsHitTesting(false)
+                .allowsHitTesting(interactive)
                 .transition(.opacity)
         }
     }
