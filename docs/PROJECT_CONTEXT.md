@@ -495,6 +495,18 @@ Subtitle gesture cleanup checkpoint:
 - Unchanged: backend, APIs, `VLCPlayerView.swift`, subtitle search/extract contract, Home, Videos library, Downloader, Network, `project.yml`, top timeline, centered clock, Fit/Cover, audio selector, resume/progress saving, real landscape.
 - Status: Swift compile not verified on Windows; `git diff --check` for `PlayerView.swift` passed except CRLF warning.
 
+Latest iOS fullscreen player checkpoint:
+
+- Branch: `feature/subtitle-gesture-controls`.
+- Changed files: `ios/PersonalCloudDownloader/Views/PlayerView.swift`, `ios/PersonalCloudDownloader/Views/VLCPlayerView.swift`.
+- Timeline scrub labels: while dragging fullscreen timeline, left current-time and right remaining-time labels update from scrub target progress; seek-on-release behavior is unchanged.
+- ±10 second skip feedback: backward/forward skip buttons briefly flash/scale when tapped, and only the tapped skip button flashes.
+- Scrub auto-hide fix: root cause was `autoHideTask` continuing during timeline drag and hiding controls while `fsVlc.isPlaying`; scrub begin now forces controls visible and cancels pending auto-hide, `scheduleAutoHide` does not hide while `fsVlc.isScrubbing`, and normal auto-hide resumes after release.
+- Battery indicator fix: root cause was battery level/state refreshing separately and possible reads before `UIDevice` battery monitoring was enabled; `refreshBatterySnapshot` enables monitoring first, reads level/state together, clamps and rounds `batteryLevel`, and hides the indicator when level is unavailable or state is unknown. Requires iPhone verification unless already confirmed on device.
+- Local SRT loading: subtitle menu includes "Load .srt from device" through SwiftUI `fileImporter`; `VLCPlayerController.loadLocalSubtitle(from url: URL) -> Bool` copies valid `.srt` files into `Application Support/LocalSubtitles/<SHA-256 resume key>.srt`.
+- Loaded local subtitles use the existing sidecar subtitle renderer, force native VLC SPU off, and `fetchSidecarSubtitle` checks the local sandbox subtitle before backend/HTTP sidecar fetch.
+- Invalid or unreadable local `.srt` files keep current subtitles unchanged and show a friendly alert; no backend upload and no `project.yml` change. Requires iPhone verification unless already confirmed on device.
+
 Real landscape:
 
 - Real iOS fullscreen landscape works on iPhone.
@@ -673,6 +685,7 @@ Build/deploy status:
 - Manual unsigned device IPA workflow passed historically for real-device archive and MobileVLCKit arm64 link.
 - GitHub Actions IPA workflow is manual-only.
 - Latest Home and series-grouping UI require corresponding latest IPA if not installed yet.
+- Latest player IPA for fullscreen player fixes/features should be built from `feature/subtitle-gesture-controls`.
 - Backend/frontend/docs pushes do not automatically create IPA builds.
 - For current working IPA builds, use `feature/series-progress-fix-current-ui`.
 - Do not use old/deleted Home dashboard v3/redesign branches for current UI builds.
