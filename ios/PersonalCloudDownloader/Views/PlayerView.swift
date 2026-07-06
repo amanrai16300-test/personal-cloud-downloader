@@ -4,6 +4,7 @@ import Combine
 import UIKit
 import MediaPlayer
 import MobileVLCKit
+import UniformTypeIdentifiers
 
 /// Phase 3, step 5: dual-engine playback.
 ///
@@ -643,6 +644,14 @@ private struct VLCFullscreenView: View {
     @State private var isSearchingSubtitles = false
     @State private var subtitleSearchMessage: String?
 
+    /// Presents the document picker for "Load .srt from device".
+    @State private var showingSrtImporter = false
+
+    /// Picker filter: the real `.srt` type when the system can derive one from
+    /// the extension, otherwise any file (validation happens on load anyway).
+    private static let srtContentTypes: [UTType] =
+        UTType(filenameExtension: "srt").map { [$0] } ?? [.data]
+
     /// Lock mode: hides all chrome and swallows gestures so nothing can seek,
     /// pause, or adjust by accident. Only the small unlock control responds.
     @State private var isLocked = false
@@ -840,6 +849,12 @@ private struct VLCFullscreenView: View {
             Button("OK", role: .cancel) { subtitleSearchMessage = nil }
         } message: {
             Text(subtitleSearchMessage ?? "")
+        }
+        .fileImporter(
+            isPresented: $showingSrtImporter,
+            allowedContentTypes: Self.srtContentTypes
+        ) { result in
+            loadDeviceSubtitle(result)
         }
         // The controller's media frees with the view; `teardown` also persists
         // position and stops audio so inline can resume cleanly.
@@ -1364,6 +1379,12 @@ private struct VLCFullscreenView: View {
                 )
             }
             .disabled(isSearchingSubtitles)
+            Button {
+                showingSrtImporter = true
+                if controlsVisible { scheduleAutoHide() }
+            } label: {
+                Label("Load .srt from device", systemImage: "folder")
+            }
         } label: {
             subtitleButtonLabel(
                 on: (fsVlc.hasSidecarSubtitle && fsVlc.sidecarEnabled)
@@ -1372,6 +1393,19 @@ private struct VLCFullscreenView: View {
             )
         }
         .padding(.leading, 4)
+    }
+
+    /// Handle the "Load .srt from device" picker result. On success the
+    /// controller activates the file through the existing sidecar overlay path
+    /// (and persists a per-video sandbox copy); on an unreadable/empty file it
+    /// changes nothing and the existing Subtitles alert explains. Cancel = no-op.
+    private func loadDeviceSubtitle(_ result: Result<URL, Error>) {
+        guard case .success(let url) = result else { return }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        if !fsVlc.loadLocalSubtitle(from: url) {
+            subtitleSearchMessage = "Could not read that subtitle file. Current subtitles were kept."
+        }
     }
 
     private func findSubtitles() {

@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import CryptoKit
 import MobileVLCKit
 
 /// Owns the `VLCMediaPlayer` for one playback screen and publishes its
@@ -418,9 +419,80 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// ffmpeg, network, parse) the app silently keeps native embedded-subtitle
     /// behavior — no error UI.
     private func fetchSidecarSubtitle(for videoURL: URL) {
+        // A user-loaded device `.srt` saved in the sandbox wins over the remote
+        // sidecar: it was an explicit choice for this video. Falls through to
+        // the normal HTTP fetch when there is none (or it no longer parses).
+        if let key = currentResumeKey,
+           let localURL = Self.localSubtitleURL(forKey: key),
+           let raw = try? String(contentsOf: localURL, encoding: .utf8),
+           !SRTSubtitleParser.parse(raw).isEmpty {
+            sidecarFetchURL = localURL
+            activateSidecar(raw: raw, srtURL: localURL)
+            return
+        }
+
         let srtURL = videoURL.deletingPathExtension().appendingPathExtension("srt")
         sidecarFetchURL = srtURL
         fetchSidecarData(srtURL: srtURL, videoURL: videoURL, allowExtraction: true)
+    }
+
+    /// Load a user-picked `.srt` from the device into the existing sidecar
+    /// overlay path. Reads the file (UTF-8, Latin-1 fallback), parses it with
+    /// the same `SRTSubtitleParser`, and on success activates it exactly like a
+    /// fetched sidecar (overlay on, native SPU off) and persists a sandbox copy
+    /// so reopening this video restores it (see `fetchSidecarSubtitle`).
+    /// Returns `false` — with NO state changed — when the file is unreadable or
+    /// yields no cues. Caller must hold security-scoped access to `url`.
+    func loadLocalSubtitle(from url: URL) -> Bool {
+        guard let key = currentResumeKey,
+              let data = try? Data(contentsOf: url),
+              let raw = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1)
+        else { return false }
+
+        let cues = SRTSubtitleParser.parse(raw)
+        guard !cues.isEmpty else { return false }
+
+        // Persist the sandbox copy (best effort — activation works regardless).
+        if let dest = Self.localSubtitleURL(forKey: key) {
+            try? FileManager.default.createDirectory(
+                at: dest.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? raw.write(to: dest, atomically: true, encoding: .utf8)
+        }
+
+        // Drop any in-flight remote sidecar fetch so a late response can't
+        // overwrite the user's explicit choice.
+        sidecarFetchURL = nil
+
+        sidecarCues = cues
+        hasSidecarSubtitle = true
+        sidecarEnabled = true
+        // Overlay is the sole subtitle source: keep native VLC SPU off.
+        player.currentVideoSubTitleIndex = -1
+        currentSubtitleIndex = -1
+        // Manual choice supersedes any pending saved-preference restore.
+        didApplySavedSubtitlePreference = true
+        updatePreference { $0.subtitle = .sidecar }
+        updateCurrentCue()
+        return true
+    }
+
+    /// Sandbox location for a user-loaded device `.srt`, under
+    /// `Application Support/LocalSubtitles/`. The filename is a SHA-256 of the
+    /// stable resume key, so any video path maps to one filesystem-safe name
+    /// with no collisions.
+    private static func localSubtitleURL(forKey key: String) -> URL? {
+        guard let base = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first else { return nil }
+        let digest = SHA256.hash(data: Data(key.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return base
+            .appendingPathComponent("LocalSubtitles", isDirectory: true)
+            .appendingPathComponent("\(digest).srt")
     }
 
     func searchMissingSubtitle(for videoURL: URL, completion: @escaping (String) -> Void) {
