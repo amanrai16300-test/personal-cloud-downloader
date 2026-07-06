@@ -482,6 +482,19 @@ Latest subtitle adjustment fix checkpoint:
 - Unchanged: backend API contracts, native VLC embedded rendering, battery, lock/unlock, top timeline, centered clock, Fit/Cover, audio selector, resume/progress saving, real landscape, Home, Videos library, Downloader, Network, `project.yml`, legal-files-only/Tailscale/private rules.
 - Status: Swift compile not verified on Windows; requires Mac/iOS build verification.
 
+Subtitle gesture cleanup checkpoint:
+
+- Changed file: `ios/PersonalCloudDownloader/Views/PlayerView.swift`.
+- Subtitle drag/resize experiment was removed because it had no visible effect on native VLC embedded subtitles.
+- Removed subtitle drag/pinch state, gestures, `UserDefaults` keys, lift padding, hit-area halo, native pinch hint alert, "Subtitles (adjustable)" label, gesture host/zIndex/lift experiment code.
+- Native VLC embedded subtitle path remains unchanged.
+- Sidecar subtitle playback/menu/search behavior remains unchanged.
+- Important lesson: tested subtitle was native VLC embedded subtitle rendered inside VLC drawable, so SwiftUI subtitle gesture changes did not affect it.
+- Do not reattempt subtitle drag/resize by editing `PlayerView.swift` alone unless the app first switches to a fully app-rendered sidecar/custom subtitle path.
+- Keep successful non-subtitle player overlay work intact if still present: battery safe placement, reliable lock/unlock, bottom controls backdrop.
+- Unchanged: backend, APIs, `VLCPlayerView.swift`, subtitle search/extract contract, Home, Videos library, Downloader, Network, `project.yml`, top timeline, centered clock, Fit/Cover, audio selector, resume/progress saving, real landscape.
+- Status: Swift compile not verified on Windows; `git diff --check` for `PlayerView.swift` passed except CRLF warning.
+
 Real landscape:
 
 - Real iOS fullscreen landscape works on iPhone.
