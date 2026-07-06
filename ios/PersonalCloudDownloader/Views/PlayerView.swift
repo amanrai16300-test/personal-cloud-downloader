@@ -3,6 +3,7 @@ import AVKit
 import Combine
 import UIKit
 import MediaPlayer
+import MobileVLCKit
 
 /// Phase 3, step 5: dual-engine playback.
 ///
@@ -651,6 +652,16 @@ private struct VLCFullscreenView: View {
     @State private var unlockControlVisible = true
     @State private var unlockHideTask: DispatchWorkItem?
 
+    /// Which ±10s transport button is currently flashing tap feedback, if any.
+    /// Set on tap, cleared shortly after — display only, independent of the
+    /// seek (which VLC performs immediately).
+    @State private var skipFlash: SkipDirection?
+
+    private enum SkipDirection {
+        case backward
+        case forward
+    }
+
     /// Battery snapshot for the top bar indicator. -1 / .unknown until
     /// monitoring is enabled in `onAppear`; the indicator hides itself then.
     @State private var batteryLevel: Float = UIDevice.current.batteryLevel
@@ -1116,6 +1127,30 @@ private struct VLCFullscreenView: View {
         }
     }
 
+    /// While dragging the timeline, the top-bar time labels track the SCRUB
+    /// TARGET (drag `progress` × duration) instead of the frozen live playhead
+    /// (`refreshTimes` keeps publishing the real clock during a drag). Formatted
+    /// via `VLCTime` so it matches the live labels exactly. Falls back to the
+    /// live text when the duration isn't known yet. Display only — the seek
+    /// still happens on release via `endScrubbing`.
+    private var scrubTimeLabels: (current: String, remaining: String)? {
+        guard let lengthMs = fsVlc.player.media?.length.intValue, lengthMs > 0 else { return nil }
+        let targetMs = Int32((Double(lengthMs) * min(max(fsVlc.progress, 0), 1)).rounded())
+        let current = VLCTime(int: targetMs).stringValue ?? "--:--"
+        let remaining = VLCTime(int: max(0, lengthMs - targetMs)).stringValue ?? "--:--"
+        return (current, "-\(remaining)")
+    }
+
+    private var displayedCurrentTimeText: String {
+        guard fsVlc.isScrubbing, let labels = scrubTimeLabels else { return fsVlc.currentTimeText }
+        return labels.current
+    }
+
+    private var displayedRemainingTimeText: String {
+        guard fsVlc.isScrubbing, let labels = scrubTimeLabels else { return fsVlc.remainingTimeText }
+        return labels.remaining
+    }
+
     /// nPlayer-style top bar: centered wall clock above close + timeline-backed elapsed • title • remaining.
     /// Flat, with a light top-down scrim for legibility (no material) so it reads
     /// over any frame without heavy chrome. The native iOS status bar is hidden,
@@ -1156,7 +1191,7 @@ private struct VLCFullscreenView: View {
                 )
                 .overlay {
                     HStack(spacing: 12) {
-                        Text(fsVlc.currentTimeText)
+                        Text(displayedCurrentTimeText)
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.white.opacity(0.95))
 
@@ -1167,7 +1202,7 @@ private struct VLCFullscreenView: View {
                             .truncationMode(.middle)
                             .frame(maxWidth: .infinity)
 
-                        Text(fsVlc.remainingTimeText)
+                        Text(displayedRemainingTimeText)
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.white.opacity(0.95))
                     }
@@ -1198,18 +1233,31 @@ private struct VLCFullscreenView: View {
     private var bottomBar: some View {
         HStack(spacing: 40) {
             transportButton(systemName: "gobackward.10", font: .title3) {
+                flashSkipButton(.backward)
                 fsVlc.skipBackward()
             }
+            .background {
+                Circle().fill(.white.opacity(skipFlash == .backward ? 0.25 : 0))
+            }
+            .scaleEffect(skipFlash == .backward ? 1.12 : 1)
+
             transportButton(
                 systemName: fsVlc.isPlaying ? "pause.fill" : "play.fill",
                 font: .system(size: 30)
             ) {
                 fsVlc.togglePlayPause()
             }
+
             transportButton(systemName: "goforward.10", font: .title3) {
+                flashSkipButton(.forward)
                 fsVlc.skipForward()
             }
+            .background {
+                Circle().fill(.white.opacity(skipFlash == .forward ? 0.25 : 0))
+            }
+            .scaleEffect(skipFlash == .forward ? 1.12 : 1)
         }
+        .animation(.easeOut(duration: 0.18), value: skipFlash)
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
         .overlay(alignment: .leading) {
@@ -1239,6 +1287,17 @@ private struct VLCFullscreenView: View {
                 endPoint: .bottom
             )
         )
+    }
+
+    /// Brief tap-feedback flash on a ±10s button: a soft white circle + slight
+    /// scale-up that fades right back out, so a registered tap is visible even
+    /// though the seek itself is instant. The guard keeps a pending clear from
+    /// wiping the OTHER button's flash when the user alternates quickly.
+    private func flashSkipButton(_ direction: SkipDirection) {
+        skipFlash = direction
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            if skipFlash == direction { skipFlash = nil }
+        }
     }
 
     /// Subtitle picker. Re-arms the auto-hide timer so changing the choice
