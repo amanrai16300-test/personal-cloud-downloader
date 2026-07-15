@@ -281,10 +281,17 @@ struct HomeView: View {
                     openMedia(item)
                 } label: {
                     ZStack(alignment: .bottomLeading) {
-                        // Large cinematic backdrop fills the whole card.
-                        mediaArtwork(item, wide: true)
+                        // Large cinematic backdrop fills the whole card. Rendered
+                        // in an overlay of a fixed-footprint base so the artwork's
+                        // aspect ratio can never widen the card (scaledToFill
+                        // reports its cover size; .clipped() hides pixels but not
+                        // layout width).
+                        Color.clear
                             .frame(maxWidth: .infinity)
                             .frame(height: 184)
+                            .overlay {
+                                mediaArtwork(item, wide: true)
+                            }
                             .clipped()
 
                         // Dark scrim — stronger left/bottom — so overlaid text and
