@@ -304,6 +304,17 @@ Latest iOS Home reconnect/performance checkpoint:
 - Duplicate refresh prevention: Home skips refresh starts when a loop already started within about 3 seconds, preventing `onAppear`, foreground, and reconnect token from launching duplicate chains.
 - Unchanged: `RootTabView.swift`, `CompletedFilesAPI.swift`, `backend/main.py`, API response shape, Home visual design, tabs, player/progress behavior, Web Downloader, Tailscale/private/legal rules.
 
+Latest iOS Home width/layout checkpoint:
+
+- Changed file: `ios/PersonalCloudDownloader/Views/HomeView.swift`.
+- Symptom: the entire Home screen became wider than the iPhone viewport after a different Continue Watching item appeared; left and right Home content was clipped while the custom tab bar remained correctly sized.
+- Root cause: Continue Watching wide artwork used `scaledToFill()` with an unconstrained max-width frame. Ultra-wide artwork could report a width larger than the available card width. `clipped()` hid pixels but did not constrain layout measurement, so the oversized width propagated through the Home vertical `ScrollView`.
+- Why later: data-driven trigger; a new Continue Watching item used wider-aspect artwork or a local video thumbnail after weeks of normal content.
+- Fix: render artwork as an overlay on a fixed full-width × 184pt `Color.clear` layout footprint, then clip it. Artwork aspect ratio no longer affects parent width.
+- Preserved: same center-crop appearance, card height, tap behavior, Home refresh/cache/reconnect/navigation, poster cards, Recently Added, backend, and APIs.
+- Deployment: native iOS-only change; no Oracle update required. New IPA build/install required on iPhone.
+- Status: no Xcode build available on Windows; compile-safe by inspection unless later device/build verification is available.
+
 TMDB artwork:
 
 - Backend enriches Home dashboard media with TMDB server-side using `TMDB_API_KEY`.
