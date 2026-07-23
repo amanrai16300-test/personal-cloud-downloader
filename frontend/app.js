@@ -823,9 +823,85 @@ function formatTrendRating(value) {
   return `TMDB ${rating.toFixed(1)}`;
 }
 
+function renderedControlLocation(container, element) {
+  if (!(element instanceof Element) || !container.contains(element)) return null;
+
+  const row = element.closest("article");
+  const controls = row
+    ? [...row.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")]
+    : [];
+  const controlIndex = controls.indexOf(element);
+  if (!row?._cloudboxRenderKey || controlIndex < 0) return null;
+  return { key: row._cloudboxRenderKey, controlIndex };
+}
+
+function findRenderedControl(container, location) {
+  if (!location) return null;
+
+  const row = [...container.children].find(
+    (element) => element._cloudboxRenderKey === location.key,
+  );
+  if (!row) return null;
+  return [...row.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")]
+    [location.controlIndex] || null;
+}
+
+function reconcileRenderedRows(container, rows, emptyHtml) {
+  const focusLocation = renderedControlLocation(container, document.activeElement);
+  const openerLocation = renderedControlLocation(container, completedDeleteModalOpener);
+
+  if (!rows.length) {
+    if (container._cloudboxEmptyHtml !== emptyHtml) {
+      container.innerHTML = emptyHtml;
+      container._cloudboxEmptyHtml = emptyHtml;
+    }
+    return;
+  }
+
+  container._cloudboxEmptyHtml = null;
+  const existingRows = new Map(
+    [...container.children]
+      .filter((element) => element._cloudboxRenderKey)
+      .map((element) => [element._cloudboxRenderKey, element]),
+  );
+  const staleRows = new Set(container.children);
+  const template = document.createElement("template");
+
+  rows.forEach((row, index) => {
+    let element = existingRows.get(row.key);
+    if (!element || element._cloudboxRenderSignature !== row.signature) {
+      template.innerHTML = row.html.trim();
+      element = template.content.firstElementChild;
+      element._cloudboxRenderKey = row.key;
+      element._cloudboxRenderSignature = row.signature;
+    } else {
+      staleRows.delete(element);
+    }
+
+    row.update?.(element, index);
+    const currentElement = container.children[index];
+    if (currentElement !== element) {
+      container.insertBefore(element, currentElement || null);
+    }
+  });
+
+  staleRows.forEach((element) => element.remove());
+
+  if (focusLocation && !container.contains(document.activeElement)) {
+    findRenderedControl(container, focusLocation)?.focus();
+  }
+  if (openerLocation) {
+    completedDeleteModalOpener = findRenderedControl(container, openerLocation);
+  }
+}
+
 function renderTorrents(torrents) {
   if (!torrents.length) {
-    torrentList.innerHTML = emptyCard("Queue is clear", "Paste a magnet link when you want the server to do the waiting.");
+    reconcileRenderedRows(
+      torrentList,
+      [],
+      emptyCard("Queue is clear", "Paste a magnet link when you want the server to do the waiting."),
+    );
     cachedTorrents = torrents;
     return;
   }
@@ -833,36 +909,44 @@ function renderTorrents(torrents) {
   const sortedTorrents = sortTorrentsForDisplay(torrents);
 
   torrentList.style.flexDirection = "column";
-  torrentList.innerHTML = sortedTorrents.map((torrent, index) => {
+  const rows = sortedTorrents.map((torrent, index) => {
     const status = normalizeStatus(torrent);
     const progress = normalizeProgress(torrent);
     const name = torrent.name || torrent.hash || "Preparing download";
     const timeText = torrentTimeText(torrent, status);
-
-    return `
-      <article class="download-card" style="order: ${index}">
-        <div class="card-top">
-          <div class="download-title">
-            <h3>${escapeHtml(name)}</h3>
-            <p class="meta">${progress}% downloaded</p>
-            <p class="meta">${escapeHtml(timeText)}</p>
-          </div>
-          <span class="pill ${statusClass(status)}">${status}</span>
+    const content = `
+      <div class="card-top">
+        <div class="download-title">
+          <h3>${escapeHtml(name)}</h3>
+          <p class="meta">${progress}% downloaded</p>
+          <p class="meta">${escapeHtml(timeText)}</p>
         </div>
-        <div class="progress-row" aria-label="${progress}% complete">
-          <div class="progress-track">
-            <div class="progress-fill" style="--progress: ${progress}%"></div>
-          </div>
-          <span class="progress-value">${progress}%</span>
+        <span class="pill ${statusClass(status)}">${status}</span>
+      </div>
+      <div class="progress-row" aria-label="${progress}% complete">
+        <div class="progress-track">
+          <div class="progress-fill" style="--progress: ${progress}%"></div>
         </div>
-        <div class="actions">
-          <button class="action-button danger" type="button" data-delete-hash="${escapeHtml(torrent.hash)}">
-            Delete torrent/files
-          </button>
-        </div>
-      </article>
+        <span class="progress-value">${progress}%</span>
+      </div>
+      <div class="actions">
+        <button class="action-button danger" type="button" data-delete-hash="${escapeHtml(torrent.hash)}">
+          Delete torrent/files
+        </button>
+      </div>
     `;
-  }).join("");
+
+    return {
+      key: `torrent:${torrent.hash || `${name}:${index}`}`,
+      signature: content,
+      html: `<article class="download-card">${content}</article>`,
+      update: (element) => {
+        const order = String(index);
+        if (element.style.order !== order) element.style.order = order;
+      },
+    };
+  });
+  reconcileRenderedRows(torrentList, rows, "");
 
   cachedTorrents = sortedTorrents;
 }
@@ -927,11 +1011,15 @@ function renderCompletedFiles(files) {
   completedFileSnapshot = Array.isArray(files) ? files : [];
 
   if (!completedFileSnapshot.length) {
-    completedFiles.innerHTML = emptyCard("Nothing ready yet", "Completed files will collect here with stream, download, and VLC links.");
+    reconcileRenderedRows(
+      completedFiles,
+      [],
+      emptyCard("Nothing ready yet", "Completed files will collect here with stream, download, and VLC links."),
+    );
     return;
   }
 
-  completedFiles.innerHTML = completedFileSnapshot.map((file, index) => {
+  const rows = completedFileSnapshot.map((file, index) => {
     const url = fileUrl(file);
     const name = fileName(file);
     const safeUrl = escapeHtml(url);
@@ -941,8 +1029,11 @@ function renderCompletedFiles(files) {
       ? `Modified ${formatDateTime(file.modified_at)}`
       : "Time unavailable.";
 
-    return `
-      <article class="file-card">
+    return {
+      key: `completed:${relativePath || url || `${name}:${index}`}`,
+      signature: JSON.stringify([url, name, relativePath, folder, timeText]),
+      html: `
+        <article class="file-card">
         <div class="file-title">
           <h3 class="file-name">${escapeHtml(name)}</h3>
           <p class="meta">${escapeHtml(timeText)}</p>
@@ -957,9 +1048,22 @@ function renderCompletedFiles(files) {
             </button>
           ` : ""}
         </div>
-      </article>
-    `;
-  }).join("");
+        </article>
+      `,
+      update: (element) => {
+        const copyButton = element.querySelector("[data-copy-index]");
+        const deleteButton = element.querySelector("[data-delete-completed-index]");
+        const nextIndex = String(index);
+        if (copyButton && copyButton.dataset.copyIndex !== nextIndex) {
+          copyButton.dataset.copyIndex = nextIndex;
+        }
+        if (deleteButton && deleteButton.dataset.deleteCompletedIndex !== nextIndex) {
+          deleteButton.dataset.deleteCompletedIndex = nextIndex;
+        }
+      },
+    };
+  });
+  reconcileRenderedRows(completedFiles, rows, "");
 }
 
 async function addMagnet() {
