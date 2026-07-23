@@ -183,6 +183,11 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - Completed files and folders have Delete controls using the exact relative path with `DELETE /api/completed-files?path=...`.
 - Delete results distinguish full success, partial success/warning, and zero deletion/failure.
 - The UI reconciles with fresh server data instead of optimistically clearing all completed files.
+- The completed-file delete-modal accessibility fix is implemented in `frontend/app.js`. Cancel receives initial focus; Tab and Shift+Tab remain trapped inside the open modal; Escape closes without deleting; and focus returns to the original Delete button when it still exists.
+- The modal retains `role="dialog"`, its accessible name and description, and `aria-modal="true"`. Temporary keyboard listeners are removed on close, and repeated opens do not create duplicate listeners.
+- Existing appearance, wording, exact-path delete API behavior, full/partial/failure handling, completed-files refresh and polling, and torrent deletion remain unchanged.
+- Static verification passed: `node --check frontend/app.js` and `git diff --check`.
+- This updated `app.js` has not yet been deployed or browser-verified in production.
 
 ### Oracle production verification
 
@@ -193,7 +198,7 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - Completed-file Delete controls appeared.
 - No important media was deleted during deployment verification.
 
-Remaining web follow-ups are lower priority: delete-modal Escape/focus-trap accessibility, reducing full `innerHTML` rerender focus/screen-reader churn, and Web Trends refresh/staleness behavior.
+Remaining web follow-ups are lower priority: production browser verification of delete-modal keyboard/focus accessibility, reducing full `innerHTML` rerender focus/screen-reader churn, and Web Trends refresh/staleness behavior.
 
 ## 8. Current Home dashboard and TMDB artwork
 
@@ -338,7 +343,7 @@ Authoritative branch:
 
 ### Lower-priority code cleanup
 
-- Web delete-modal keyboard/focus accessibility.
+- Production browser verification of Web delete-modal keyboard/focus accessibility.
 - Web full-rerender accessibility/focus churn.
 - Web Trends refresh/staleness.
 - Home latency wording and dead reconnect-state cleanup.
