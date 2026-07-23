@@ -89,6 +89,12 @@ The current production-verified state, implemented code, remaining runtime check
 - Exact sidecars, backups, temporary files, thumbnails, and saved progress are cleaned when appropriate.
 - If qBittorrent removal fails but filesystem cleanup succeeds, the API returns a partial-warning result instead of claiming full success.
 - Files remain user-deletable only; completion does not trigger automatic deletion.
+- The loose completed-video organization guard is implemented in `backend/main.py`. Previously, `organize_loose_completed_videos()` moved every root-level video without checking whether qBittorrent was still downloading or writing it.
+- Before moving loose media, the organizer now reads and validates the full qBittorrent torrent and file inventory. Matching uses resolved absolute `content_path`, `save_path`, and individual qBittorrent file paths; it does not guess from torrent names, video filenames, or filename stems.
+- A qBittorrent-tracked file is safe to organize only when torrent progress is at least `1.0`, individual file progress is at least `1.0`, and torrent state is `pausedUP` or `stoppedUP`.
+- Active, incomplete, checking, stalled, metadata, queued, malformed, unknown-state, and partial files are skipped. If the qBittorrent inventory cannot be read or validated, the entire organization pass fails safely without moving files.
+- An untracked root video can still be organized after the complete qBittorrent inventory is read successfully and no exact path matches it. Multiple torrents matching one path combine conservatively, so one unsafe match blocks movement.
+- Matching `.srt` and `.vtt` sidecars move only after the video is approved. A failure affecting one candidate does not fail `GET /api/completed-files`; `_cloudbox-thumbnails` exclusion and the completed-files API response shape are unchanged.
 
 ### Security
 
@@ -118,12 +124,12 @@ The current production-verified state, implemented code, remaining runtime check
 Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main.py`.
 
 - Backup: `backend/main.py.before-audit-fixes`.
-- `python3 -m py_compile backend/main.py` passed.
-- `personal-downloader-api.service` restarted successfully; Uvicorn became active normally.
-- Valid `200` responses were verified for `GET /api/health`, `GET /api/torrents`, `GET /api/completed-files`, and `GET /api/home-dashboard`.
-- `/api/completed-files` returned the existing 14-video library with thumbnail URLs.
-- `/api/home-dashboard` returned valid server, library, network, Continue Watching, and Recently Added data.
-- No startup errors appeared in the new-process journal logs.
+- The deployed incomplete-file organization guard was verified in `/home/ubuntu/personal-cloud-downloader/backend/main.py`. Before deployment, the guard constant and helper were present and no unexpected `psycopg` import was present.
+- The uploaded Oracle file SHA-256 was `c72c394c7d52bf0b712b029a00b4927579d6c31ec68752f5c1458195fa79f685`.
+- Python compilation passed, `personal-downloader-api.service` restarted successfully, and Uvicorn completed application startup. `GET /api/health` returned `200` with `status: ok`; `GET /api/completed-files` returned `200` with valid JSON; live web polling returned `200` for both `/api/torrents` and `/api/completed-files`; no new traceback occurred after final deployment.
+- `GET /api/home-dashboard` also returned valid server, library, network, Continue Watching, and Recently Added data.
+- Deployment lesson: run PowerShell `scp` commands from Windows PowerShell, not inside the Oracle Bash shell. Use a unique `/tmp/` filename and verify its checksum and content before copying over the live backend.
+- A stale `/tmp/main.py` was copied once and caused a temporary crash loop from an unrelated `psycopg` import. The known-good backup was restored immediately, endpoints recovered, and the correct verified guard file was then deployed. This incident is resolved.
 
 ## 6. Current iOS app and reconnect architecture
 
@@ -325,7 +331,7 @@ Authoritative branch:
 
 ### Runtime/configuration checks
 
-- Verify qBittorrent uses a separate incomplete-download path so loose-file organization cannot move a file still being written.
+- On the next genuine active or paused-incomplete download, confirm the loose media file remains unmoved until qBittorrent reports full torrent and file completion plus a safe terminal state (`pausedUP` or `stoppedUP`). This is runtime verification, not an implementation blocker.
 - Test VLC phone calls and audio interruptions.
 - Test real VLC network stalls and `.stopped` versus `.failed` reporting.
 - Review actual trusted Tailscale device IPs before considering any qBittorrent login bypass; never whitelist the entire CGNAT range.
