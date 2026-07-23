@@ -1445,10 +1445,10 @@ private struct VLCFullscreenView: View {
     }
 
     private var timelineAccessibilityValue: String {
-        guard let durationMs = validDurationMs,
-              let totalTime = VLCTime(int: durationMs).stringValue else {
+        guard let durationMs = validDurationMs else {
             return "\(displayedCurrentTimeText) elapsed"
         }
+        let totalTime = VLCTime(int: durationMs).stringValue
         return "\(displayedCurrentTimeText) elapsed, \(totalTime) total"
     }
 

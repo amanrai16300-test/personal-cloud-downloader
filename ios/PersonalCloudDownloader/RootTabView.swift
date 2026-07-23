@@ -499,8 +499,7 @@ private struct MoreView: View {
     private var moreHeroText: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("More")
-                .font(.largeTitle.weight(.bold))
-                .fontDesign(.rounded)
+                .font(.system(.largeTitle, design: .rounded).weight(.bold))
                 .foregroundStyle(.white)
                 .lineLimit(2)
 
@@ -571,8 +570,7 @@ private struct MoreView: View {
     private func moreRowText(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
-                .font(.headline.weight(.bold))
-                .fontDesign(.rounded)
+                .font(.system(.headline, design: .rounded).weight(.bold))
                 .foregroundStyle(.white)
                 .lineLimit(3)
 

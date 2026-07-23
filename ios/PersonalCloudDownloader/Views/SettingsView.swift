@@ -127,8 +127,7 @@ struct SettingsView: View {
     private var identityText: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Personal Cloud Downloader")
-                .font(.headline.weight(.bold))
-                .fontDesign(.rounded)
+                .font(.system(.headline, design: .rounded).weight(.bold))
                 .foregroundStyle(Color.white)
                 .lineLimit(3)
 
@@ -220,8 +219,7 @@ struct SettingsView: View {
 
     private func endpointValue(_ value: String) -> some View {
         Text(value)
-            .font(.subheadline.weight(.semibold))
-            .fontDesign(.monospaced)
+            .font(.system(.subheadline, design: .monospaced).weight(.semibold))
             .foregroundStyle(Color.white.opacity(0.94))
             .lineLimit(4)
             .fixedSize(horizontal: false, vertical: true)
@@ -345,8 +343,7 @@ struct SettingsView: View {
     private var tailscaleActionText: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Open Tailscale")
-                .font(.headline.weight(.bold))
-                .fontDesign(.rounded)
+                .font(.system(.headline, design: .rounded).weight(.bold))
                 .foregroundStyle(Color.white)
                 .lineLimit(2)
 

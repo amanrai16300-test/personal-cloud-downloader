@@ -97,8 +97,7 @@ struct TrendsView: View {
             .padding(.bottom, 12)
 
             Text("Fresh picks")
-                .font(.title2.weight(.bold))
-                .fontDesign(.rounded)
+                .font(.system(.title2, design: .rounded).weight(.bold))
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .padding(.bottom, 12)
@@ -186,8 +185,7 @@ struct TrendsView: View {
 
     private func updatedAtLabel(_ updatedAt: String) -> some View {
         Text(formattedUpdatedAt(updatedAt))
-            .font(.caption.weight(.bold))
-            .fontDesign(.monospaced)
+            .font(.system(.caption, design: .monospaced).weight(.bold))
             .foregroundStyle(Color.white.opacity(0.92))
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
@@ -278,8 +276,7 @@ struct TrendsView: View {
 
     private func sectionCount(_ count: Int) -> some View {
         Text("\(count)")
-            .font(.caption.weight(.bold))
-            .fontDesign(.monospaced)
+            .font(.system(.caption, design: .monospaced).weight(.bold))
             .foregroundStyle(muted)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -314,8 +311,7 @@ struct TrendsView: View {
                     .accessibilityHidden(true)
 
                 Text("Trends unavailable")
-                    .font(.headline.weight(.bold))
-                    .fontDesign(.rounded)
+                    .font(.system(.headline, design: .rounded).weight(.bold))
                     .foregroundStyle(.white)
 
                 Text(message)
@@ -434,8 +430,7 @@ private struct TrendCard: View {
     private var cardSummary: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(item.title)
-                .font(.subheadline.weight(.bold))
-                .fontDesign(.rounded)
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
                 .foregroundStyle(.white)
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 3)
                 .frame(minHeight: dynamicTypeSize.isAccessibilitySize ? 0 : 38, alignment: .topLeading)
@@ -482,8 +477,7 @@ private struct TrendCard: View {
 
     private var releaseYearLabel: some View {
         Text(item.releaseYear ?? "N/A")
-            .font(.caption.weight(.bold))
-            .fontDesign(.monospaced)
+            .font(.system(.caption, design: .monospaced).weight(.bold))
             .foregroundStyle(muted)
             .fixedSize(horizontal: false, vertical: true)
     }
