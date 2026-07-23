@@ -24,6 +24,8 @@ let pendingRefreshMode = "";
 let pendingDeleteHash = "";
 let pendingCompletedDelete = null;
 let isCompletedDeleteActive = false;
+let completedDeleteModalOpener = null;
+let completedDeleteModalKeydownHandler = null;
 let trendsState = {
   loaded: false,
   loading: false,
@@ -1068,7 +1070,7 @@ function getDeleteConfirmationModal() {
     modal.id = "deleteConfirmModal";
     modal.innerHTML = `
       <div style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9998;"></div>
-      <section role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9999;width:min(92vw,420px);background:#0E182D;color:#F2F6FF;border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:18px;box-shadow:0 18px 60px rgba(0,0,0,.55);">
+      <section role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle" aria-describedby="deleteConfirmName" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9999;width:min(92vw,420px);background:#0E182D;color:#F2F6FF;border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:18px;box-shadow:0 18px 60px rgba(0,0,0,.55);">
         <h3 id="deleteConfirmTitle" style="margin:0 0 8px;font-size:18px;">Delete download?</h3>
         <p id="deleteConfirmName" style="margin:0 0 16px;color:#8FA3C7;line-height:1.35;word-break:break-word;"></p>
         <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -1111,7 +1113,7 @@ function showDeleteConfirmation(hash) {
   modal.hidden = false;
 }
 
-function showCompletedDeleteConfirmation(index) {
+function showCompletedDeleteConfirmation(index, opener) {
   if (isCompletedDeleteActive) return;
 
   const item = completedFileSnapshot[index];
@@ -1138,6 +1140,7 @@ function showCompletedDeleteConfirmation(index) {
     : `${name} will be deleted from Completed Files.`;
   setDeleteConfirmationBusy(false);
   modal.hidden = false;
+  activateCompletedDeleteModal(modal, opener);
 }
 
 function hideDeleteConfirmation() {
@@ -1145,8 +1148,59 @@ function hideDeleteConfirmation() {
 
   const modal = document.querySelector("#deleteConfirmModal");
   if (modal) modal.hidden = true;
+  deactivateCompletedDeleteModal();
   pendingDeleteHash = "";
   pendingCompletedDelete = null;
+}
+
+function activateCompletedDeleteModal(modal, opener) {
+  deactivateCompletedDeleteModal({ restoreFocus: false });
+  completedDeleteModalOpener = opener instanceof HTMLElement ? opener : null;
+  completedDeleteModalKeydownHandler = (event) => {
+    if (event.key === "Escape") {
+      if (isCompletedDeleteActive) return;
+      event.preventDefault();
+      hideDeleteConfirmation();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const focusableElements = [...modal.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter((element) => !element.hidden);
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+    } else if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
+    } else if (!modal.contains(document.activeElement)) {
+      event.preventDefault();
+      firstElement.focus();
+    }
+  };
+  document.addEventListener("keydown", completedDeleteModalKeydownHandler);
+  modal.querySelector("[data-delete-cancel]")?.focus();
+}
+
+function deactivateCompletedDeleteModal({ restoreFocus = true } = {}) {
+  if (completedDeleteModalKeydownHandler) {
+    document.removeEventListener("keydown", completedDeleteModalKeydownHandler);
+    completedDeleteModalKeydownHandler = null;
+  }
+
+  const opener = completedDeleteModalOpener;
+  completedDeleteModalOpener = null;
+  if (restoreFocus && opener?.isConnected) {
+    opener.focus();
+  }
 }
 
 function completedDeleteWarningSummary(warnings) {
@@ -1420,7 +1474,7 @@ torrentList.addEventListener("click", (event) => {
 completedFiles.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-delete-completed-index]");
   if (deleteButton) {
-    showCompletedDeleteConfirmation(Number(deleteButton.dataset.deleteCompletedIndex));
+    showCompletedDeleteConfirmation(Number(deleteButton.dataset.deleteCompletedIndex), deleteButton);
     return;
   }
 
