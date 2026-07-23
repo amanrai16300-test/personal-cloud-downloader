@@ -111,6 +111,7 @@ QB_ACTIVE_STATES = {
     "checkingUP",
     "seeding",
 }
+QB_SAFE_TO_MOVE_STATES = {"pausedUP", "stoppedUP"}
 THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
 THUMBNAIL_CACHE_VERSION = "v3"
 MIN_THUMBNAIL_BYTES = 2 * 1024
@@ -1836,9 +1837,15 @@ def score_thumbnail_candidate(candidate_path: Path) -> float | None:
 
 def organize_loose_completed_videos(download_dir: Path) -> None:
     download_root = download_dir.resolve()
+    move_safety = qbittorrent_file_move_safety(download_root)
+    if move_safety is None:
+        return
+
     for file_path in sorted(download_root.iterdir()):
         try:
             if not file_path.is_file() or not is_video_file(file_path):
+                continue
+            if not move_safety.get(file_path.resolve(), True):
                 continue
 
             target_dir = resolve_safe_download_target(download_root / file_path.stem, download_root)
@@ -1854,6 +1861,89 @@ def organize_loose_completed_videos(download_dir: Path) -> None:
                     move_into_directory(sidecar, target_dir, download_root)
         except (OSError, ValueError):
             continue
+
+
+def qbittorrent_file_move_safety(download_root: Path) -> dict[Path, bool] | None:
+    try:
+        torrents = run_qb_action("list_torrents")
+    except HTTPException:
+        return None
+    if not isinstance(torrents, list):
+        return None
+
+    move_safety: dict[Path, bool] = {}
+    for torrent in torrents:
+        if not isinstance(torrent, dict):
+            return None
+        try:
+            progress = float(torrent["progress"])
+            state = str(torrent["state"] or "").strip()
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not 0 <= progress <= 1 or not state:
+            return None
+        torrent_safe = progress >= 1 and state in QB_SAFE_TO_MOVE_STATES
+
+        content_path = resolved_qb_path(torrent.get("content_path"))
+        save_path = resolved_qb_path(torrent.get("save_path"))
+        if content_path is None and save_path is None:
+            return None
+        content_in_root = path_is_in_root(content_path, download_root)
+        save_in_root = path_is_in_root(save_path, download_root, allow_root=True)
+        if not content_in_root and not save_in_root:
+            continue
+
+        torrent_hash = str(torrent.get("hash") or "").strip()
+        if not torrent_hash:
+            return None
+        try:
+            torrent_files = run_qb_action("get_files", torrent_hash)
+        except HTTPException:
+            return None
+        if not isinstance(torrent_files, list):
+            return None
+
+        tracked_paths: dict[Path, bool] = {}
+        if content_in_root and content_path is not None:
+            tracked_paths[content_path] = torrent_safe
+        if save_in_root and save_path is not None:
+            for torrent_file in torrent_files:
+                if not isinstance(torrent_file, dict):
+                    return None
+                try:
+                    file_progress = float(torrent_file["progress"])
+                except (KeyError, TypeError, ValueError):
+                    return None
+                if not 0 <= file_progress <= 1:
+                    return None
+                relative_name = Path(str(torrent_file.get("name") or "").strip())
+                if (
+                    not relative_name.parts
+                    or relative_name.is_absolute()
+                    or ".." in relative_name.parts
+                ):
+                    return None
+                file_path = (save_path / relative_name).resolve()
+                if path_is_in_root(file_path, download_root):
+                    file_safe = torrent_safe and file_progress >= 1
+                    tracked_paths[file_path] = tracked_paths.get(file_path, True) and file_safe
+
+        if not tracked_paths:
+            return None
+
+        for tracked_path, path_safe in tracked_paths.items():
+            move_safety[tracked_path] = move_safety.get(tracked_path, True) and path_safe
+
+    return move_safety
+
+
+def resolved_qb_path(value: Any) -> Path | None:
+    raw_path = str(value or "").strip()
+    return Path(raw_path).resolve() if raw_path else None
+
+
+def path_is_in_root(path: Path | None, root: Path, *, allow_root: bool = False) -> bool:
+    return path is not None and path.is_relative_to(root) and (allow_root or path != root)
 
 
 def move_into_directory(file_path: Path, target_dir: Path, download_root: Path) -> None:
