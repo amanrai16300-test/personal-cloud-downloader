@@ -11,6 +11,7 @@ struct WebView: UIViewRepresentable {
 
     @Binding var isLoading: Bool
     @Binding var error: Error?
+    var reloadGeneration: Int = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -31,7 +32,11 @@ struct WebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         // Compare against the app-requested URL, not qBittorrent redirects.
-        if context.coordinator.requestedURL != url {
+        let reloadRequested =
+            context.coordinator.lastHandledReloadGeneration != reloadGeneration
+
+        if context.coordinator.requestedURL != url || reloadRequested {
+            context.coordinator.lastHandledReloadGeneration = reloadGeneration
             context.coordinator.load(url, in: webView)
         }
     }
@@ -39,9 +44,11 @@ struct WebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         private let parent: WebView
         var requestedURL: URL?
+        var lastHandledReloadGeneration: Int
 
         init(_ parent: WebView) {
             self.parent = parent
+            lastHandledReloadGeneration = parent.reloadGeneration
         }
 
         func load(_ url: URL, in webView: WKWebView) {

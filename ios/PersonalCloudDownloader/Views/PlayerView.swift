@@ -33,6 +33,17 @@ struct PlayerView: View {
 
     @State private var player: AVPlayer?
     @StateObject private var vlc = VLCPlayerController()
+    @State private var avTimeObserver: Any?
+    @State private var avTimeObserverPlayer: AVPlayer?
+    @State private var avProgressLoadTask: Task<Void, Never>?
+    @State private var avDidStartProgressLoad = false
+    @State private var avDidTeardown = false
+    @State private var avDidComplete = false
+    @State private var avLastObservedRate: Float = 0
+    @State private var avPendingResume: VLCPlayerController.SavedPosition?
+    @State private var avKnownPosition: VLCPlayerController.SavedPosition?
+    @State private var avLastPersistedTimeMs = -1
+    @State private var avLastPersistedDurationMs = -1
 
     /// AVPlayer playback lifecycle, mirrored from the player item's status,
     /// the end-of-playback notification, and the play/pause control status.
@@ -93,7 +104,12 @@ struct PlayerView: View {
         }
         .onDisappear {
             player?.pause()
-            vlc.stop()
+            if video.isAVPlayerSupported {
+                teardownAVProgress()
+            } else {
+                vlc.teardown()
+                VLCPlayerController.finishPlaybackSession()
+            }
         }
         .fullScreenCover(isPresented: $isFullscreen, onDismiss: {
             // Both engines rotated to real landscape on entry, so both restore
@@ -103,6 +119,9 @@ struct PlayerView: View {
             // is restored, so now pop back to the Videos list. Popping here
             // (rather than at the close tap) avoids tearing the cover down
             // mid-transition.
+            if video.isAVPlayerSupported, !startsFullscreen {
+                persistAVProgress()
+            }
             if startsFullscreen {
                 dismiss()
             }
@@ -186,8 +205,8 @@ struct PlayerView: View {
             // In direct-open the inline `avPlayback.onAppear` (which lazily
             // builds the player) may not have run before the cover presents, so
             // make sure the AVPlayer exists for the fullscreen `avSurface`.
-            if player == nil, let url = video.streamURL {
-                player = AVPlayer(url: url)
+            if let url = video.streamURL {
+                prepareAVPlayer(url: url)
             }
         } else {
             vlc.teardown()
@@ -272,15 +291,14 @@ struct PlayerView: View {
         .padding(Layout.screenPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            if player == nil {
-                player = AVPlayer(url: streamURL)
-            }
+            prepareAVPlayer(url: streamURL)
         }
         // currentItem.status: .readyToPlay → ready, .failed → failed.
         .onReceive(itemStatusPublisher) { status in
             switch status {
             case .readyToPlay:
                 if avState == .loading { avState = .ready }
+                applyPendingAVResumeIfReady()
             case .failed:
                 avState = .failed
             default:
@@ -294,15 +312,197 @@ struct PlayerView: View {
             if let item = note.object as? AVPlayerItem,
                item === player?.currentItem {
                 avState = .ended
+                if !avDidComplete {
+                    persistAVProgress(completed: true)
+                }
+                removeAVTimeObserver()
             }
         }
         // Auto-dismiss the ended/failed overlay when the user resumes via the
         // system controls (rate > 0 ⇒ actively playing).
         .onReceive(ratePublisher) { rate in
-            if rate > 0, avState == .ended || avState == .failed {
-                avState = .ready
+            let didPause = avLastObservedRate > 0 && rate == 0
+            avLastObservedRate = rate
+            if didPause, avState != .ended {
+                persistAVProgress()
+                removeAVTimeObserver()
+            }
+            if rate > 0 {
+                if avDidComplete,
+                   let player,
+                   let duration = player.currentItem?.duration.seconds,
+                   duration.isFinite,
+                   duration > 0,
+                   player.currentTime().seconds / duration < 0.90 {
+                    avDidComplete = false
+                }
+                installAVTimeObserverIfNeeded()
+                if avState == .ended || avState == .failed {
+                    avState = .ready
+                }
             }
         }
+    }
+
+    private func prepareAVPlayer(url: URL) {
+        if player == nil {
+            player = AVPlayer(url: url)
+        }
+        avDidTeardown = false
+        installAVTimeObserverIfNeeded()
+        loadAVProgressIfNeeded()
+        applyPendingAVResumeIfReady()
+    }
+
+    private func loadAVProgressIfNeeded() {
+        guard !avDidStartProgressLoad else { return }
+        avDidStartProgressLoad = true
+        applyStoredAVProgress()
+
+        avProgressLoadTask = Task { @MainActor in
+            do {
+                let backendProgress = try await CompletedFilesAPI.fetchVideoProgress()
+                guard !Task.isCancelled else { return }
+
+                let trimmedPath = video.path.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let progress = backendProgress[video.path] ?? backendProgress[trimmedPath] {
+                    VLCPlayerController.mergeProgressForPlayback(progress, path: video.path)
+                }
+                applyStoredAVProgress()
+            } catch {
+                // Local playback and local resume never wait for backend sync.
+            }
+        }
+    }
+
+    private func applyStoredAVProgress() {
+        if VLCPlayerController.hasCompletedPosition(for: video.path) {
+            avPendingResume = nil
+            avKnownPosition = nil
+            avDidComplete = true
+            if let player, player.currentTime().seconds > 0 {
+                player.seek(to: .zero)
+            }
+            return
+        }
+
+        guard let position = VLCPlayerController.resumablePosition(for: video.path),
+              isAVPosition(position, newerThan: avKnownPosition)
+        else { return }
+
+        avPendingResume = position
+        applyPendingAVResumeIfReady()
+    }
+
+    private func isAVPosition(
+        _ candidate: VLCPlayerController.SavedPosition,
+        newerThan current: VLCPlayerController.SavedPosition?
+    ) -> Bool {
+        guard let current else { return true }
+
+        switch (candidate.updatedAt, current.updatedAt) {
+        case let (candidateDate?, currentDate?) where candidateDate != currentDate:
+            return candidateDate > currentDate
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            if candidate.timeMs != current.timeMs {
+                return candidate.timeMs > current.timeMs
+            }
+            return candidate.durationMs > current.durationMs
+        }
+    }
+
+    private func applyPendingAVResumeIfReady() {
+        guard let player,
+              player.currentItem?.status == .readyToPlay,
+              let position = avPendingResume,
+              position.durationMs > 0,
+              Double(position.timeMs) / Double(position.durationMs) < 0.90
+        else { return }
+
+        avPendingResume = nil
+        avKnownPosition = position
+        avDidComplete = false
+        let target = CMTime(value: CMTimeValue(position.timeMs), timescale: 1_000)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func installAVTimeObserverIfNeeded() {
+        guard avTimeObserver == nil, let player else { return }
+
+        let observedPlayer = player
+        avTimeObserverPlayer = observedPlayer
+        avTimeObserver = observedPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak observedPlayer] _ in
+            guard let observedPlayer,
+                  observedPlayer === self.player,
+                  observedPlayer.rate > 0
+            else { return }
+            persistAVProgress()
+        }
+    }
+
+    private func removeAVTimeObserver() {
+        guard let observer = avTimeObserver else { return }
+        avTimeObserverPlayer?.removeTimeObserver(observer)
+        avTimeObserver = nil
+        avTimeObserverPlayer = nil
+    }
+
+    @discardableResult
+    private func persistAVProgress(
+        completed: Bool = false
+    ) -> VLCPlayerController.SavedPosition? {
+        guard !avDidTeardown,
+              (!avDidComplete || completed),
+              let player,
+              let item = player.currentItem
+        else { return nil }
+
+        let durationSeconds = item.duration.seconds
+        let currentSeconds = player.currentTime().seconds
+        guard durationSeconds.isFinite,
+              durationSeconds > 0,
+              currentSeconds.isFinite
+        else { return nil }
+
+        let durationMs = Int((durationSeconds * 1_000).rounded())
+        let currentMs = completed
+            ? durationMs
+            : Int((max(currentSeconds, 0) * 1_000).rounded())
+        if !completed,
+           currentMs == avLastPersistedTimeMs,
+           durationMs == avLastPersistedDurationMs {
+            return avKnownPosition
+        }
+        guard let position = VLCPlayerController.persistPlaybackProgress(
+            path: video.path,
+            timeMs: currentMs,
+            durationMs: durationMs
+        ) else { return nil }
+
+        avKnownPosition = position
+        avLastPersistedTimeMs = position.timeMs
+        avLastPersistedDurationMs = position.durationMs
+        avDidComplete = Double(position.timeMs) / Double(position.durationMs) >= 0.90
+        return position
+    }
+
+    private func teardownAVProgress() {
+        guard !avDidTeardown else { return }
+        if !avDidComplete {
+            persistAVProgress()
+        }
+        avDidTeardown = true
+        avProgressLoadTask?.cancel()
+        avProgressLoadTask = nil
+        avDidStartProgressLoad = false
+        removeAVTimeObserver()
     }
 
     /// Publishes the current item's status, re-subscribing whenever the
@@ -358,7 +558,10 @@ struct PlayerView: View {
 
     /// Failure state: icon, message, and a Retry button on a rounded card over
     /// a dimmed backdrop. `action` retries playback for the active engine.
-    private func failedOverlay(action: @escaping () -> Void) -> some View {
+    private func failedOverlay(
+        message: String = "Could not load this video. Check the connection and try again.",
+        action: @escaping () -> Void
+    ) -> some View {
         ZStack {
             Color.black.opacity(0.7)
             VStack(spacing: 14) {
@@ -371,7 +574,7 @@ struct PlayerView: View {
                 Text("Playback failed")
                     .font(.system(size: 18, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
-                Text("Could not load this video. Check the connection and try again.")
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.8))
                     .multilineTextAlignment(.center)
@@ -411,6 +614,12 @@ struct PlayerView: View {
     /// Seek to the start and resume. Used by the AVPlayer replay/retry buttons.
     private func replayAV() {
         avState = .ready
+        avDidComplete = false
+        avDidTeardown = false
+        avPendingResume = nil
+        avLastPersistedTimeMs = -1
+        avLastPersistedDurationMs = -1
+        installAVTimeObserverIfNeeded()
         player?.seek(to: .zero)
         player?.play()
     }
@@ -546,7 +755,10 @@ struct PlayerView: View {
         case .loading:
             loadingOverlay("Buffering…")
         case .failed:
-            failedOverlay(action: vlc.replay)
+            failedOverlay(
+                message: "Video unavailable or the connection was lost.",
+                action: vlc.replay
+            )
         case .ended:
             endedOverlay(action: vlc.replay)
         case .ready:
@@ -638,6 +850,8 @@ private struct VLCFullscreenView: View {
     @State private var wallClockText = Self.wallClockFormatter.string(from: Date())
     @State private var videoGestureMode: VideoGestureMode = .undecided
     @State private var gestureStartBrightness: CGFloat = UIScreen.main.brightness
+    @State private var brightnessBeforeFullscreen: CGFloat?
+    @State private var didRestoreBrightness = false
     @State private var gestureStartVolume: Float = SystemVolumeController.shared.volume
     @State private var adjustmentOverlay: AdjustmentOverlay?
     @State private var adjustmentOverlayHideTask: DispatchWorkItem?
@@ -679,7 +893,6 @@ private struct VLCFullscreenView: View {
     /// Seconds the controls stay visible before auto-hiding during playback.
     private let autoHideDelay: TimeInterval = 3
     private let adjustmentOverlayHideDelay: TimeInterval = 0.8
-    private let savedBrightnessKey = "vlcFullscreenLastBrightness"
     private let savedVolumeKey = "vlcFullscreenLastVolume"
     private let wallClockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private static let wallClockFormatter: DateFormatter = {
@@ -790,6 +1003,8 @@ private struct VLCFullscreenView: View {
                                 .contentShape(Circle())
                         }
                         .buttonStyle(PlayerPressStyle())
+                        .accessibilityLabel("Unlock controls")
+                        .accessibilityHint("Restores the playback controls.")
                         Spacer()
                     }
                     .padding(.leading, 16 + safeInsets.leading)
@@ -807,6 +1022,7 @@ private struct VLCFullscreenView: View {
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .onAppear {
+            captureFullscreenBrightnessIfNeeded()
             wallClockText = Self.wallClockFormatter.string(from: Date())
             // Battery monitoring only while the fullscreen player is up
             // (disabled again in onDisappear).
@@ -859,6 +1075,7 @@ private struct VLCFullscreenView: View {
         // The controller's media frees with the view; `teardown` also persists
         // position and stops audio so inline can resume cleanly.
         .onDisappear {
+            restoreFullscreenBrightnessIfNeeded()
             autoHideTask?.cancel()
             adjustmentOverlayHideTask?.cancel()
             unlockHideTask?.cancel()
@@ -875,6 +1092,7 @@ private struct VLCFullscreenView: View {
     /// resume from the stale pre-fullscreen position. Persisting here closes that
     /// race; the later `teardown` persist is then a harmless idempotent re-save.
     private func closeFullscreen() {
+        restoreFullscreenBrightnessIfNeeded()
         fsVlc.persistPosition()
         onClose()
     }
@@ -1005,7 +1223,6 @@ private struct VLCFullscreenView: View {
         case .brightness:
             let value = clamp(Double(gestureStartBrightness) + Double(delta))
             UIScreen.main.brightness = CGFloat(value)
-            UserDefaults.standard.set(value, forKey: savedBrightnessKey)
             showAdjustmentOverlay(kind: .brightness, value: value)
         case .volume:
             let value = clamp(Double(gestureStartVolume) + Double(delta))
@@ -1019,10 +1236,6 @@ private struct VLCFullscreenView: View {
 
     private func restoreSavedAdjustments() {
         let defaults = UserDefaults.standard
-        if defaults.object(forKey: savedBrightnessKey) != nil {
-            UIScreen.main.brightness = CGFloat(clamp(defaults.double(forKey: savedBrightnessKey)))
-        }
-
         if defaults.object(forKey: savedVolumeKey) != nil {
             let savedVolume = Float(clamp(defaults.double(forKey: savedVolumeKey)))
             applySavedVolumeIfNeeded(savedVolume)
@@ -1036,6 +1249,21 @@ private struct VLCFullscreenView: View {
             }
             syncAdjustmentState()
         }
+    }
+
+    private func captureFullscreenBrightnessIfNeeded() {
+        guard brightnessBeforeFullscreen == nil else { return }
+        let brightness = UIScreen.main.brightness
+        brightnessBeforeFullscreen = brightness
+        gestureStartBrightness = brightness
+        didRestoreBrightness = false
+    }
+
+    private func restoreFullscreenBrightnessIfNeeded() {
+        guard !didRestoreBrightness, let brightnessBeforeFullscreen else { return }
+        didRestoreBrightness = true
+        UIScreen.main.brightness = brightnessBeforeFullscreen
+        self.brightnessBeforeFullscreen = nil
     }
 
     /// Only touch the system volume when the saved value actually differs from
@@ -1101,7 +1329,40 @@ private struct VLCFullscreenView: View {
                 Color.black.opacity(0.35)
                 ProgressView().tint(.white).scaleEffect(1.4)
             }
-        case .failed, .ended:
+        case .failed:
+            ZStack {
+                Color.black.opacity(0.7)
+                VStack(spacing: 14) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 38))
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+
+                    Text("Video unavailable or the connection was lost.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+
+                    HStack(spacing: 12) {
+                        Button {
+                            fsVlc.replay()
+                        } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityLabel("Retry")
+
+                        Button(action: closeFullscreen) {
+                            Label("Close", systemImage: "xmark")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.white)
+                        .accessibilityLabel("Close player")
+                    }
+                }
+                .padding(24)
+            }
+        case .ended:
             ZStack {
                 Color.black.opacity(0.7)
                 Button {
@@ -1115,6 +1376,7 @@ private struct VLCFullscreenView: View {
                     .foregroundStyle(.white)
                 }
                 .buttonStyle(PlayerPressStyle())
+                .accessibilityLabel("Replay")
             }
         case .ready:
             EmptyView()
@@ -1175,6 +1437,52 @@ private struct VLCFullscreenView: View {
         return labels.remaining
     }
 
+    private var validDurationMs: Int32? {
+        guard let durationMs = fsVlc.player.media?.length.intValue, durationMs > 0 else {
+            return nil
+        }
+        return durationMs
+    }
+
+    private var timelineAccessibilityValue: String {
+        guard let durationMs = validDurationMs,
+              let totalTime = VLCTime(int: durationMs).stringValue else {
+            return "\(displayedCurrentTimeText) elapsed"
+        }
+        return "\(displayedCurrentTimeText) elapsed, \(totalTime) total"
+    }
+
+    private func beginTimelineScrub() {
+        controlsVisible = true
+        autoHideTask?.cancel()
+        fsVlc.beginScrubbing()
+    }
+
+    private func endTimelineScrub(to fraction: Double) {
+        fsVlc.endScrubbing(to: fraction)
+        if controlsVisible { scheduleAutoHide() }
+    }
+
+    private func adjustTimeline(_ direction: AccessibilityAdjustmentDirection) {
+        guard let durationMs = validDurationMs, !fsVlc.isScrubbing else { return }
+
+        let step = 10_000.0 / Double(durationMs)
+        let delta: Double
+        switch direction {
+        case .increment:
+            delta = step
+        case .decrement:
+            delta = -step
+        @unknown default:
+            return
+        }
+
+        let target = min(max(fsVlc.progress + delta, 0), 1)
+        beginTimelineScrub()
+        fsVlc.progress = target
+        endTimelineScrub(to: target)
+    }
+
     /// nPlayer-style top bar: centered wall clock above close + timeline-backed elapsed • title • remaining.
     /// Flat, with a light top-down scrim for legibility (no material) so it reads
     /// over any frame without heavy chrome. The native iOS status bar is hidden,
@@ -1204,18 +1512,12 @@ private struct VLCFullscreenView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(PlayerPressStyle())
+                .accessibilityLabel("Close player")
 
                 TimelineSlider(
                     progress: $fsVlc.progress,
-                    onScrubBegan: {
-                        controlsVisible = true
-                        autoHideTask?.cancel()
-                        fsVlc.beginScrubbing()
-                    },
-                    onScrubEnded: { fraction in
-                        fsVlc.endScrubbing(to: fraction)
-                        if controlsVisible { scheduleAutoHide() }
-                    }
+                    onScrubBegan: beginTimelineScrub,
+                    onScrubEnded: endTimelineScrub
                 )
                 .overlay {
                     HStack(spacing: 12) {
@@ -1238,6 +1540,10 @@ private struct VLCFullscreenView: View {
                     .allowsHitTesting(false)
                 }
                 .frame(height: 44)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Playback position")
+                .accessibilityValue(timelineAccessibilityValue)
+                .accessibilityAdjustableAction(adjustTimeline)
             }
         }
         .padding(.leading, 16 + safeInsets.leading)
@@ -1260,7 +1566,11 @@ private struct VLCFullscreenView: View {
     /// repeated here.
     private var bottomBar: some View {
         HStack(spacing: 40) {
-            transportButton(systemName: "gobackward.10", font: .title3) {
+            transportButton(
+                systemName: "gobackward.10",
+                accessibilityLabel: "Rewind 10 seconds",
+                font: .title3
+            ) {
                 flashSkipButton(.backward)
                 fsVlc.skipBackward()
             }
@@ -1271,12 +1581,17 @@ private struct VLCFullscreenView: View {
 
             transportButton(
                 systemName: fsVlc.isPlaying ? "pause.fill" : "play.fill",
+                accessibilityLabel: fsVlc.isPlaying ? "Pause" : "Play",
                 font: .system(size: 30)
             ) {
                 fsVlc.togglePlayPause()
             }
 
-            transportButton(systemName: "goforward.10", font: .title3) {
+            transportButton(
+                systemName: "goforward.10",
+                accessibilityLabel: "Forward 10 seconds",
+                font: .title3
+            ) {
                 flashSkipButton(.forward)
                 fsVlc.skipForward()
             }
@@ -1393,6 +1708,13 @@ private struct VLCFullscreenView: View {
             )
         }
         .padding(.leading, 4)
+        .accessibilityLabel("Subtitles")
+        .accessibilityValue(
+            isSearchingSubtitles
+                ? "Searching"
+                : ((fsVlc.hasSidecarSubtitle && fsVlc.sidecarEnabled)
+                    || fsVlc.currentSubtitleIndex != -1 ? "On" : "Off")
+        )
     }
 
     /// Handle the "Load .srt from device" picker result. On success the
@@ -1466,6 +1788,8 @@ private struct VLCFullscreenView: View {
         }
         .buttonStyle(PlayerPressStyle())
         .padding(.leading, 4)
+        .accessibilityLabel("Lock controls")
+        .accessibilityHint("Hides and disables the playback controls.")
     }
 
     /// Audio track picker. Shown only when VLC reports more than one real audio
@@ -1491,6 +1815,7 @@ private struct VLCFullscreenView: View {
                 .background(.black.opacity(0.45), in: Circle())
                 .contentShape(Circle())
         }
+        .accessibilityLabel("Audio tracks")
     }
 
     /// Cycles Fit → Zoom → 16:9 → 4:3 → 1:1 → Stretch and shows the current
@@ -1515,12 +1840,15 @@ private struct VLCFullscreenView: View {
         }
         .buttonStyle(PlayerPressStyle())
         .padding(.trailing, 4)
+        .accessibilityLabel("\(fsVlc.aspectMode.label) aspect ratio")
+        .accessibilityHint("Changes video scaling.")
     }
 
     /// Compact transport control: a 48×48 tap target (still ≥44pt, comfortable to
     /// hit) without the bulk of the old 56pt frame, keeping the bottom bar slim.
     private func transportButton(
         systemName: String,
+        accessibilityLabel: String,
         font: Font,
         action: @escaping () -> Void
     ) -> some View {
@@ -1531,6 +1859,7 @@ private struct VLCFullscreenView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(PlayerPressStyle())
+        .accessibilityLabel(Text(accessibilityLabel))
     }
 }
 
@@ -1708,6 +2037,9 @@ private struct BatteryIndicatorView: View {
                 }
             }
             .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Battery")
+            .accessibilityValue("\(percentage) percent")
         }
     }
 
@@ -1765,7 +2097,7 @@ private struct SubtitleOverlay: View {
             video: CompletedFile(
                 name: "Sample/Big Buck Bunny.mp4",
                 path: "/data/Sample/Big Buck Bunny.mp4",
-                url: "http://100.95.39.107:8090/files/Sample/Big%20Buck%20Bunny.mp4",
+                url: "\(CloudBoxEndpoints.filesURL.absoluteString)Sample/Big%20Buck%20Bunny.mp4",
                 modifiedAt: nil
             )
         )
@@ -1778,7 +2110,7 @@ private struct SubtitleOverlay: View {
             video: CompletedFile(
                 name: "Sample/Movie.mkv",
                 path: "/data/Sample/Movie.mkv",
-                url: "http://100.95.39.107:8090/files/Sample/Movie.mkv",
+                url: "\(CloudBoxEndpoints.filesURL.absoluteString)Sample/Movie.mkv",
                 modifiedAt: nil
             )
         )

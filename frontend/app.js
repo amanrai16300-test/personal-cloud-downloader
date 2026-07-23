@@ -1,5 +1,6 @@
-const API_BASE_URL = "http://100.92.146.101:8000";
+const API_BASE_URL = `http://${window.location.hostname}:8000`;
 const POLL_MS = 5000;
+const COMPLETED_FILES_POLL_MS = 30000;
 const APP_JS_VERSION = "cloudbox-theme-2026-06-12";
 
 console.info(`Personal Cloud Downloader app.js ${APP_JS_VERSION}`);
@@ -16,7 +17,13 @@ let cachedTorrents = [];
 let completedFileSnapshot = [];
 let isSubmitting = false;
 let isRefreshing = false;
+let downloaderDataGeneration = 0;
+let lastCompletedFilesRefreshAt = 0;
+let incompleteTorrentHashes = new Set();
+let pendingRefreshMode = "";
 let pendingDeleteHash = "";
+let pendingCompletedDelete = null;
+let isCompletedDeleteActive = false;
 let trendsState = {
   loaded: false,
   loading: false,
@@ -29,28 +36,100 @@ function setStatus(message, isError = false) {
   statusText.classList.toggle("error", isError);
 }
 
+function normalizeApiError(status, body) {
+  const statusFallbacks = {
+    400: "Invalid request",
+    401: "Request not authorized",
+    403: "Request not authorized",
+    404: "Requested item was not found",
+    409: "Request conflicts with the current state",
+    413: "File or request is too large",
+    422: "Some request information is invalid",
+  };
+  const fallback = statusFallbacks[status]
+    || (status >= 500 && status <= 599 ? "CloudBox server error" : "Request failed");
+
+  const safeText = (value) => {
+    if (typeof value !== "string") return "";
+    const text = value.trim();
+    if (!text || text.length > 160 || /[\r\n]/.test(text)) return "";
+    if (/[<>]/.test(text) || /^[\[{]/.test(text) || /[\]}]$/.test(text)) return "";
+    if (/\b(?:traceback|stack trace|stacktrace)\b|(?:^|\s)at\s+\S+\s*\(|\.(?:js|py|swift|java):\d+/i.test(text)) return "";
+    if (/(?:^|[\s"'(])(?:[A-Za-z]:\\|\\\\|\/(?:[^/\s"'()]+\/)+[^/\s"'()]+)/.test(text)) return "";
+    if (/\b(?:api[_ -]?key|secret|token|password|private[_ -]?key|database[_ -]?url|config(?:uration)?)\b\s*[:=]/i.test(text)) return "";
+    if (/\b(?:AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{16,}|Bearer\s+\S+)/.test(text)) return "";
+    if (/-----BEGIN [A-Z ]+-----/.test(text)) return "";
+    return text;
+  };
+
+  const candidates = [];
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed === "string") {
+      candidates.push(parsed);
+    } else if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const key of ["detail", "message", "error"]) {
+        const value = parsed[key];
+        if (typeof value === "string") candidates.push(value);
+        if (value && typeof value === "object" && typeof value.message === "string") {
+          candidates.push(value.message);
+        }
+      }
+    }
+
+    const validationItems = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.detail)
+        ? parsed.detail
+        : [];
+    for (const item of validationItems) {
+      if (item && typeof item.msg === "string") candidates.push(item.msg);
+    }
+  } catch {
+    candidates.push(body);
+  }
+
+  const message = candidates.map(safeText).find(Boolean) || fallback;
+  const error = new Error(message);
+  error.isApiResponseError = true;
+  return error;
+}
+
 async function apiFetch(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const requestPath = method === "GET"
     ? `${path}${path.includes("?") ? "&" : "?"}t=${Date.now()}`
     : path;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 15000);
 
-  const response = await fetch(`${API_BASE_URL}${requestPath}`, {
-    ...options,
-    cache: "no-store",
-    headers: {
-      "content-type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
+  try {
+    const response = await fetch(`${API_BASE_URL}${requestPath}`, {
+      ...options,
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        ...(options.headers || {}),
+      },
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(body || `Request failed: ${response.status}`);
+    if (!response.ok) {
+      const body = await response.text();
+      throw normalizeApiError(response.status, body);
+    }
+
+    if (response.status === 204) return null;
+    return response.json();
+  } catch (error) {
+    if (controller.signal.aborted && error?.name === "AbortError") {
+      throw new Error("Server request timed out");
+    }
+    if (error?.isApiResponseError) throw error;
+    throw new Error("CloudBox server is unreachable");
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-
-  if (response.status === 204) return null;
-  return response.json();
 }
 
 function escapeHtml(value) {
@@ -77,6 +156,28 @@ function normalizeStatus(torrent) {
   if (raw.includes("error") || raw.includes("fail") || raw.includes("missing")) return "Failed";
   if (raw.includes("downloading") || raw.includes("download") || progress > 0) return "Downloading";
   return "Waiting";
+}
+
+function torrentHash(torrent) {
+  return String(torrent.hash ?? "").trim().toLowerCase();
+}
+
+function hasTorrentCompletionTransition(torrents) {
+  return torrents.some((torrent) => {
+    const hash = torrentHash(torrent);
+    return hash
+      && incompleteTorrentHashes.has(hash)
+      && normalizeStatus(torrent) === "Completed";
+  });
+}
+
+function rememberIncompleteTorrents(torrents) {
+  incompleteTorrentHashes = new Set(
+    torrents
+      .filter((torrent) => normalizeStatus(torrent) !== "Completed")
+      .map(torrentHash)
+      .filter(Boolean),
+  );
 }
 
 function statusClass(status) {
@@ -805,6 +906,21 @@ function fileName(file) {
   return file.name || file.path || file.filename || "Completed file";
 }
 
+function completedItemRelativePath(file) {
+  const relativePath = file?.relative_path ?? file?.path;
+  return typeof relativePath === "string" && relativePath.trim()
+    ? relativePath
+    : "";
+}
+
+function isCompletedFolder(file) {
+  const itemType = String(file?.type ?? file?.kind ?? file?.entry_type ?? "").toLowerCase();
+  return file?.is_folder === true
+    || file?.is_directory === true
+    || itemType === "folder"
+    || itemType === "directory";
+}
+
 function renderCompletedFiles(files) {
   completedFileSnapshot = Array.isArray(files) ? files : [];
 
@@ -817,6 +933,8 @@ function renderCompletedFiles(files) {
     const url = fileUrl(file);
     const name = fileName(file);
     const safeUrl = escapeHtml(url);
+    const relativePath = completedItemRelativePath(file);
+    const folder = isCompletedFolder(file);
     const timeText = file.modified_at
       ? `Modified ${formatDateTime(file.modified_at)}`
       : "Time unavailable.";
@@ -831,6 +949,11 @@ function renderCompletedFiles(files) {
           <a class="action-button" href="${safeUrl}" target="_blank" rel="noreferrer">Stream</a>
           <a class="action-button" href="${safeUrl}" download>Download</a>
           <button class="action-button" type="button" data-copy-index="${index}">Copy VLC link</button>
+          ${relativePath ? `
+            <button class="action-button danger" type="button" data-delete-completed-index="${index}">
+              Delete ${folder ? "folder" : "file"}
+            </button>
+          ` : ""}
         </div>
       </article>
     `;
@@ -838,6 +961,8 @@ function renderCompletedFiles(files) {
 }
 
 async function addMagnet() {
+  if (isSubmitting) return;
+
   const magnet = magnetLinkInput.value.trim();
   if (!magnet) {
     setStatus("Paste a magnet link first.", true);
@@ -855,31 +980,88 @@ async function addMagnet() {
       method: "POST",
       body: JSON.stringify({ magnet }),
     });
+    downloaderDataGeneration += 1;
     magnetLinkInput.value = "";
     setStatus("Download started. Status updates automatically.");
-    await refreshAll({ quiet: true });
   } finally {
     isSubmitting = false;
     addMagnetButton.disabled = false;
     addMagnetButton.textContent = "Start download";
   }
+
+  await refreshAll({ quiet: true, fullReconciliation: false });
 }
 
 async function deleteTorrent(hash) {
   if (!hash) return;
   setStatus("Deleting torrent and files...");
-  await apiFetch(`/api/torrents/${encodeURIComponent(hash)}`, { method: "DELETE" });
+  const result = await apiFetch(
+    `/api/torrents/${encodeURIComponent(hash)}`,
+    { method: "DELETE" },
+  );
+  downloaderDataGeneration += 1;
   cachedTorrents = cachedTorrents.filter((torrent) => torrent.hash !== hash);
-  renderCompletedFiles([]);
-  setStatus("Torrent and files deleted.");
+
+  const deletedFilePaths = Array.isArray(result?.deleted_file_paths)
+    ? result.deleted_file_paths
+    : [];
+  const deletedFolderPaths = Array.isArray(result?.deleted_folder_paths)
+    ? result.deleted_folder_paths
+    : [];
+  const warnings = Array.isArray(result?.warnings)
+    ? result.warnings.filter((warning) => typeof warning === "string" && warning.trim())
+    : [];
+  const warningLabels = [...new Set(warnings.map((warning) => {
+    const normalized = warning.toLowerCase();
+    if (normalized.includes("qbittorrent delete failed")) {
+      return "qBittorrent could not remove the torrent";
+    }
+    if (normalized.includes("could not verify qbittorrent file paths")) {
+      return "completed-file paths could not be verified";
+    }
+    if (normalized.includes("no content-verified completed files")) {
+      return "no content-verified completed files were found";
+    }
+    if (normalized.includes("torrent was not found")) {
+      return "the torrent was not found in qBittorrent";
+    }
+    if (normalized.includes("failed to delete") || normalized.includes("failed to remove")) {
+      return "one or more files or folders could not be removed";
+    }
+    if (normalized.includes("refused to delete unsafe")) {
+      return "an unsafe cleanup path was skipped";
+    }
+    return "an additional cleanup warning was reported";
+  }))];
+  const shownWarnings = warningLabels.slice(0, 2);
+  const remainingWarningCount = warningLabels.length - shownWarnings.length;
+  const warningSummary = shownWarnings.length
+    ? ` Warnings: ${shownWarnings.join("; ")}${remainingWarningCount > 0 ? `; ${remainingWarningCount} more` : ""}.`
+    : "";
+  const removedCompletedItems = deletedFilePaths.length > 0 || deletedFolderPaths.length > 0;
+  const partialResult = result?.status === "partial"
+    || result?.status === "failed"
+    || result?.partial_success === true
+    || warnings.length > 0;
+
+  if (!removedCompletedItems) {
+    setStatus(
+      `Torrent delete request completed, but no completed files were removed.${warningSummary}`,
+      true,
+    );
+  } else if (partialResult) {
+    setStatus(
+      `Torrent delete request completed, but some files or cleanup steps may remain.${warningSummary}`,
+      true,
+    );
+  } else {
+    setStatus("Torrent and files deleted.");
+  }
+
   await refreshAll({ quiet: true });
 }
 
-function showDeleteConfirmation(hash) {
-  const torrent = cachedTorrents.find((item) => item.hash === hash);
-  const name = torrent?.name || hash || "this download";
-  pendingDeleteHash = hash;
-
+function getDeleteConfirmationModal() {
   let modal = document.querySelector("#deleteConfirmModal");
   if (!modal) {
     modal = document.createElement("div");
@@ -898,24 +1080,195 @@ function showDeleteConfirmation(hash) {
     document.body.appendChild(modal);
     modal.addEventListener("click", handleDeleteConfirmationClick);
   }
+  return modal;
+}
 
+function setDeleteConfirmationBusy(isBusy) {
+  const modal = document.querySelector("#deleteConfirmModal");
+  if (!modal) return;
+
+  const cancelButton = modal.querySelector("[data-delete-cancel]");
+  const confirmButton = modal.querySelector("[data-delete-confirm]");
+  if (cancelButton) cancelButton.disabled = isBusy;
+  if (confirmButton) {
+    confirmButton.disabled = isBusy;
+    confirmButton.textContent = isBusy ? "Deleting..." : "Delete";
+  }
+}
+
+function showDeleteConfirmation(hash) {
+  if (isCompletedDeleteActive) return;
+
+  const torrent = cachedTorrents.find((item) => item.hash === hash);
+  const name = torrent?.name || hash || "this download";
+  pendingDeleteHash = hash;
+  pendingCompletedDelete = null;
+
+  const modal = getDeleteConfirmationModal();
+  modal.querySelector("#deleteConfirmTitle").textContent = "Delete download?";
   modal.querySelector("#deleteConfirmName").textContent = `${name} and its files will be deleted.`;
+  setDeleteConfirmationBusy(false);
+  modal.hidden = false;
+}
+
+function showCompletedDeleteConfirmation(index) {
+  if (isCompletedDeleteActive) return;
+
+  const item = completedFileSnapshot[index];
+  const relativePath = completedItemRelativePath(item);
+  if (!item || !relativePath) {
+    setStatus("This completed item cannot be deleted.", true);
+    return;
+  }
+
+  const folder = isCompletedFolder(item);
+  const name = fileName(item);
+  pendingDeleteHash = "";
+  pendingCompletedDelete = {
+    relativePath,
+    folder,
+  };
+
+  const modal = getDeleteConfirmationModal();
+  modal.querySelector("#deleteConfirmTitle").textContent = folder
+    ? "Delete completed folder?"
+    : "Delete completed file?";
+  modal.querySelector("#deleteConfirmName").textContent = folder
+    ? `${name} will be deleted, including all completed media inside this folder.`
+    : `${name} will be deleted from Completed Files.`;
+  setDeleteConfirmationBusy(false);
   modal.hidden = false;
 }
 
 function hideDeleteConfirmation() {
+  if (isCompletedDeleteActive) return;
+
   const modal = document.querySelector("#deleteConfirmModal");
   if (modal) modal.hidden = true;
   pendingDeleteHash = "";
+  pendingCompletedDelete = null;
+}
+
+function completedDeleteWarningSummary(warnings) {
+  const warningLabels = [...new Set(warnings.map((warning) => {
+    const normalized = warning.toLowerCase();
+    if (normalized.includes("failed to delete") || normalized.includes("failed to remove")) {
+      return "one or more files or folders could not be removed";
+    }
+    if (normalized.includes("refused to delete unsafe")) {
+      return "an unsafe cleanup path was skipped";
+    }
+    if (normalized.includes("not found")) {
+      return "the completed item was not found";
+    }
+    return "an additional cleanup warning was reported";
+  }))];
+  const shownWarnings = warningLabels.slice(0, 2);
+  const remainingWarningCount = warningLabels.length - shownWarnings.length;
+  return shownWarnings.length
+    ? ` Warnings: ${shownWarnings.join("; ")}${remainingWarningCount > 0 ? `; ${remainingWarningCount} more` : ""}.`
+    : "";
+}
+
+async function deleteCompletedItem(target) {
+  if (isCompletedDeleteActive || !target?.relativePath) return;
+
+  isCompletedDeleteActive = true;
+  setDeleteConfirmationBusy(true);
+  const itemLabel = target.folder ? "folder" : "file";
+  setStatus(`Deleting completed ${itemLabel}...`);
+
+  try {
+    const result = await apiFetch(
+      `/api/completed-files?path=${encodeURIComponent(target.relativePath)}`,
+      { method: "DELETE" },
+    );
+    downloaderDataGeneration += 1;
+
+    const removalArrays = [
+      result?.deleted_file_paths,
+      result?.deleted_folder_paths,
+      result?.deleted_paths,
+      result?.deleted_files,
+      result?.deleted_folders,
+    ].filter(Array.isArray);
+    const numericRemovalValues = [
+      result?.deleted_count,
+      result?.removed_count,
+      result?.files_deleted,
+      result?.folders_deleted,
+      typeof result?.deleted_files === "number" ? result.deleted_files : undefined,
+      typeof result?.deleted_folders === "number" ? result.deleted_folders : undefined,
+    ];
+    const numericRemovedCount = numericRemovalValues.reduce(
+      (total, value) => total + (Number.isFinite(value) && value > 0 ? value : 0),
+      0,
+    );
+    const warnings = Array.isArray(result?.warnings)
+      ? result.warnings.filter((warning) => typeof warning === "string" && warning.trim())
+      : [];
+    const warningSummary = completedDeleteWarningSummary(warnings);
+    const removedItems = removalArrays.reduce((total, paths) => total + paths.length, 0)
+      + numericRemovedCount;
+    const explicitRemovalReport = removalArrays.length > 0
+      || numericRemovalValues.some(Number.isFinite)
+      || typeof result?.deleted === "boolean"
+      || typeof result?.removed === "boolean"
+      || typeof result?.deleted_path === "string";
+    const successfulStatus = result?.status === "success"
+      || result?.status === "deleted"
+      || result?.status === "ok";
+    const removedSomething = removedItems > 0
+      || result?.deleted === true
+      || result?.removed === true
+      || result?.partial_success === true
+      || (typeof result?.deleted_path === "string" && result.deleted_path.trim())
+      || (successfulStatus && !explicitRemovalReport);
+    const partialResult = result?.status === "partial"
+      || result?.status === "failed"
+      || result?.partial_success === true
+      || warnings.length > 0;
+
+    let outcomeMessage;
+    let outcomeIsError;
+    if (!removedSomething) {
+      outcomeMessage = `Completed ${itemLabel} was not removed.${warningSummary}`;
+      outcomeIsError = true;
+    } else if (partialResult) {
+      outcomeMessage = `Completed ${itemLabel} cleanup was partial.${warningSummary}`;
+      outcomeIsError = true;
+    } else {
+      outcomeMessage = `Completed ${itemLabel} deleted.`;
+      outcomeIsError = false;
+    }
+    setStatus(outcomeMessage, outcomeIsError);
+
+    try {
+      await refreshCompletedFiles();
+    } catch (error) {
+      setStatus(`${outcomeMessage} List refresh failed: ${error.message}`, true);
+    }
+  } finally {
+    isCompletedDeleteActive = false;
+    setDeleteConfirmationBusy(false);
+    hideDeleteConfirmation();
+  }
 }
 
 function handleDeleteConfirmationClick(event) {
   if (event.target.closest("[data-delete-cancel]")) {
+    if (isCompletedDeleteActive) return;
     hideDeleteConfirmation();
     return;
   }
 
   if (event.target.closest("[data-delete-confirm]")) {
+    if (pendingCompletedDelete) {
+      const target = pendingCompletedDelete;
+      deleteCompletedItem(target).catch((error) => setStatus(error.message, true));
+      return;
+    }
+
     const hash = pendingDeleteHash;
     hideDeleteConfirmation();
     deleteTorrent(hash).catch((error) => setStatus(error.message, true));
@@ -976,31 +1329,76 @@ async function copyText(text) {
 }
 
 async function refreshCompletedFiles() {
+  const refreshGeneration = downloaderDataGeneration;
   const files = await apiFetch("/api/completed-files");
+  if (refreshGeneration !== downloaderDataGeneration) return;
   renderCompletedFiles(Array.isArray(files) ? files : []);
+  lastCompletedFilesRefreshAt = Date.now();
 }
 
-async function refreshAll({ quiet = false } = {}) {
-  if (isRefreshing || isSubmitting) return;
+async function refreshAll({ quiet = false, fullReconciliation = true } = {}) {
+  if (isRefreshing || isSubmitting) {
+    if (fullReconciliation || !pendingRefreshMode) {
+      pendingRefreshMode = fullReconciliation ? "full" : "torrent";
+    }
+    return;
+  }
 
+  if (fullReconciliation || pendingRefreshMode === "torrent") {
+    pendingRefreshMode = "";
+  }
+
+  const refreshGeneration = downloaderDataGeneration;
   isRefreshing = true;
   refreshButton.disabled = true;
   if (!quiet) setStatus("Refreshing private backend...");
 
   try {
-    const [torrents, files] = await Promise.all([
-      apiFetch("/api/torrents"),
-      apiFetch("/api/completed-files"),
-    ]);
-    renderTorrents(Array.isArray(torrents) ? torrents : []);
-    renderCompletedFiles(Array.isArray(files) ? files : []);
+    let torrents;
+    let files;
+    let refreshedCompletedFiles = fullReconciliation;
+
+    if (fullReconciliation) {
+      [torrents, files] = await Promise.all([
+        apiFetch("/api/torrents"),
+        apiFetch("/api/completed-files"),
+      ]);
+    } else {
+      torrents = await apiFetch("/api/torrents");
+      if (refreshGeneration !== downloaderDataGeneration) return;
+
+      const torrentData = Array.isArray(torrents) ? torrents : [];
+      const completedFilesDue = Date.now() - lastCompletedFilesRefreshAt >= COMPLETED_FILES_POLL_MS;
+      if (completedFilesDue || hasTorrentCompletionTransition(torrentData)) {
+        files = await apiFetch("/api/completed-files");
+        refreshedCompletedFiles = true;
+      }
+    }
+
+    if (refreshGeneration !== downloaderDataGeneration) return;
+
+    const torrentData = Array.isArray(torrents) ? torrents : [];
+    rememberIncompleteTorrents(torrentData);
+    renderTorrents(torrentData);
+    if (refreshedCompletedFiles) {
+      renderCompletedFiles(Array.isArray(files) ? files : []);
+      lastCompletedFilesRefreshAt = Date.now();
+    }
     lastUpdated.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     if (!quiet) setStatus("Ready.");
   } catch (error) {
-    setStatus(error.message, true);
+    if (refreshGeneration === downloaderDataGeneration) {
+      setStatus(error.message, true);
+    }
   } finally {
     isRefreshing = false;
     refreshButton.disabled = false;
+
+    if (pendingRefreshMode && !isSubmitting) {
+      const fullReconciliation = pendingRefreshMode === "full";
+      pendingRefreshMode = "";
+      await refreshAll({ quiet: true, fullReconciliation });
+    }
   }
 }
 
@@ -1020,12 +1418,18 @@ torrentList.addEventListener("click", (event) => {
 });
 
 completedFiles.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-copy-index]");
-  if (!button) return;
-  copyVlcLink(Number(button.dataset.copyIndex)).catch((error) => setStatus(error.message, true));
+  const deleteButton = event.target.closest("[data-delete-completed-index]");
+  if (deleteButton) {
+    showCompletedDeleteConfirmation(Number(deleteButton.dataset.deleteCompletedIndex));
+    return;
+  }
+
+  const copyButton = event.target.closest("[data-copy-index]");
+  if (!copyButton) return;
+  copyVlcLink(Number(copyButton.dataset.copyIndex)).catch((error) => setStatus(error.message, true));
 });
 
 installCloudBoxTheme();
 installTrendsHomeEntry();
 refreshAll();
-window.setInterval(() => refreshAll({ quiet: true }), POLL_MS);
+window.setInterval(() => refreshAll({ quiet: true, fullReconciliation: false }), POLL_MS);

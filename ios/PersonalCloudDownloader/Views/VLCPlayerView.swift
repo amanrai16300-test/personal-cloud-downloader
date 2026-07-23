@@ -14,6 +14,11 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// applied — see `subtitleStyledLibrary` for why per-media options didn't work.
     let player = VLCMediaPlayer(library: VLCPlayerController.subtitleStyledLibrary)
 
+    private static let audioSessionOwnershipLock = NSLock()
+    private static var activeAudioOwners: Set<ObjectIdentifier> = []
+    private static var audioSessionActive = false
+    private static var finalDeactivationPending = false
+
     /// Seconds the skip-back / skip-forward buttons jump.
     static let skipInterval: Int32 = 10
 
@@ -29,16 +34,36 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// fraction→seek→fraction drifts the resume point). Milliseconds restore the
     /// exact playhead. Duration is kept so a precise fractional fallback can be
     /// derived when a millisecond seek isn't yet possible.
-    struct SavedPosition: Codable {
+    struct SavedPosition: Codable, Equatable {
         let timeMs: Int
         let durationMs: Int
+        let updatedAt: Date?
+
+        init(timeMs: Int, durationMs: Int, updatedAt: Date? = Date()) {
+            self.timeMs = timeMs
+            self.durationMs = durationMs
+            self.updatedAt = updatedAt
+        }
+
         /// Fractional position, for the deferred `player.position` fallback.
         var fraction: Float {
             durationMs > 0 ? Float(timeMs) / Float(durationMs) : 0
         }
     }
+
+    private struct ProgressSyncSnapshot: Equatable, Sendable {
+        let path: String
+        let timeMs: Int
+        let durationMs: Int
+        let updatedAt: Date
+    }
+
     private static let savedPositionsDefaultsKey = "vlc.savedPlaybackPositions.v1"
     private static var savedPositions: [String: SavedPosition] = loadSavedPositions()
+    private static var completedPositions: [String: SavedPosition] = [:]
+    @MainActor private static var pendingProgressSync: ProgressSyncSnapshot?
+    @MainActor private static var progressSyncInFlight = false
+    private static let watchedCompletionFraction = 0.90
     private static let savedPreferencesDefaultsKey = "vlc.playerPreferences.v1"
     private static var savedPreferences: [String: PlayerPreference] = loadSavedPreferences()
 
@@ -46,6 +71,8 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// position against the right key without the call site passing it back.
     /// Prefer `CompletedFile.path`, because URL host/encoding can change.
     private var currentResumeKey: String?
+    private var currentMediaURL: URL?
+    private var didCompleteCurrentMedia = false
 
     private var lastPeriodicPersistMs = 0
 
@@ -62,6 +89,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     private var savedSubtitlePreference: SubtitlePreference?
     private var didApplySavedSubtitlePreference = false
+    private var didManuallySelectEmbeddedSubtitle = false
 
     private static func normalizeResumeKey(_ key: String) -> String {
         key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -92,28 +120,89 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }
 
     private func updatePreference(_ update: (inout PlayerPreference) -> Void) {
-        guard let key = currentResumeKey else {
-            print("[VLC_PREF] save skipped: no resume key (controller \(ObjectIdentifier(self)))")
-            return
-        }
+        guard let key = currentResumeKey else { return }
         var preference = Self.savedPreferences[key] ?? PlayerPreference()
         update(&preference)
         Self.savedPreferences[key] = preference
         Self.writeSavedPreferences()
-        // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
-        print("[VLC_PREF] save key=\(key) aspect=\(preference.aspectMode?.rawValue ?? "nil") subtitle=\(String(describing: preference.subtitle)) controller=\(ObjectIdentifier(self))")
     }
 
     private static func savePosition(_ position: SavedPosition, for key: String) {
+        completedPositions[key] = nil
         savedPositions[key] = position
         writeSavedPositions()
-        Task {
-            try? await CompletedFilesAPI.saveVideoProgress(
-                path: key,
-                timeMs: position.timeMs,
-                durationMs: position.durationMs
-            )
+        enqueueProgressSync(position, for: key)
+    }
+
+    private static func enqueueProgressSync(_ position: SavedPosition, for key: String) {
+        let snapshot = ProgressSyncSnapshot(
+            path: key,
+            timeMs: position.timeMs,
+            durationMs: position.durationMs,
+            updatedAt: position.updatedAt ?? Date()
+        )
+        Task { @MainActor in
+            enqueueProgressSync(snapshot)
         }
+    }
+
+    @MainActor
+    private static func enqueueProgressSync(_ snapshot: ProgressSyncSnapshot) {
+        if let pending = pendingProgressSync,
+           isNewerProgressSync(pending, than: snapshot) {
+            syncPendingProgress()
+            return
+        }
+
+        pendingProgressSync = snapshot
+        syncPendingProgress()
+    }
+
+    @MainActor
+    private static func syncPendingProgress() {
+        guard !progressSyncInFlight, let snapshot = pendingProgressSync else { return }
+        progressSyncInFlight = true
+
+        Task { @MainActor in
+            do {
+                try await CompletedFilesAPI.saveVideoProgress(
+                    path: snapshot.path,
+                    timeMs: snapshot.timeMs,
+                    durationMs: snapshot.durationMs
+                )
+                progressSyncInFlight = false
+                if let pending = pendingProgressSync,
+                   pending.path == snapshot.path,
+                   !isNewerProgressSync(pending, than: snapshot) {
+                    pendingProgressSync = nil
+                }
+                syncPendingProgress()
+            } catch {
+                let hasNewerPending = pendingProgressSync.map {
+                    isNewerProgressSync($0, than: snapshot)
+                } ?? false
+                progressSyncInFlight = false
+                if hasNewerPending {
+                    syncPendingProgress()
+                }
+            }
+        }
+    }
+
+    private static func isNewerProgressSync(
+        _ candidate: ProgressSyncSnapshot,
+        than reference: ProgressSyncSnapshot
+    ) -> Bool {
+        if candidate.updatedAt != reference.updatedAt {
+            return candidate.updatedAt > reference.updatedAt
+        }
+        if candidate.path != reference.path {
+            return false
+        }
+        if candidate.timeMs != reference.timeMs {
+            return candidate.timeMs > reference.timeMs
+        }
+        return candidate.durationMs > reference.durationMs
     }
 
     private static func clearPosition(for key: String) {
@@ -121,28 +210,196 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         writeSavedPositions()
     }
 
+    static func resumablePosition(for path: String) -> SavedPosition? {
+        let key = normalizeResumeKey(path)
+        guard !key.isEmpty,
+              completedPositions[key] == nil,
+              let position = savedPositions[key],
+              position.timeMs > 0,
+              position.durationMs > 0,
+              Double(position.timeMs) / Double(position.durationMs) < watchedCompletionFraction
+        else { return nil }
+        return position
+    }
+
+    static func hasCompletedPosition(for path: String) -> Bool {
+        let key = normalizeResumeKey(path)
+        guard !key.isEmpty,
+              let position = completedPositions[key],
+              position.durationMs > 0
+        else { return false }
+        return Double(position.timeMs) / Double(position.durationMs) >= watchedCompletionFraction
+    }
+
+    static func mergeProgressForPlayback(_ progress: VideoProgress, path: String) {
+        let key = normalizeResumeKey(path)
+        guard !key.isEmpty,
+              normalizeResumeKey(progress.path) == key,
+              progress.durationMs > 0
+        else { return }
+
+        let imported = SavedPosition(
+            timeMs: min(max(progress.timeMs, 0), progress.durationMs),
+            durationMs: progress.durationMs,
+            updatedAt: progressUpdatedAt(progress)
+        )
+        let local = savedPositions[key] ?? completedPositions[key]
+        let merged = mergedPosition(local: local, imported: imported)
+
+        guard merged == imported else {
+            if let local, merged != local, savedPositions[key] != nil {
+                savedPositions[key] = merged
+                writeSavedPositions()
+            }
+            return
+        }
+
+        importProgressSnapshot([key: progress])
+    }
+
+    @discardableResult
+    static func persistPlaybackProgress(
+        path: String,
+        timeMs: Int,
+        durationMs: Int
+    ) -> SavedPosition? {
+        let key = normalizeResumeKey(path)
+        guard !key.isEmpty, durationMs > 0 else { return nil }
+
+        let clampedTimeMs = min(max(timeMs, 0), durationMs)
+        guard clampedTimeMs > 0 else { return nil }
+
+        let position = SavedPosition(
+            timeMs: clampedTimeMs,
+            durationMs: durationMs
+        )
+        let watchedFraction = Double(clampedTimeMs) / Double(durationMs)
+
+        if watchedFraction >= watchedCompletionFraction {
+            clearPosition(for: key)
+            completedPositions[key] = position
+            enqueueProgressSync(position, for: key)
+        } else {
+            savePosition(position, for: key)
+        }
+        return position
+    }
+
     static func localProgressSnapshot() -> [String: VideoProgress] {
-        Dictionary(uniqueKeysWithValues: savedPositions.map { key, position in
-            (
-                key,
-                VideoProgress.local(
-                    path: key,
-                    timeMs: position.timeMs,
-                    durationMs: position.durationMs
-                )
-            )
+        var snapshot = Dictionary(uniqueKeysWithValues: savedPositions.map { key, position in
+            (key, VideoProgress.local(
+                path: key,
+                timeMs: position.timeMs,
+                durationMs: position.durationMs
+            ))
         })
+        for (key, position) in completedPositions {
+            snapshot[key] = VideoProgress.local(
+                path: key,
+                timeMs: position.timeMs,
+                durationMs: position.durationMs
+            )
+        }
+        return snapshot
     }
 
     static func importProgressSnapshot(_ progressByPath: [String: VideoProgress]) {
+        var didChange = false
+
         for (path, progress) in progressByPath {
-            guard progress.timeMs > 0, progress.durationMs > 0 else { continue }
-            savedPositions[path] = SavedPosition(
-                timeMs: progress.timeMs,
-                durationMs: progress.durationMs
+            guard progress.durationMs > 0 else { continue }
+            let watchedFraction = min(
+                max(Double(progress.timeMs) / Double(progress.durationMs), 0),
+                1
             )
+            if watchedFraction >= watchedCompletionFraction {
+                completedPositions[path] = SavedPosition(
+                    timeMs: min(max(progress.timeMs, 0), progress.durationMs),
+                    durationMs: progress.durationMs,
+                    updatedAt: progressUpdatedAt(progress)
+                )
+                if savedPositions.removeValue(forKey: path) != nil {
+                    didChange = true
+                }
+                continue
+            }
+            guard progress.timeMs > 0 else { continue }
+            completedPositions[path] = nil
+            let imported = SavedPosition(
+                timeMs: progress.timeMs,
+                durationMs: progress.durationMs,
+                updatedAt: progressUpdatedAt(progress)
+            )
+            let merged = mergedPosition(local: savedPositions[path], imported: imported)
+
+            guard merged != savedPositions[path] else { continue }
+            savedPositions[path] = merged
+            didChange = true
         }
-        writeSavedPositions()
+
+        if didChange {
+            writeSavedPositions()
+        }
+    }
+
+    private static func mergedPosition(
+        local: SavedPosition?,
+        imported: SavedPosition
+    ) -> SavedPosition {
+        guard let local else { return imported }
+
+        switch (local.updatedAt, imported.updatedAt) {
+        case let (localDate?, importedDate?) where importedDate > localDate:
+            return imported
+        case let (localDate?, importedDate?) where importedDate < localDate:
+            return addingMissingDuration(to: local, from: imported)
+        case (nil, _?):
+            return imported
+        case (_?, nil):
+            return addingMissingDuration(to: local, from: imported)
+        default:
+            guard imported.timeMs >= local.timeMs else {
+                return addingMissingDuration(to: local, from: imported)
+            }
+            return imported
+        }
+    }
+
+    private static func addingMissingDuration(
+        to local: SavedPosition,
+        from imported: SavedPosition
+    ) -> SavedPosition {
+        guard local.durationMs <= 0,
+              imported.durationMs >= local.timeMs
+        else { return local }
+        return SavedPosition(
+            timeMs: local.timeMs,
+            durationMs: imported.durationMs,
+            updatedAt: local.updatedAt
+        )
+    }
+
+    private static func progressUpdatedAt(_ progress: VideoProgress) -> Date? {
+        guard let data = try? JSONEncoder().encode(progress),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = object["updated_at"] ?? object["updatedAt"]
+        else { return nil }
+
+        if let timestamp = value as? TimeInterval, timestamp.isFinite {
+            if timestamp > 1_000_000_000_000 {
+                return Date(timeIntervalSince1970: timestamp / 1_000)
+            }
+            if timestamp > 1_000_000_000 {
+                return Date(timeIntervalSince1970: timestamp)
+            }
+            return Date(timeIntervalSinceReferenceDate: timestamp)
+        }
+
+        guard let timestamp = value as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: timestamp)
+            ?? ISO8601DateFormatter().date(from: timestamp)
     }
 
     /// The two fullscreen scaling modes the ratio button toggles between.
@@ -351,6 +608,9 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         guard player.media == nil else { return }
         let stableKey = Self.normalizeResumeKey(resumeKey)
         currentResumeKey = stableKey.isEmpty ? url.absoluteString : stableKey
+        currentMediaURL = url
+        didCompleteCurrentMedia = false
+        Self.cleanupMalformedLocalSubtitleFiles()
         lastPeriodicPersistMs = 0
         let media = VLCMedia(url: url)
         // `sub-margin` is an INPUT option (lifts subtitles off the very bottom so
@@ -369,8 +629,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         aspectApplied = false
         savedSubtitlePreference = savedPreference?.subtitle
         didApplySavedSubtitlePreference = false
-        // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
-        print("[VLC_PREF] load key=\(currentResumeKey ?? "nil") found=\(savedPreference != nil) aspect=\(savedPreference?.aspectMode?.rawValue ?? "nil") subtitle=\(String(describing: savedPreference?.subtitle)) controller=\(ObjectIdentifier(self))")
+        didManuallySelectEmbeddedSubtitle = false
 
         didAutoSelectSubtitle = false
         subtitleTracks = []
@@ -385,6 +644,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         currentSubtitleText = nil
         fetchSidecarSubtitle(for: url)
 
+        claimAudioSessionOwnership()
         activateAudioSession()
         player.play()
     }
@@ -395,8 +655,8 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// old controller's teardown, so that deactivation can land under live
     /// playback and leave audio muted/broken. Re-asserting `.playback` +
     /// active here on every `start` makes each (re)start begin with a valid,
-    /// active session. No matching deactivation on exit — deliberate, so a
-    /// late `stop()` from a dying controller can't kill the next player's audio.
+    /// active session. Final deactivation is coordinated separately so a late
+    /// `stop()` from a dying controller cannot kill the next player's audio.
     private func activateAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
@@ -406,6 +666,58 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             // Non-fatal: playback still starts; VLC's internal session
             // handling remains the fallback if activation is refused.
         }
+    }
+
+    private func claimAudioSessionOwnership() {
+        Self.audioSessionOwnershipLock.lock()
+        Self.activeAudioOwners.insert(ObjectIdentifier(self))
+        Self.audioSessionActive = true
+        Self.audioSessionOwnershipLock.unlock()
+    }
+
+    private func releaseAudioSessionOwnership() {
+        let shouldDeactivate: Bool
+
+        Self.audioSessionOwnershipLock.lock()
+        Self.activeAudioOwners.remove(ObjectIdentifier(self))
+        shouldDeactivate = Self.prepareFinalDeactivationIfReady()
+        Self.audioSessionOwnershipLock.unlock()
+
+        if shouldDeactivate {
+            Self.deactivateAudioSession()
+        }
+    }
+
+    static func finishPlaybackSession() {
+        let shouldDeactivate: Bool
+
+        audioSessionOwnershipLock.lock()
+        finalDeactivationPending = true
+        shouldDeactivate = prepareFinalDeactivationIfReady()
+        if activeAudioOwners.isEmpty, !audioSessionActive {
+            finalDeactivationPending = false
+        }
+        audioSessionOwnershipLock.unlock()
+
+        if shouldDeactivate {
+            deactivateAudioSession()
+        }
+    }
+
+    private static func prepareFinalDeactivationIfReady() -> Bool {
+        guard finalDeactivationPending, activeAudioOwners.isEmpty, audioSessionActive else {
+            return false
+        }
+        finalDeactivationPending = false
+        audioSessionActive = false
+        return true
+    }
+
+    private static func deactivateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
     }
 
     /// Try to fetch and parse a sidecar `.srt` beside the video — e.g.
@@ -484,15 +796,57 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// stable resume key, so any video path maps to one filesystem-safe name
     /// with no collisions.
     private static func localSubtitleURL(forKey key: String) -> URL? {
+        localSubtitleDirectoryURL()?
+            .appendingPathComponent("\(localSubtitleFilename(forKey: key)).srt")
+    }
+
+    private static func localSubtitleDirectoryURL() -> URL? {
         guard let base = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first else { return nil }
-        let digest = SHA256.hash(data: Data(key.utf8))
+        return base.appendingPathComponent("LocalSubtitles", isDirectory: true)
+    }
+
+    private static func localSubtitleFilename(forKey key: String) -> String {
+        SHA256.hash(data: Data(key.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
-        return base
-            .appendingPathComponent("LocalSubtitles", isDirectory: true)
-            .appendingPathComponent("\(digest).srt")
+    }
+
+    private static func removeLocalSubtitle(forKey key: String) {
+        guard let url = localSubtitleURL(forKey: key) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private static func cleanupMalformedLocalSubtitleFiles() {
+        guard let directory = localSubtitleDirectoryURL(),
+              let files = try? FileManager.default.contentsOfDirectory(
+                  at: directory,
+                  includingPropertiesForKeys: [.isRegularFileKey],
+                  options: [.skipsHiddenFiles]
+              ) else { return }
+
+        let validDigestCharacters = CharacterSet(charactersIn: "0123456789abcdef")
+        for file in files {
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+            else { continue }
+
+            let digest = file.deletingPathExtension().lastPathComponent
+            let hasExpectedName = file.pathExtension == "srt"
+                && digest.unicodeScalars.count == 64
+                && digest.unicodeScalars.allSatisfy { validDigestCharacters.contains($0) }
+            if !hasExpectedName {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
+    }
+
+    private func removeLocalSubtitleIfMediaIsProvablyMissing() {
+        guard let mediaURL = currentMediaURL,
+              mediaURL.isFileURL,
+              !FileManager.default.fileExists(atPath: mediaURL.path),
+              let key = currentResumeKey else { return }
+        Self.removeLocalSubtitle(forKey: key)
     }
 
     func searchMissingSubtitle(for videoURL: URL, completion: @escaping (String) -> Void) {
@@ -568,6 +922,11 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             guard self.sidecarFetchURL == srtURL else { return }
             self.sidecarCues = cues
             self.hasSidecarSubtitle = true
+            guard !self.didManuallySelectEmbeddedSubtitle else {
+                self.sidecarEnabled = false
+                self.updateCurrentCue()
+                return
+            }
             // Overlay is the sole subtitle source: keep native VLC SPU off.
             self.player.currentVideoSubTitleIndex = -1
             self.currentSubtitleIndex = -1
@@ -577,8 +936,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }
 
     /// Ask the backend to extract an embedded text subtitle track into the
-    /// sidecar `.srt`. Derives the backend URL from the video URL: same scheme +
-    /// host, the FastAPI port (8000), endpoint `/api/subtitles/extract`. The
+    /// sidecar `.srt` through the shared CloudBox FastAPI endpoint. The
     /// request body's `path` is the video path relative to the Nginx `/files/`
     /// root (the components after the `files` segment). `completion(true)` only
     /// when the server reports the `.srt` now exists (`extracted` / `exists`);
@@ -609,17 +967,18 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         task.resume()
     }
 
-    /// Backend extract endpoint URL: the video URL's scheme + host with the
-    /// FastAPI port (8000) and the fixed path. Returns nil if the host is
-    /// unknown.
+    /// Backend extract endpoint URL using the shared CloudBox FastAPI base.
+    /// Returns nil if the source video host is unknown.
     private func backendExtractURL(for videoURL: URL) -> URL? {
         backendSubtitleURL(for: videoURL, path: "/api/subtitles/extract")
     }
 
     private func backendSubtitleURL(for videoURL: URL, path: String) -> URL? {
-        guard var components = URLComponents(url: videoURL, resolvingAgainstBaseURL: false),
-              components.host != nil else { return nil }
-        components.port = 8000
+        guard videoURL.host != nil,
+              var components = URLComponents(
+                  url: CloudBoxEndpoints.fastAPIBaseURL,
+                  resolvingAgainstBaseURL: false
+              ) else { return nil }
         components.path = path
         components.query = nil
         components.fragment = nil
@@ -657,6 +1016,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         didApplySavedSubtitlePreference = true
         sidecarEnabled = on
         if on {
+            didManuallySelectEmbeddedSubtitle = false
             player.currentVideoSubTitleIndex = -1
             currentSubtitleIndex = -1
             updatePreference { $0.subtitle = .sidecar }
@@ -789,8 +1149,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         guard v.width > 0, v.height > 0 else { return }
         applyAspect(drawableSize: aspectDrawableSize)
         aspectApplied = true
-        // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
-        print("[VLC_PREF] aspect applied mode=\(aspectMode.rawValue) surface=\(Int(aspectDrawableSize.width))x\(Int(aspectDrawableSize.height))")
     }
 
     /// Hand a freshly-duplicated C string to a VLC setter. VLC copies the value,
@@ -836,27 +1194,54 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             detachDrawable(view)
         }
         player.media = nil
+        currentMediaURL = nil
+        releaseAudioSessionOwnership()
     }
 
     /// Save the current playback position (milliseconds + duration) for this
     /// session so reopening the same video — or handing off inline ⇄ fullscreen
-    /// — resumes at the exact playhead. Skips meaningless values: not seekable,
-    /// NaN/out of range, at the very start, or essentially at the end (treated as
-    /// done). Public so the fullscreen close button can persist SYNCHRONOUSLY
+    /// — resumes at the exact playhead. Skips meaningless values and clears the
+    /// resumable playhead once the shared 90% completion threshold is reached.
+    /// Public so the fullscreen close button can persist SYNCHRONOUSLY
     /// before the cover dismisses: SwiftUI remounts the inline surface (which
     /// re-`start`s and reads path-keyed `savedPositions`) before this controller's
     /// `onDisappear` runs, so persisting only in `teardown`/`onDisappear` would
     /// let inline resume from the stale pre-fullscreen position. Idempotent —
     /// safe to call again from `teardown`.
     func persistPosition() {
-        guard let key = currentResumeKey, player.isSeekable else { return }
-        let pos = player.position
-        guard pos.isFinite, pos > 0.001, pos < 0.999 else {
+        guard let key = currentResumeKey,
+              player.isSeekable,
+              !didCompleteCurrentMedia else { return }
+
+        let rawPosition = Double(player.position)
+        guard rawPosition.isFinite else {
             Self.clearPosition(for: key)
             return
         }
-        let timeMs = Int(player.time.intValue)
-        let durationMs = Int(player.media?.length.intValue ?? 0)
+
+        let position = min(max(rawPosition, 0), 1)
+        let timeMs = max(0, Int(player.time.intValue))
+        let durationMs = max(0, Int(player.media?.length.intValue ?? 0))
+
+        if durationMs > 0 {
+            let watchedFraction = min(max(Double(timeMs) / Double(durationMs), 0), 1)
+            if watchedFraction >= Self.watchedCompletionFraction {
+                didCompleteCurrentMedia = true
+                Self.clearPosition(for: key)
+                let completedPosition = SavedPosition(
+                    timeMs: min(timeMs, durationMs),
+                    durationMs: durationMs
+                )
+                Self.completedPositions[key] = completedPosition
+                Self.enqueueProgressSync(completedPosition, for: key)
+                return
+            }
+        }
+
+        guard position > 0.001, position < Self.watchedCompletionFraction else {
+            Self.clearPosition(for: key)
+            return
+        }
         Self.savePosition(SavedPosition(timeMs: timeMs, durationMs: durationMs), for: key)
     }
 
@@ -864,6 +1249,8 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     /// end-of-playback replay button.
     func replay() {
         if let key = currentResumeKey { Self.clearPosition(for: key) }
+        if let key = currentResumeKey { Self.completedPositions[key] = nil }
+        didCompleteCurrentMedia = false
         pendingResume = nil
         didAutoSelectSubtitle = false
         audioTracks = []
@@ -925,9 +1312,12 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
 
     func selectSubtitle(track: SubtitleTrack) {
         didApplySavedSubtitlePreference = true
+        didManuallySelectEmbeddedSubtitle = true
+        sidecarEnabled = false
         player.currentVideoSubTitleIndex = track.index
         currentSubtitleIndex = track.index
         updatePreference { $0.subtitle = .embedded(name: track.name, fallbackIndex: track.index) }
+        updateCurrentCue()
     }
 
     private func applySavedSubtitlePreferenceIfPossible() {
@@ -940,8 +1330,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             player.currentVideoSubTitleIndex = -1
             currentSubtitleIndex = -1
             didApplySavedSubtitlePreference = true
-            // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
-            print("[VLC_PREF] subtitle restored: sidecar")
             updateCurrentCue()
 
         case .embedded(let name, let fallbackIndex):
@@ -956,8 +1344,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             // silently failing forever.
             if player.currentVideoSubTitleIndex == track.index {
                 didApplySavedSubtitlePreference = true
-                // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
-                print("[VLC_PREF] subtitle restored: embedded name=\(track.name) index=\(track.index)")
             }
             updateCurrentCue()
 
@@ -966,8 +1352,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             player.currentVideoSubTitleIndex = -1
             currentSubtitleIndex = -1
             didApplySavedSubtitlePreference = true
-            // TEMPORARY diagnostic — remove once ratio/subtitle memory is verified on device.
-            print("[VLC_PREF] subtitle restored: off")
             updateCurrentCue()
         }
     }
@@ -1060,6 +1444,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
             playbackState = .loading
         case .error:
             playbackState = .failed
+            removeLocalSubtitleIfMediaIsProvablyMissing()
         case .ended, .stopped:
             playbackState = .ended
         case .playing, .paused:

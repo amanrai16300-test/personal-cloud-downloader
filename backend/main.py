@@ -11,11 +11,13 @@ import subprocess
 import time
 import tempfile
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from io import BytesIO
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
@@ -35,7 +37,7 @@ monitor_task: asyncio.Task[None] | None = None
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://100.95.39.107:8090"],
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["content-type"],
 )
@@ -64,8 +66,9 @@ class ConvertMarkdownURLRequest(BaseModel):
 
 
 VIDEO_PROGRESS_FILE = settings.download_complete_dir.parent / "video_progress.json"
+_video_progress_lock = Lock()
 HOME_SERVER_LOCATION = "Oracle · Tokyo"
-HOME_WATCHED_COMPLETE_PERCENT = 90.0
+WATCHED_COMPLETION_PERCENT = 90.0
 # Raw playable videos returned for `recently_added`. The client groups TV
 # episodes into series and then shows only the first few unique cards, so the
 # backend must over-fetch (a single series can span many episodes) to leave the
@@ -81,10 +84,18 @@ TMDB_POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500"
 TMDB_BACKDROP_BASE_URL = "https://image.tmdb.org/t/p/w780"
 TMDB_REQUEST_TIMEOUT_SECONDS = 6
 TMDB_CACHE_TTL_SECONDS = 6 * 60 * 60
+TMDB_MAX_WORKERS = 3
+TMDB_MAX_PENDING_JOBS = 32
 # Module-level cache of TMDB lookups keyed by normalized title+year+media_type.
 # Stores hits AND no-match (None) results with a timestamp so a Home refresh
 # does not re-search TMDB; entries expire after TMDB_CACHE_TTL_SECONDS.
 _tmdb_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_tmdb_executor = ThreadPoolExecutor(
+    max_workers=TMDB_MAX_WORKERS,
+    thread_name_prefix="cloudbox-tmdb",
+)
+_tmdb_jobs: set[str] = set()
+_tmdb_jobs_lock = Lock()
 QB_ACTIVE_STATES = {
     "downloading",
     "metaDL",
@@ -103,6 +114,14 @@ QB_ACTIVE_STATES = {
 THUMBNAIL_CACHE_DIR_NAME = "_cloudbox-thumbnails"
 THUMBNAIL_CACHE_VERSION = "v3"
 MIN_THUMBNAIL_BYTES = 2 * 1024
+THUMBNAIL_MAX_WORKERS = 2
+THUMBNAIL_MAX_PENDING_JOBS = 32
+_thumbnail_executor = ThreadPoolExecutor(
+    max_workers=THUMBNAIL_MAX_WORKERS,
+    thread_name_prefix="cloudbox-thumbnail",
+)
+_thumbnail_jobs: set[Path] = set()
+_thumbnail_jobs_lock = Lock()
 NETWORK_INTERFACE = "enp0s6"
 VNSTAT_TIMEOUT_SECONDS = 5
 STORAGE_PATHS = ("/srv/personal-cloud",)
@@ -154,6 +173,8 @@ async def start_auto_pause_monitor() -> None:
 async def stop_auto_pause_monitor() -> None:
     if monitor_task:
         monitor_task.cancel()
+    _thumbnail_executor.shutdown(wait=False, cancel_futures=True)
+    _tmdb_executor.shutdown(wait=False, cancel_futures=True)
 
 
 @app.get("/api/health")
@@ -384,9 +405,15 @@ def build_continue_watching(videos: list[dict[str, Any]]) -> dict[str, Any] | No
         record = video["progress"]
         if not isinstance(record, dict):
             continue
-        watched = float(record.get("watchedPercent", 0) or 0)
+        try:
+            watched = float(record.get("watchedPercent", 0) or 0)
+        except (TypeError, ValueError):
+            watched = 0.0
+        if watched != watched:
+            watched = 0.0
+        watched = min(max(watched, 0.0), 100.0)
         time_ms = int(record.get("timeMs", 0) or 0)
-        if watched >= HOME_WATCHED_COMPLETE_PERCENT or time_ms <= 0:
+        if watched >= WATCHED_COMPLETION_PERCENT or time_ms <= 0:
             continue
         updated_at = record.get("updatedAt")
         if not isinstance(updated_at, str):
@@ -435,24 +462,59 @@ def normalized_progress(position_seconds: int, duration_seconds: int) -> float:
 
 
 def tmdb_artwork_for(title: str, media_type: str, year: int | None) -> dict[str, Any] | None:
-    """Look up TMDB artwork for a parsed media title. Returns
+    """Return cached TMDB artwork for a parsed media title and queue cache misses.
+
+    Returns
     {tmdb_id, media_type, poster_url, backdrop_url} on a conservative match, or
-    None on no-match / failure. Results (including no-match) are cached so a Home
-    refresh does not re-search TMDB. Never raises — TMDB problems must not fail
-    the Home dashboard, and the API key is never returned to the caller.
+    None while an uncached lookup runs or for a cached no-match. The API key is
+    never returned to the caller.
     """
     normalized = normalize_tmdb_title(title)
     if not normalized:
         return None
 
     cache_key = f"{media_type}:{year or ''}:{normalized}"
-    cached = _tmdb_cache.get(cache_key)
-    if cached is not None and (time.monotonic() - cached[0]) < TMDB_CACHE_TTL_SECONDS:
-        return cached[1]
+    with _tmdb_jobs_lock:
+        cached = _tmdb_cache.get(cache_key)
+        if cached is not None and (time.monotonic() - cached[0]) < TMDB_CACHE_TTL_SECONDS:
+            return cached[1]
+        if cache_key in _tmdb_jobs or len(_tmdb_jobs) >= TMDB_MAX_PENDING_JOBS:
+            return None
+        _tmdb_jobs.add(cache_key)
 
-    result = search_tmdb_artwork(title, normalized, media_type, year)
-    _tmdb_cache[cache_key] = (time.monotonic(), result)
-    return result
+    try:
+        _tmdb_executor.submit(
+            run_tmdb_artwork_job,
+            cache_key,
+            title,
+            normalized,
+            media_type,
+            year,
+        )
+    except Exception as exc:
+        with _tmdb_jobs_lock:
+            _tmdb_jobs.discard(cache_key)
+        print(f"Warning: TMDB artwork job could not be queued for {cache_key}: {exc}")
+    return None
+
+
+def run_tmdb_artwork_job(
+    cache_key: str,
+    title: str,
+    normalized: str,
+    media_type: str,
+    year: int | None,
+) -> None:
+    try:
+        cacheable, result = search_tmdb_artwork_result(title, normalized, media_type, year)
+        if cacheable:
+            with _tmdb_jobs_lock:
+                _tmdb_cache[cache_key] = (time.monotonic(), result)
+    except Exception as exc:
+        print(f"Warning: TMDB artwork job failed for {cache_key}: {exc}")
+    finally:
+        with _tmdb_jobs_lock:
+            _tmdb_jobs.discard(cache_key)
 
 
 def normalize_tmdb_title(title: str) -> str:
@@ -466,9 +528,19 @@ def normalize_tmdb_title(title: str) -> str:
 def search_tmdb_artwork(
     title: str, normalized: str, media_type: str, year: int | None
 ) -> dict[str, Any] | None:
+    _, result = search_tmdb_artwork_result(title, normalized, media_type, year)
+    return result
+
+
+def search_tmdb_artwork_result(
+    title: str,
+    normalized: str,
+    media_type: str,
+    year: int | None,
+) -> tuple[bool, dict[str, Any] | None]:
     api_key = os.environ.get("TMDB_API_KEY")
     if not api_key:
-        return None
+        return True, None
 
     # Series/episodes search the show title against /search/tv; movies against
     # /search/movie. The parser already strips episode info from the title.
@@ -485,26 +557,29 @@ def search_tmdb_artwork(
             timeout=TMDB_REQUEST_TIMEOUT_SECONDS,
         )
         if response.status_code != 200:
-            return None
+            return False, None
         results = response.json().get("results")
     except (RequestException, ValueError):
-        return None
+        return False, None
 
     if not isinstance(results, list):
-        return None
+        return False, None
 
     match = pick_tmdb_match(results, normalized, media_type, year)
     if match is None:
-        return None
+        return True, None
 
     poster_path = match.get("poster_path")
     backdrop_path = match.get("backdrop_path")
-    return {
-        "tmdb_id": match.get("id"),
-        "media_type": media_type,
-        "poster_url": f"{TMDB_POSTER_BASE_URL}{poster_path}" if poster_path else None,
-        "backdrop_url": f"{TMDB_BACKDROP_BASE_URL}{backdrop_path}" if backdrop_path else None,
-    }
+    return (
+        True,
+        {
+            "tmdb_id": match.get("id"),
+            "media_type": media_type,
+            "poster_url": f"{TMDB_POSTER_BASE_URL}{poster_path}" if poster_path else None,
+            "backdrop_url": f"{TMDB_BACKDROP_BASE_URL}{backdrop_path}" if backdrop_path else None,
+        },
+    )
 
 
 def pick_tmdb_match(
@@ -729,6 +804,25 @@ def is_blocked_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> boo
     )
 
 
+def reject_private_response_peer(response: requests.Response) -> None:
+    connection = getattr(response.raw, "connection", None)
+    peer_socket = getattr(connection, "sock", None)
+    if peer_socket is None:
+        original_response = getattr(response.raw, "_fp", None)
+        buffered_reader = getattr(original_response, "fp", None)
+        socket_io = getattr(buffered_reader, "raw", None)
+        peer_socket = getattr(socket_io, "_sock", None)
+
+    try:
+        peer = peer_socket.getpeername()
+        peer_address = ipaddress.ip_address(peer[0])
+    except (AttributeError, IndexError, OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.") from exc
+
+    if is_blocked_ip(peer_address):
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
+
+
 def download_public_html(url: str) -> bytes:
     session = requests.Session()
     current_url = url
@@ -746,39 +840,44 @@ def download_public_html(url: str) -> bytes:
         except RequestException as exc:
             raise HTTPException(status_code=502, detail="URL is unreachable.") from exc
 
-        if response.is_redirect:
-            location = response.headers.get("Location")
-            if not location:
-                raise HTTPException(status_code=502, detail="URL redirect is invalid.")
-            current_url = normalize_public_url(urljoin(current_url, location))
-            continue
-
-        if response.status_code >= 400:
-            raise HTTPException(status_code=502, detail="URL returned an error.")
-
-        content_type = response.headers.get("content-type", "").lower()
-        if content_type and not any(kind in content_type for kind in ("text/html", "application/xhtml+xml")):
-            raise HTTPException(status_code=415, detail="URL content is not a supported HTML page.")
-
-        content_length = response.headers.get("content-length")
-        if content_length:
-            with suppress(ValueError):
-                if int(content_length) > MARKDOWN_URL_MAX_BYTES:
-                    raise HTTPException(status_code=413, detail="URL content is too large.")
-
-        chunks: list[bytes] = []
-        size = 0
         try:
-            for chunk in response.iter_content(chunk_size=64 * 1024):
-                if not chunk:
-                    continue
-                size += len(chunk)
-                if size > MARKDOWN_URL_MAX_BYTES:
-                    raise HTTPException(status_code=413, detail="URL content is too large.")
-                chunks.append(chunk)
-        except RequestException as exc:
-            raise HTTPException(status_code=502, detail="URL download failed.") from exc
-        return b"".join(chunks)
+            reject_private_response_peer(response)
+
+            if response.is_redirect:
+                location = response.headers.get("Location")
+                if not location:
+                    raise HTTPException(status_code=502, detail="URL redirect is invalid.")
+                current_url = normalize_public_url(urljoin(current_url, location))
+                continue
+
+            if response.status_code >= 400:
+                raise HTTPException(status_code=502, detail="URL returned an error.")
+
+            content_type = response.headers.get("content-type", "").lower()
+            if content_type and not any(kind in content_type for kind in ("text/html", "application/xhtml+xml")):
+                raise HTTPException(status_code=415, detail="URL content is not a supported HTML page.")
+
+            content_length = response.headers.get("content-length")
+            if content_length:
+                with suppress(ValueError):
+                    if int(content_length) > MARKDOWN_URL_MAX_BYTES:
+                        raise HTTPException(status_code=413, detail="URL content is too large.")
+
+            chunks: list[bytes] = []
+            size = 0
+            try:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    size += len(chunk)
+                    if size > MARKDOWN_URL_MAX_BYTES:
+                        raise HTTPException(status_code=413, detail="URL content is too large.")
+                    chunks.append(chunk)
+            except RequestException as exc:
+                raise HTTPException(status_code=502, detail="URL download failed.") from exc
+            return b"".join(chunks)
+        finally:
+            response.close()
 
     raise HTTPException(status_code=502, detail="URL has too many redirects.")
 
@@ -1086,19 +1185,44 @@ def pause_torrent(torrent_hash: str) -> dict[str, str]:
 @app.delete("/api/torrents/{torrent_hash}")
 def delete_torrent(torrent_hash: str) -> dict[str, Any]:
     torrent = find_torrent(torrent_hash)
-    candidates = build_delete_candidates(torrent)
     result: dict[str, Any] = {
         "torrent_hash": torrent_hash,
         "torrent_name": str(torrent.get("name", "")) if torrent else None,
         "qbittorrent_delete_result": None,
-        "candidate_paths_checked": [str(path) for path in candidates],
+        "candidate_paths_checked": [],
         "deleted_file_paths": [],
         "deleted_folder_paths": [],
         "warnings": [] if torrent else ["Torrent was not found before delete."],
     }
 
-    result["qbittorrent_delete_result"] = run_qb_action("delete", torrent_hash, delete_files=True)
+    torrent_files: list[dict[str, Any]] = []
+    if torrent:
+        try:
+            torrent_files = run_qb_action("get_files", torrent_hash)
+        except HTTPException as exc:
+            result["warnings"].append(
+                f"Could not verify qBittorrent file paths before delete: {exc.detail}"
+            )
+
+    candidates, content_root = build_delete_candidates(torrent, torrent_files)
+    result["candidate_paths_checked"] = [str(path) for path in candidates]
+    if torrent and not candidates:
+        result["warnings"].append("No content-verified completed files were found.")
+
+    qbittorrent_deleted = False
+    try:
+        result["qbittorrent_delete_result"] = run_qb_action(
+            "delete",
+            torrent_hash,
+            delete_files=False,
+        )
+        qbittorrent_deleted = True
+    except HTTPException as exc:
+        result["warnings"].append(f"qBittorrent delete failed: {exc.detail}")
+
     delete_completed_candidates(candidates, result)
+    remove_empty_content_directories(candidates, content_root, result)
+    set_delete_status(result, qbittorrent_deleted=qbittorrent_deleted)
     return result
 
 
@@ -1109,60 +1233,258 @@ def find_torrent(torrent_hash: str) -> dict[str, Any] | None:
     return None
 
 
-def build_delete_candidates(torrent: dict[str, Any] | None) -> list[Path]:
-    if torrent is None:
-        return []
+def build_delete_candidates(
+    torrent: dict[str, Any] | None,
+    torrent_files: list[dict[str, Any]],
+) -> tuple[list[Path], Path | None]:
+    if torrent is None or not torrent_files:
+        return [], None
 
     download_root = settings.download_complete_dir.resolve()
-    raw_candidates: list[Path] = []
-    name = str(torrent.get("name") or "").strip()
     content_path = str(torrent.get("content_path") or "").strip()
     save_path = str(torrent.get("save_path") or "").strip()
+    if not content_path or not save_path:
+        return [], None
 
-    if content_path:
-        content = Path(content_path)
-        raw_candidates.extend([content, download_root / content.name, download_root / content.stem])
-    if save_path and name:
-        raw_candidates.append(Path(save_path) / name)
-    if name:
-        raw_candidates.append(download_root / name)
+    try:
+        content_root = resolve_safe_download_target(Path(content_path), download_root)
+    except ValueError:
+        return [], None
 
     safe_candidates: list[Path] = []
     seen: set[Path] = set()
-    for candidate in raw_candidates:
+    for torrent_file in torrent_files:
+        relative_name = Path(str(torrent_file.get("name") or "").strip())
+        if (
+            not relative_name.parts
+            or relative_name.is_absolute()
+            or ".." in relative_name.parts
+        ):
+            continue
+
         try:
-            safe = resolve_safe_download_target(candidate, download_root)
+            safe = resolve_safe_download_target(Path(save_path) / relative_name, download_root)
         except ValueError:
+            continue
+
+        if safe != content_root and not safe.is_relative_to(content_root):
             continue
         if safe not in seen:
             seen.add(safe)
             safe_candidates.append(safe)
 
-    return safe_candidates
+    return safe_candidates, content_root
 
 
 def delete_completed_candidates(candidates: list[Path], result: dict[str, Any]) -> None:
+    deleted_video_paths: set[str] = set()
     for candidate in candidates:
-        try:
-            if candidate.is_dir():
-                shutil.rmtree(candidate)
-                result["deleted_folder_paths"].append(str(candidate))
-            elif candidate.is_file():
-                delete_file_with_sidecars(candidate, result)
-                moved_folder = candidate.parent / candidate.stem
-                if moved_folder.is_dir():
-                    shutil.rmtree(moved_folder)
-                    result["deleted_folder_paths"].append(str(moved_folder))
-        except OSError as exc:
-            result["warnings"].append(f"Failed to delete {candidate}: {exc}")
+        deleted_video_paths.update(delete_file_with_sidecars(candidate, result))
+    remove_video_progress(deleted_video_paths)
 
 
-def delete_file_with_sidecars(file_path: Path, result: dict[str, Any]) -> None:
-    paths = [file_path, file_path.with_suffix(".srt"), file_path.with_suffix(".vtt")]
+def delete_file_with_sidecars(file_path: Path, result: dict[str, Any]) -> set[str]:
+    download_root = settings.download_complete_dir.resolve()
+    deleted_video_paths: set[str] = set()
+    try:
+        primary_path = resolve_safe_download_target(file_path, download_root)
+    except ValueError:
+        primary_path = None
+    paths: list[Path] = [file_path]
+    if is_video_file(file_path):
+        for suffix in (".srt", ".vtt"):
+            subtitle_path = file_path.with_suffix(suffix)
+            paths.extend(
+                [
+                    subtitle_path,
+                    subtitle_backup_path(subtitle_path),
+                    subtitle_path.with_name(f".{subtitle_path.name}.tmp"),
+                ]
+            )
+        paths.extend(thumbnail_cache_paths_for_video(file_path, download_root))
+
     for path in paths:
-        if path.is_file():
-            path.unlink()
-            result["deleted_file_paths"].append(str(path))
+        try:
+            safe_path = resolve_safe_download_target(path, download_root)
+        except ValueError:
+            result["warnings"].append(f"Refused to delete unsafe associated path: {path}")
+            continue
+
+        try:
+            safe_path.unlink()
+            result["deleted_file_paths"].append(str(safe_path))
+            if safe_path == primary_path and is_video_file(safe_path):
+                deleted_video_paths.add(safe_path.relative_to(download_root).as_posix())
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            result["warnings"].append(f"Failed to delete {safe_path}: {exc}")
+    return deleted_video_paths
+
+
+def thumbnail_cache_paths_for_video(video_path: Path, download_root: Path) -> list[Path]:
+    try:
+        safe_video = resolve_safe_download_target(video_path, download_root)
+        if not safe_video.is_file() or not is_video_file(safe_video):
+            return []
+        relative = safe_video.relative_to(download_root).as_posix()
+        stat = safe_video.stat()
+    except (OSError, ValueError):
+        return []
+
+    cache_key = hashlib.sha256(
+        f"{THUMBNAIL_CACHE_VERSION}:{relative}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")
+    ).hexdigest()
+    thumbnail_path = download_root / THUMBNAIL_CACHE_DIR_NAME / (
+        f"{THUMBNAIL_CACHE_VERSION}-{cache_key}.jpg"
+    )
+    paths = [thumbnail_path]
+    cache_dir = thumbnail_path.parent
+    if cache_dir.is_dir():
+        paths.extend(cache_dir.glob(f"{thumbnail_path.stem}.candidate-*.jpg"))
+    return paths
+
+
+def remove_empty_content_directories(
+    candidates: list[Path],
+    content_root: Path | None,
+    result: dict[str, Any],
+) -> None:
+    download_root = settings.download_complete_dir.resolve()
+    if content_root is None or content_root == download_root:
+        return
+
+    directories: set[Path] = set()
+    for candidate in candidates:
+        directory = candidate.parent
+        while directory == content_root or directory.is_relative_to(content_root):
+            directories.add(directory)
+            if directory == content_root:
+                break
+            directory = directory.parent
+
+    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+        try:
+            directory.rmdir()
+            result["deleted_folder_paths"].append(str(directory))
+        except FileNotFoundError:
+            continue
+        except OSError:
+            # Non-empty directories are intentionally preserved. Other failures
+            # matter only when an empty directory should have been removable.
+            try:
+                if directory.is_dir() and any(directory.iterdir()):
+                    continue
+            except OSError:
+                pass
+            result["warnings"].append(f"Failed to remove empty folder {directory}.")
+
+
+def set_delete_status(result: dict[str, Any], *, qbittorrent_deleted: bool) -> None:
+    disk_deleted = bool(result["deleted_file_paths"] or result["deleted_folder_paths"])
+    if not result["warnings"]:
+        status = "deleted"
+    elif qbittorrent_deleted or disk_deleted:
+        status = "partial"
+    else:
+        status = "failed"
+    result["status"] = status
+    result["partial_success"] = status == "partial"
+
+
+@app.delete("/api/completed-files")
+def delete_completed_item(path: str = Query(...)) -> dict[str, Any]:
+    target = resolve_completed_delete_target(path)
+    result: dict[str, Any] = {
+        "torrent_hash": None,
+        "torrent_name": None,
+        "qbittorrent_delete_result": None,
+        "candidate_paths_checked": [str(target)],
+        "deleted_file_paths": [],
+        "deleted_folder_paths": [],
+        "warnings": [],
+    }
+
+    if target.is_dir():
+        delete_completed_folder(target, result)
+    else:
+        remove_video_progress(delete_file_with_sidecars(target, result))
+
+    set_delete_status(result, qbittorrent_deleted=False)
+    return result
+
+
+def resolve_completed_delete_target(relative_path: str) -> Path:
+    raw_path = relative_path.strip()
+    requested = Path(raw_path)
+    raw_parts = [part for part in re.split(r"[\\/]+", raw_path) if part]
+    if (
+        not raw_path
+        or requested.is_absolute()
+        or raw_path.startswith(("/", "\\"))
+        or re.match(r"^[A-Za-z]:[\\/]", raw_path)
+        or ".." in raw_parts
+    ):
+        raise HTTPException(status_code=400, detail="Invalid completed-file path.")
+
+    download_root = settings.download_complete_dir.resolve()
+    try:
+        target = resolve_safe_download_target(download_root / requested, download_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid completed-file path.") from exc
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Completed file or folder not found.")
+    if THUMBNAIL_CACHE_DIR_NAME in target.relative_to(download_root).parts:
+        raise HTTPException(status_code=400, detail="Invalid completed-file path.")
+    if target.is_file():
+        if not is_visible_completed_file(target, download_root):
+            raise HTTPException(status_code=400, detail="Path is not a listed completed file.")
+        return target
+    if target.is_dir() and completed_folder_is_listed(target, download_root):
+        return target
+    raise HTTPException(status_code=400, detail="Path is not a listed completed item.")
+
+
+def completed_folder_is_listed(folder: Path, download_root: Path) -> bool:
+    for file_path in folder.rglob("*"):
+        if file_path.is_file() and is_visible_completed_file(file_path, download_root):
+            return True
+    return False
+
+
+def delete_completed_folder(folder: Path, result: dict[str, Any]) -> None:
+    download_root = settings.download_complete_dir.resolve()
+    original_files = [path for path in folder.rglob("*") if path.is_file()]
+    video_paths = list(iter_completed_video_files(folder))
+    progress_paths = {
+        video_path.relative_to(download_root).as_posix()
+        for video_path in video_paths
+    }
+    for video_path in video_paths:
+        for thumbnail_path in thumbnail_cache_paths_for_video(video_path, download_root):
+            try:
+                safe_thumbnail = resolve_safe_download_target(thumbnail_path, download_root)
+                safe_thumbnail.unlink()
+                result["deleted_file_paths"].append(str(safe_thumbnail))
+            except FileNotFoundError:
+                continue
+            except ValueError:
+                result["warnings"].append(
+                    f"Refused to delete unsafe thumbnail path: {thumbnail_path}"
+                )
+            except OSError as exc:
+                result["warnings"].append(f"Failed to delete {thumbnail_path}: {exc}")
+
+    try:
+        shutil.rmtree(folder)
+        result["deleted_folder_paths"].append(str(folder))
+        remove_video_progress(progress_paths)
+    except OSError as exc:
+        result["warnings"].append(f"Failed to delete {folder}: {exc}")
+        for original_file in original_files:
+            if not original_file.exists() and str(original_file) not in result["deleted_file_paths"]:
+                result["deleted_file_paths"].append(str(original_file))
 
 
 @app.get("/api/completed-files")
@@ -1204,7 +1526,7 @@ def completed_files() -> list[dict[str, Any]]:
 
 def ensure_missing_video_thumbnails(download_dir: Path) -> None:
     for video_path in iter_completed_video_files(download_dir):
-        ensure_video_thumbnail(video_path, download_dir)
+        schedule_video_thumbnail(video_path, download_dir)
 
 
 def iter_completed_video_files(download_dir: Path):
@@ -1228,8 +1550,12 @@ def thumbnail_url_for_completed_video(file_path: Path, download_dir: Path) -> st
     if not is_video_file(file_path):
         return None
 
-    thumbnail_path = ensure_video_thumbnail(file_path, download_dir)
-    if thumbnail_path is None:
+    cache_info = video_thumbnail_cache_info(file_path, download_dir)
+    if cache_info is None:
+        return None
+    video_path, thumbnail_path, _, _ = cache_info
+    if not is_valid_thumbnail(thumbnail_path):
+        schedule_video_thumbnail(video_path, download_dir)
         return None
 
     try:
@@ -1239,26 +1565,21 @@ def thumbnail_url_for_completed_video(file_path: Path, download_dir: Path) -> st
     return f"{settings.stream_base_url}/{quote(relative)}?v={THUMBNAIL_CACHE_VERSION}"
 
 
-def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
+def video_thumbnail_cache_info(
+    file_path: Path,
+    download_dir: Path,
+) -> tuple[Path, Path, bytes, str] | None:
     download_root = download_dir.resolve()
 
     try:
         video_path = resolve_safe_download_target(file_path, download_root)
         if not video_path.is_file() or not is_video_file(video_path):
             return None
-    except ValueError:
-        return None
-
-    if shutil.which("ffmpeg") is None:
-        return None
-
-    try:
         relative = video_path.relative_to(download_root).as_posix()
         stat = video_path.stat()
     except (OSError, ValueError):
         return None
 
-    cache_dir = download_root / THUMBNAIL_CACHE_DIR_NAME
     path_seed = hashlib.sha256(relative.encode("utf-8")).digest()
     cache_key = hashlib.sha256(
         f"{THUMBNAIL_CACHE_VERSION}:{relative}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")
@@ -1266,20 +1587,70 @@ def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
 
     try:
         thumbnail_path = resolve_safe_download_target(
-            cache_dir / f"{THUMBNAIL_CACHE_VERSION}-{cache_key}.jpg",
+            download_root
+            / THUMBNAIL_CACHE_DIR_NAME
+            / f"{THUMBNAIL_CACHE_VERSION}-{cache_key}.jpg",
             download_root,
         )
     except ValueError:
         return None
+    return video_path, thumbnail_path, path_seed, relative
+
+
+def schedule_video_thumbnail(file_path: Path, download_dir: Path) -> None:
+    cache_info = video_thumbnail_cache_info(file_path, download_dir)
+    if cache_info is None:
+        return
+    video_path, thumbnail_path, _, _ = cache_info
+    if is_valid_thumbnail(thumbnail_path):
+        return
+
+    with _thumbnail_jobs_lock:
+        if video_path in _thumbnail_jobs:
+            return
+        if len(_thumbnail_jobs) >= THUMBNAIL_MAX_PENDING_JOBS:
+            return
+        _thumbnail_jobs.add(video_path)
+
+    try:
+        _thumbnail_executor.submit(
+            run_video_thumbnail_job,
+            video_path,
+            download_dir.resolve(),
+        )
+    except Exception as exc:
+        with _thumbnail_jobs_lock:
+            _thumbnail_jobs.discard(video_path)
+        print(f"Warning: thumbnail job could not be queued for {video_path}: {exc}")
+
+
+def run_video_thumbnail_job(video_path: Path, download_dir: Path) -> None:
+    try:
+        ensure_video_thumbnail(video_path, download_dir)
+    except Exception as exc:
+        print(f"Warning: thumbnail job failed for {video_path}: {exc}")
+    finally:
+        with _thumbnail_jobs_lock:
+            _thumbnail_jobs.discard(video_path)
+
+
+def ensure_video_thumbnail(file_path: Path, download_dir: Path) -> Path | None:
+    cache_info = video_thumbnail_cache_info(file_path, download_dir)
+    if cache_info is None:
+        return None
+    video_path, thumbnail_path, path_seed, relative = cache_info
 
     if is_valid_thumbnail(thumbnail_path):
         return thumbnail_path
+    if shutil.which("ffmpeg") is None:
+        return None
     if thumbnail_path.exists():
         try:
             thumbnail_path.unlink()
         except OSError:
             return None
 
+    cache_dir = thumbnail_path.parent
     try:
         cache_dir.mkdir(exist_ok=True)
     except OSError:
@@ -1495,31 +1866,55 @@ def move_into_directory(file_path: Path, target_dir: Path, download_root: Path) 
 
 @app.post("/api/video-progress")
 def save_video_progress(payload: VideoProgressRequest) -> dict[str, Any]:
-    path = payload.path.strip()
-    if not path:
-        raise HTTPException(status_code=400, detail="Path is required.")
-
     time_ms = max(0, int(payload.timeMs))
     duration_ms = max(0, int(payload.durationMs))
     watched_percent = progress_percent(time_ms, duration_ms)
     updated_at = datetime.now(timezone.utc).isoformat()
 
-    progress = read_video_progress()
-    record = {
-        "path": path,
-        "timeMs": time_ms,
-        "durationMs": duration_ms,
-        "watchedPercent": watched_percent,
-        "updatedAt": updated_at,
-    }
-    progress[path] = record
-    write_video_progress(progress)
+    with _video_progress_lock:
+        path = resolve_video_progress_path(payload.path)
+        record = {
+            "path": path,
+            "timeMs": time_ms,
+            "durationMs": duration_ms,
+            "watchedPercent": watched_percent,
+            "updatedAt": updated_at,
+        }
+        progress = read_video_progress_unlocked()
+        progress[path] = record
+        write_video_progress_unlocked(progress)
     return record
 
 
 @app.get("/api/video-progress")
 def get_video_progress() -> list[dict[str, Any]]:
     return list(read_video_progress().values())
+
+
+def resolve_video_progress_path(relative_path: str) -> str:
+    raw_path = relative_path.strip()
+    requested = Path(raw_path)
+    raw_parts = [part for part in re.split(r"[\\/]+", raw_path) if part]
+    if (
+        not raw_path
+        or requested.is_absolute()
+        or raw_path.startswith(("/", "\\"))
+        or re.match(r"^[A-Za-z]:[\\/]", raw_path)
+        or ".." in raw_parts
+    ):
+        raise HTTPException(status_code=400, detail="Invalid video progress path.")
+
+    download_root = settings.download_complete_dir.resolve()
+    try:
+        target = resolve_safe_download_target(download_root / requested, download_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid video progress path.") from exc
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Video file not found.")
+    if not is_video_file(target) or not is_visible_completed_file(target, download_root):
+        raise HTTPException(status_code=400, detail="Path is not a playable completed video.")
+    return target.relative_to(download_root).as_posix()
 
 
 # Subtitle codecs ffmpeg can convert to SubRip (.srt). Image-based codecs
@@ -2439,6 +2834,11 @@ def format_bps(value: float) -> str:
 
 
 def read_video_progress() -> dict[str, dict[str, Any]]:
+    with _video_progress_lock:
+        return read_video_progress_unlocked()
+
+
+def read_video_progress_unlocked() -> dict[str, dict[str, Any]]:
     try:
         data = json.loads(VIDEO_PROGRESS_FILE.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
@@ -2453,6 +2853,11 @@ def read_video_progress() -> dict[str, dict[str, Any]]:
 
 
 def write_video_progress(progress: dict[str, dict[str, Any]]) -> None:
+    with _video_progress_lock:
+        write_video_progress_unlocked(progress)
+
+
+def write_video_progress_unlocked(progress: dict[str, dict[str, Any]]) -> None:
     VIDEO_PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = VIDEO_PROGRESS_FILE.with_suffix(".tmp")
     tmp_path.write_text(
@@ -2460,6 +2865,19 @@ def write_video_progress(progress: dict[str, dict[str, Any]]) -> None:
         encoding="utf-8",
     )
     tmp_path.replace(VIDEO_PROGRESS_FILE)
+
+
+def remove_video_progress(paths: set[str]) -> None:
+    if not paths:
+        return
+    with _video_progress_lock:
+        progress = read_video_progress_unlocked()
+        changed = False
+        for path in paths:
+            if progress.pop(path, None) is not None:
+                changed = True
+        if changed:
+            write_video_progress_unlocked(progress)
 
 
 def timestamp_to_iso(value: Any) -> str | None:
@@ -2519,13 +2937,18 @@ def pause_if_completed_uploading(torrent: dict[str, Any]) -> None:
     torrent["state"] = "pausedUP"
 
 
+def run_auto_pause_monitor_pass() -> None:
+    torrents = qb.list_torrents()
+    for torrent in torrents:
+        pause_if_completed_uploading(torrent)
+
+
 async def auto_pause_monitor() -> None:
     while True:
         try:
-            torrents = qb.list_torrents()
-            for torrent in torrents:
-                pause_if_completed_uploading(torrent)
-        except (RuntimeError, RequestException):
-            pass
-
+            await asyncio.to_thread(run_auto_pause_monitor_pass)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"Warning: auto-pause monitor iteration failed: {exc}")
         await asyncio.sleep(15)

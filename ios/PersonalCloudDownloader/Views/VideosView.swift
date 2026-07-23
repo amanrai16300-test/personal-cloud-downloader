@@ -1,6 +1,61 @@
 import Foundation
 import SwiftUI
 
+private let watchedCompletionPercent = 90.0
+
+private enum VideoRowAccessibility {
+    static func label(title: String, progress: VideoProgress?) -> String {
+        hasValidProgress(progress) ? "\(title), Watch progress" : title
+    }
+
+    static func value(progress: VideoProgress?, modifiedDate: Date?) -> String {
+        var details: [String] = []
+
+        if let progress, hasValidProgress(progress) {
+            let watchedPercent = min(max(progress.watchedPercent, 0), 100)
+            let percent = Int(watchedPercent.rounded())
+            if watchedPercent >= watchedCompletionPercent {
+                details.append("Watched")
+            }
+            details.append("\(percent) percent")
+            details.append("Duration \(durationText(progress.durationMs))")
+        }
+
+        if let modifiedDate {
+            details.append(
+                "Modified \(modifiedDate.formatted(date: .abbreviated, time: .shortened))"
+            )
+        }
+
+        return details.joined(separator: ", ")
+    }
+
+    private static func hasValidProgress(_ progress: VideoProgress?) -> Bool {
+        guard let progress else { return false }
+        return progress.durationMs > 0 && progress.timeMs >= 0
+    }
+
+    private static func durationText(_ durationMs: Int) -> String {
+        let totalSeconds = durationMs / 1000
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        var parts: [String] = []
+
+        if hours > 0 {
+            parts.append(hours == 1 ? "1 hour" : "\(hours) hours")
+        }
+        if minutes > 0 {
+            parts.append(minutes == 1 ? "1 minute" : "\(minutes) minutes")
+        }
+        if hours == 0, seconds > 0 {
+            parts.append(seconds == 1 ? "1 second" : "\(seconds) seconds")
+        }
+
+        return parts.isEmpty ? "0 seconds" : parts.joined(separator: ", ")
+    }
+}
+
 struct VideosView: View {
     var reconnectCycle: Int = 0
     var reconnectRefreshToken: Int = 0
@@ -11,6 +66,13 @@ struct VideosView: View {
     @State private var phase: LoadPhase = .loading
     @State private var isVisible = false
     @State private var loadGeneration = 0
+    @State private var navigationPath = NavigationPath()
+    @State private var loadTask: Task<Void, Never>?
+    @State private var activeLoadID: UUID?
+    @State private var hasStartedInitialLoad = false
+    @State private var hasAppeared = false
+    @State private var lastRootRefreshAt = Date.distantPast
+    @State private var isShowingStaleRefreshNotice = false
     // Palette mirrored from the Home redesign tokens.
     private let background = Color(red: 0.008, green: 0.022, blue: 0.055)
     private let panel = Color(red: 0.035, green: 0.065, blue: 0.125)
@@ -26,7 +88,7 @@ struct VideosView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             content
                 .background(videosBackground)
                 .navigationTitle("")
@@ -42,9 +104,18 @@ struct VideosView: View {
                     FolderVideosView(folder: folder, progressByPath: progressByPath)
                 }
         }
-        .task { await load() }
+        .task {
+            guard !hasStartedInitialLoad else { return }
+            hasStartedInitialLoad = true
+            await load()
+        }
         .onAppear {
             isVisible = true
+            if hasAppeared {
+                refreshRootIfNeeded()
+            } else {
+                hasAppeared = true
+            }
         }
         .onDisappear {
             isVisible = false
@@ -52,14 +123,22 @@ struct VideosView: View {
         .onChange(of: scenePhase) { phase in
             if phase != .active {
                 loadGeneration += 1
+                loadTask?.cancel()
+                loadTask = nil
+                activeLoadID = nil
             }
         }
         .onChange(of: reconnectCycle) { _ in
-            loadGeneration += 1
+            guard isVisible else { return }
+            startLoad(invalidateExisting: true)
         }
         .onChange(of: reconnectRefreshToken) { _ in
             guard isVisible else { return }
-            Task { await load() }
+            startLoad()
+        }
+        .onChange(of: navigationPath.count) { depth in
+            guard depth == 0 else { return }
+            refreshRootIfNeeded()
         }
     }
 
@@ -90,12 +169,19 @@ struct VideosView: View {
             VStack(alignment: .leading, spacing: 22) {
                 videosHeader(grouped)
 
+                if isShowingStaleRefreshNotice {
+                    staleRefreshNotice
+                }
+
                 VStack(spacing: 12) {
                     ForEach(grouped.folders) { folder in
                         NavigationLink(value: folder) {
                             folderRow(folder)
                         }
                         .buttonStyle(CloudBoxPressStyle())
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(folder.name)
+                        .accessibilityValue(folder.videoCountLabel)
                     }
 
                     ForEach(grouped.looseVideos) { video in
@@ -103,6 +189,19 @@ struct VideosView: View {
                             videoCard(video, progress: progressByPath[video.path])
                         }
                         .buttonStyle(CloudBoxPressStyle())
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(
+                            VideoRowAccessibility.label(
+                                title: video.displayName,
+                                progress: progressByPath[video.path]
+                            )
+                        )
+                        .accessibilityValue(
+                            VideoRowAccessibility.value(
+                                progress: progressByPath[video.path],
+                                modifiedDate: video.modifiedDate
+                            )
+                        )
                     }
                 }
             }
@@ -111,6 +210,30 @@ struct VideosView: View {
             .padding(.bottom, 32)
         }
         .refreshable { await load() }
+    }
+
+    private var staleRefreshNotice: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(premiumBlue)
+                .accessibilityHidden(true)
+
+            Text("Couldn’t refresh. Showing the last loaded library.")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Color.white.opacity(0.88))
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(elevatedPanel.opacity(0.72), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private var videosBackground: some View {
@@ -129,14 +252,14 @@ struct VideosView: View {
     private func videosHeader(_ grouped: VideoGrouping.Result) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("MEDIA LIBRARY")
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption2.weight(.bold))
                 .tracking(1.6)
                 .foregroundStyle(premiumBlue)
 
             Text("Videos")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .font(.system(.title, design: .rounded, weight: .bold))
                 .foregroundStyle(.white)
-                .lineLimit(1)
+                .lineLimit(2)
 
             summaryRow(grouped)
                 .padding(.top, 2)
@@ -145,15 +268,28 @@ struct VideosView: View {
     }
 
     private func summaryRow(_ grouped: VideoGrouping.Result) -> some View {
-        HStack(spacing: 8) {
-            summaryPill(
-                icon: "folder.fill",
-                text: grouped.folders.count == 1 ? "1 folder" : "\(grouped.folders.count) folders"
-            )
-            summaryPill(
-                icon: "play.rectangle.fill",
-                text: videos.count == 1 ? "1 video" : "\(videos.count) videos"
-            )
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                summaryPill(
+                    icon: "folder.fill",
+                    text: grouped.folders.count == 1 ? "1 folder" : "\(grouped.folders.count) folders"
+                )
+                summaryPill(
+                    icon: "play.rectangle.fill",
+                    text: videos.count == 1 ? "1 video" : "\(videos.count) videos"
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                summaryPill(
+                    icon: "folder.fill",
+                    text: grouped.folders.count == 1 ? "1 folder" : "\(grouped.folders.count) folders"
+                )
+                summaryPill(
+                    icon: "play.rectangle.fill",
+                    text: videos.count == 1 ? "1 video" : "\(videos.count) videos"
+                )
+            }
         }
     }
 
@@ -164,11 +300,12 @@ struct VideosView: View {
                 .foregroundStyle(premiumBlue)
                 .accessibilityHidden(true)
             Text(text)
-                .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                .font(.system(.caption, design: .rounded, weight: .bold))
                 .monospacedDigit()
                 .foregroundStyle(Color.white.opacity(0.92))
         }
-        .lineLimit(1)
+        .lineLimit(2)
+        .multilineTextAlignment(.center)
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
         .background(elevatedPanel.opacity(0.8), in: Capsule())
@@ -184,14 +321,14 @@ struct VideosView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(folder.name)
-                    .font(.system(size: 16.5, weight: .bold, design: .rounded))
+                    .font(.system(.headline, design: .rounded, weight: .bold))
                     .foregroundStyle(.white)
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 8) {
                     Text(folder.videoCountLabel)
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .font(.system(.caption, design: .rounded, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(premiumBlue)
                         .padding(.horizontal, 8)
@@ -200,10 +337,9 @@ struct VideosView: View {
 
                     if let date = folder.latestModifiedDate {
                         Text(date.formatted(date: .abbreviated, time: .shortened))
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(muted)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.78)
+                            .lineLimit(2)
                     }
                 }
             }
@@ -271,17 +407,16 @@ struct VideosView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(video.displayName)
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(.system(.headline, design: .rounded, weight: .bold))
                     .foregroundStyle(.white)
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if let date = video.modifiedDate {
                     Text(date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(muted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
+                        .lineLimit(2)
                 }
             }
             .layoutPriority(1)
@@ -314,12 +449,13 @@ struct VideosView: View {
                 .background(panel.opacity(0.82), in: Circle())
                 .overlay(Circle().stroke(stroke.opacity(0.42), lineWidth: 1))
             Text("No Videos")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(.system(.title3, design: .rounded, weight: .bold))
                 .foregroundStyle(.white)
             Text("No completed video files were found.")
-                .font(.system(size: 15, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(muted)
                 .multilineTextAlignment(.center)
+                .lineLimit(3)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -333,11 +469,12 @@ struct VideosView: View {
                 .scaleEffect(1.15)
             VStack(spacing: 5) {
                 Text("Loading videos")
-                    .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .font(.system(.title3, design: .rounded, weight: .semibold))
                     .foregroundStyle(.white)
                 Text("Reading the CloudBox library")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(muted)
+                    .lineLimit(3)
             }
         }
         .padding(24)
@@ -354,18 +491,19 @@ struct VideosView: View {
                 .background(panel.opacity(0.82), in: Circle())
                 .overlay(Circle().stroke(stroke.opacity(0.42), lineWidth: 1))
             Text("Failed to load videos")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(.system(.title3, design: .rounded, weight: .bold))
                 .foregroundStyle(.white)
             Text(message)
-                .font(.system(size: 14, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(muted)
                 .multilineTextAlignment(.center)
+                .lineLimit(4)
                 .padding(.horizontal, 18)
             Button {
                 Task { await load() }
             } label: {
                 Label("Retry", systemImage: "arrow.clockwise")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.borderedProminent)
             .tint(.blue)
@@ -373,6 +511,34 @@ struct VideosView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(videosBackground)
+    }
+
+    @MainActor
+    private func startLoad(invalidateExisting: Bool = false) {
+        if invalidateExisting {
+            loadGeneration += 1
+            loadTask?.cancel()
+        } else if activeLoadID != nil {
+            return
+        }
+
+        let loadID = UUID()
+        activeLoadID = loadID
+        loadTask = Task {
+            await load()
+            guard activeLoadID == loadID else { return }
+            activeLoadID = nil
+            loadTask = nil
+        }
+    }
+
+    @MainActor
+    private func refreshRootIfNeeded() {
+        guard isVisible, navigationPath.count == 0 else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastRootRefreshAt) >= 1 else { return }
+        lastRootRefreshAt = now
+        startLoad()
     }
 
     @MainActor
@@ -391,10 +557,20 @@ struct VideosView: View {
             videos = fetchedVideos
             progressByPath = mergedProgress
             VLCPlayerController.importProgressSnapshot(mergedProgress)
+            isShowingStaleRefreshNotice = false
             phase = .loaded
         } catch {
+            guard !Task.isCancelled,
+                  !(error is CancellationError),
+                  (error as? URLError)?.code != .cancelled else { return }
             guard generation == loadGeneration else { return }
-            phase = videos.isEmpty ? .error(error.localizedDescription) : .loaded
+            if videos.isEmpty {
+                isShowingStaleRefreshNotice = false
+                phase = .error(error.localizedDescription)
+            } else {
+                isShowingStaleRefreshNotice = true
+                phase = .loaded
+            }
         }
     }
 
@@ -462,6 +638,26 @@ enum VideoGrouping {
         return parts.first
     }
 
+    /// Stable full path for the first relative folder component. Unlike the
+    /// display name, this distinguishes equally named folders under other roots.
+    static func folderIdentity(of video: CompletedFile) -> String? {
+        let relativeParts = video.name
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        let pathParts = video.path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard relativeParts.count > 1,
+              pathParts.count >= relativeParts.count,
+              pathParts.suffix(relativeParts.count).elementsEqual(relativeParts)
+        else { return nil }
+
+        let rootParts = pathParts.dropLast(relativeParts.count)
+        let folderParts = Array(rootParts) + [relativeParts[0]]
+        let prefix = video.path.hasPrefix("/") ? "/" : ""
+        return prefix + folderParts.joined(separator: "/")
+    }
+
     /// Group into folder rows (sorted by name) followed by loose videos. Folder
     /// order and the videos within each folder are sorted by name for a stable,
     /// readable layout that doesn't reshuffle between refreshes.
@@ -502,7 +698,11 @@ enum VideoGrouping {
 struct FolderVideosView: View {
     let folder: VideoFolder
     private let initialProgressByPath: [String: VideoProgress]
+    private let folderIdentity: String?
+    @State private var visibleVideos: [CompletedFile]
     @State private var refreshedProgressByPath: [String: VideoProgress]
+    @State private var folderRefreshGeneration = 0
+    @State private var activeFolderRefreshID: UUID?
     private let background = Color(red: 0.008, green: 0.022, blue: 0.055)
     private let panel = Color(red: 0.035, green: 0.065, blue: 0.125)
     private let muted = Color(red: 0.56, green: 0.64, blue: 0.78)
@@ -511,6 +711,8 @@ struct FolderVideosView: View {
     init(folder: VideoFolder, progressByPath: [String: VideoProgress]) {
         self.folder = folder
         self.initialProgressByPath = progressByPath
+        self.folderIdentity = folder.videos.first.flatMap(VideoGrouping.folderIdentity)
+        _visibleVideos = State(initialValue: folder.videos)
         _refreshedProgressByPath = State(initialValue: progressByPath)
     }
 
@@ -520,13 +722,26 @@ struct FolderVideosView: View {
                 folderHeader
 
                 VStack(spacing: 0) {
-                    ForEach(folder.videos) { video in
+                    ForEach(visibleVideos) { video in
                         NavigationLink(value: video) {
                             row(video, progress: refreshedProgressByPath[video.path])
                         }
                         .buttonStyle(CloudBoxPressStyle())
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(
+                            VideoRowAccessibility.label(
+                                title: video.displayName,
+                                progress: refreshedProgressByPath[video.path]
+                            )
+                        )
+                        .accessibilityValue(
+                            VideoRowAccessibility.value(
+                                progress: refreshedProgressByPath[video.path],
+                                modifiedDate: video.modifiedDate
+                            )
+                        )
 
-                        if video.id != folder.videos.last?.id {
+                        if video.id != visibleVideos.last?.id {
                             Divider()
                                 .overlay(Color.white.opacity(0.10))
                                 .padding(.leading, 128)
@@ -551,7 +766,7 @@ struct FolderVideosView: View {
             if refreshedProgressByPath.isEmpty, !initialProgressByPath.isEmpty {
                 refreshedProgressByPath = initialProgressByPath
             }
-            Task { await refreshProgress() }
+            startFolderRefresh()
         }
     }
 
@@ -560,18 +775,56 @@ struct FolderVideosView: View {
     }
 
     @MainActor
-    private func refreshProgress() async {
+    private func startFolderRefresh() {
+        guard activeFolderRefreshID == nil else { return }
+
+        folderRefreshGeneration += 1
+        let generation = folderRefreshGeneration
+        let refreshID = UUID()
+        activeFolderRefreshID = refreshID
+
+        Task {
+            await refreshFolder(generation: generation)
+            guard activeFolderRefreshID == refreshID else { return }
+            activeFolderRefreshID = nil
+        }
+    }
+
+    @MainActor
+    private func refreshFolder(generation: Int) async {
         let backendProgress = (try? await CompletedFilesAPI.fetchVideoProgress()) ?? [:]
         let localProgress = VLCPlayerController.localProgressSnapshot()
+        let fetchedVideos: [CompletedFile]
+
+        do {
+            fetchedVideos = try await CompletedFilesAPI.fetchVideos()
+        } catch {
+            guard generation == folderRefreshGeneration else { return }
+            refreshedProgressByPath = Self.mergeProgressByPath(
+                seed: refreshedProgressByPath.isEmpty ? initialProgressByPath : refreshedProgressByPath,
+                backend: backendProgress,
+                local: localProgress,
+                videos: visibleVideos
+            )
+            return
+        }
+
+        guard generation == folderRefreshGeneration,
+              let folderIdentity else { return }
+
+        let latestVideos = fetchedVideos
+            .filter { VideoGrouping.folderIdentity(of: $0) == folderIdentity }
+            .sorted {
+                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+            }
         let merged = Self.mergeProgressByPath(
             seed: refreshedProgressByPath.isEmpty ? initialProgressByPath : refreshedProgressByPath,
             backend: backendProgress,
             local: localProgress,
-            videos: folder.videos
+            videos: latestVideos
         )
-        await MainActor.run {
-            refreshedProgressByPath = merged
-        }
+        visibleVideos = latestVideos
+        refreshedProgressByPath = merged
     }
 
     private static func mergeProgressByPath(
@@ -584,29 +837,52 @@ struct FolderVideosView: View {
         for video in videos {
             let path = video.path
             let candidates = [merged[path], backend[path], local[path]].compactMap { $0 }
-            guard let latest = candidates.max(by: { lhs, rhs in
-                if let lhsDate = lhs.updatedDate, let rhsDate = rhs.updatedDate {
-                    return lhsDate < rhsDate
-                }
-                return lhs.timeMs < rhs.timeMs
-            }) else { continue }
+            guard let latest = candidates.max(by: progressIsOlder) else { continue }
             merged[path] = latest
         }
         return merged
     }
 
+    private static func progressIsOlder(_ lhs: VideoProgress, _ rhs: VideoProgress) -> Bool {
+        switch (lhs.updatedDate, rhs.updatedDate) {
+        case let (lhsDate?, rhsDate?) where lhsDate != rhsDate:
+            return lhsDate < rhsDate
+        case (nil, _?):
+            return true
+        case (_?, nil):
+            return false
+        default:
+            break
+        }
+
+        let lhsHasValidTime = lhs.timeMs > 0
+        let rhsHasValidTime = rhs.timeMs > 0
+        if lhsHasValidTime != rhsHasValidTime {
+            return !lhsHasValidTime
+        }
+        if lhs.timeMs != rhs.timeMs {
+            return lhs.timeMs < rhs.timeMs
+        }
+
+        let lhsHasValidDuration = lhs.durationMs > 0
+        let rhsHasValidDuration = rhs.durationMs > 0
+        if lhsHasValidDuration != rhsHasValidDuration {
+            return !lhsHasValidDuration
+        }
+        return lhs.durationMs < rhs.durationMs
+    }
+
     private var folderHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("FOLDER")
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption2.weight(.bold))
                 .tracking(1.6)
                 .foregroundStyle(premiumBlue)
 
             Text(folder.name)
-                .font(.system(size: 23, weight: .bold, design: .rounded))
+                .font(.system(.title2, design: .rounded, weight: .bold))
                 .foregroundStyle(.white)
-                .lineLimit(2)
-                .minimumScaleFactor(0.82)
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
@@ -614,8 +890,8 @@ struct FolderVideosView: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(premiumBlue)
                     .accessibilityHidden(true)
-                Text(folder.videoCountLabel)
-                    .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                Text(visibleVideoCountLabel)
+                    .font(.system(.caption, design: .rounded, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(Color.white.opacity(0.92))
             }
@@ -626,6 +902,10 @@ struct FolderVideosView: View {
             .padding(.top, 2)
         }
         .padding(.top, 4)
+    }
+
+    private var visibleVideoCountLabel: String {
+        visibleVideos.count == 1 ? "1 video" : "\(visibleVideos.count) videos"
     }
 
     private var folderBackground: some View {
@@ -654,20 +934,21 @@ private struct FolderVideoRow: View {
     }
 
     private var isWatched: Bool {
-        watchedPercent >= 70
+        watchedPercent >= watchedCompletionPercent
     }
 
     private var isPartiallyWatched: Bool {
-        watchedPercent > 5 && watchedPercent < 70
+        watchedPercent > 5 && watchedPercent < watchedCompletionPercent
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 13) {
             thumbnail
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 10) {
                 Text(video.displayName)
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(.system(.headline, design: .rounded, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
@@ -676,7 +957,9 @@ private struct FolderVideoRow: View {
 
                 HStack(spacing: 12) {
                     progressBar
+                        .accessibilityHidden(true)
                     statusLabel
+                        .accessibilityHidden(true)
                 }
             }
             .layoutPriority(1)
@@ -755,10 +1038,9 @@ private struct FolderVideoRow: View {
     private var metadata: some View {
         if let date = video.modifiedDate {
             Text(date.formatted(date: .abbreviated, time: .shortened))
-                .font(.system(size: 13, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(muted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
+                .lineLimit(2)
         }
     }
 
@@ -780,9 +1062,9 @@ private struct FolderVideoRow: View {
             Image(systemName: statusIcon)
                 .font(.system(size: 13, weight: .bold))
             Text(statusText)
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
+                .font(.caption.weight(.semibold))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
         }
         .foregroundStyle(progressColor)
         .padding(.horizontal, 8)
@@ -846,7 +1128,7 @@ private struct VideoRow: View {
     }
 
     private var isWatched: Bool {
-        watchedPercent >= 70
+        watchedPercent >= watchedCompletionPercent
     }
 
     var body: some View {
@@ -893,6 +1175,13 @@ private struct VideoRow: View {
             }
         }
         .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            VideoRowAccessibility.label(title: video.displayName, progress: progress)
+        )
+        .accessibilityValue(
+            VideoRowAccessibility.value(progress: progress, modifiedDate: video.modifiedDate)
+        )
     }
 
     private var watchedBadge: some View {

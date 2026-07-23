@@ -5,6 +5,7 @@ import UIKit
 
 struct TrendsView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var viewModel = TrendsViewModel()
     @State private var isVisible = false
 
@@ -79,51 +80,51 @@ struct TrendsView: View {
     /// Home server panel and Network monitor.
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("DISCOVERY RADAR")
-                    .font(.system(size: 11, weight: .bold))
-                    .tracking(1.6)
-                    .foregroundStyle(premiumBlue)
-
-                Spacer(minLength: 8)
-
-                Text("TMDB")
-                    .font(.system(size: 11, weight: .bold))
-                    .tracking(1.0)
-                    .foregroundStyle(muted.opacity(0.85))
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 6) {
+                        discoveryLabel
+                        sourceLabel
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        discoveryLabel
+                        Spacer(minLength: 8)
+                        sourceLabel
+                    }
+                }
             }
             .padding(.bottom, 12)
 
             Text("Fresh picks")
-                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .font(.title2.weight(.bold))
+                .fontDesign(.rounded)
                 .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
+                .lineLimit(2)
                 .padding(.bottom, 12)
 
             Rectangle()
                 .fill(hairline)
                 .frame(height: 1)
                 .padding(.bottom, 10)
+                .accessibilityHidden(true)
 
-            HStack(spacing: 6) {
-                Image(systemName: "clock")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(muted)
-                    .accessibilityHidden(true)
-
-                Text("Updated every 6 hours")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(muted)
-
-                if let updatedAt = viewModel.trends?.updatedAt {
-                    Spacer(minLength: 8)
-
-                    Text(formattedUpdatedAt(updatedAt))
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 6) {
+                        updateCadenceLabel
+                        if let updatedAt = viewModel.trends?.updatedAt {
+                            updatedAtLabel(updatedAt)
+                        }
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        updateCadenceLabel
+                        if let updatedAt = viewModel.trends?.updatedAt {
+                            Spacer(minLength: 8)
+                            updatedAtLabel(updatedAt)
+                        }
+                    }
                 }
             }
         }
@@ -156,6 +157,43 @@ struct TrendsView: View {
         }
     }
 
+    private var discoveryLabel: some View {
+        Text("DISCOVERY RADAR")
+            .font(.caption2.weight(.bold))
+            .tracking(1.6)
+            .foregroundStyle(premiumBlue)
+    }
+
+    private var sourceLabel: some View {
+        Text("TMDB")
+            .font(.caption2.weight(.bold))
+            .tracking(1.0)
+            .foregroundStyle(muted.opacity(0.85))
+    }
+
+    private var updateCadenceLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(muted)
+                .accessibilityHidden(true)
+
+            Text("Updated every 6 hours")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(muted)
+        }
+    }
+
+    private func updatedAtLabel(_ updatedAt: String) -> some View {
+        Text(formattedUpdatedAt(updatedAt))
+            .font(.caption.weight(.bold))
+            .fontDesign(.monospaced)
+            .foregroundStyle(Color.white.opacity(0.92))
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel("Last updated \(formattedUpdatedAt(updatedAt))")
+    }
+
     private func formattedUpdatedAt(_ value: String) -> String {
         let parser = ISO8601DateFormatter()
         parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -175,37 +213,42 @@ struct TrendsView: View {
 
             if let errorMessage = viewModel.errorMessage {
                 Text(errorMessage)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(Color.orange.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 2)
+                    .accessibilityLabel("Couldn’t refresh trends. \(errorMessage)")
             }
         }
     }
 
     private func trendSection(_ title: String, items: [TrendItem]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center) {
-                Text(title.uppercased())
-                    .font(.system(size: 11, weight: .bold))
-                    .tracking(1.6)
-                    .foregroundStyle(premiumBlue)
-
-                Spacer()
-
-                Text("\(items.count)")
-                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(muted)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(surface, in: Capsule())
-                    .overlay(Capsule().stroke(hairline, lineWidth: 1))
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionTitle(title)
+                        sectionCount(items.count)
+                    }
+                } else {
+                    HStack(alignment: .center) {
+                        sectionTitle(title)
+                        Spacer()
+                        sectionCount(items.count)
+                    }
+                }
             }
             .padding(.horizontal, 2)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(title), \(items.count) titles")
+            .accessibilityAddTraits(.isHeader)
 
             if items.isEmpty {
                 Text("No titles available.")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.body.weight(.medium))
                     .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, minHeight: 84, alignment: .center)
                     .background(surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay {
@@ -225,12 +268,31 @@ struct TrendsView: View {
         }
     }
 
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption2.weight(.bold))
+            .tracking(1.6)
+            .foregroundStyle(premiumBlue)
+            .lineLimit(2)
+    }
+
+    private func sectionCount(_ count: Int) -> some View {
+        Text("\(count)")
+            .font(.caption.weight(.bold))
+            .fontDesign(.monospaced)
+            .foregroundStyle(muted)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(surface, in: Capsule())
+            .overlay(Capsule().stroke(hairline, lineWidth: 1))
+    }
+
     private var loadingState: some View {
         VStack(spacing: 14) {
             ProgressView()
                 .tint(premiumBlue)
             Text("Loading trends...")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(muted)
         }
         .frame(maxWidth: .infinity, minHeight: 190)
@@ -239,28 +301,37 @@ struct TrendsView: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(hairline, lineWidth: 1)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading trends")
     }
 
     private func errorState(_ message: String) -> some View {
         VStack(spacing: 14) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(.orange)
+            VStack(spacing: 14) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
 
-            Text("Trends unavailable")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
+                Text("Trends unavailable")
+                    .font(.headline.weight(.bold))
+                    .fontDesign(.rounded)
+                    .foregroundStyle(.white)
 
-            Text(message)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(muted)
-                .multilineTextAlignment(.center)
+                Text(message)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Trends unavailable. \(message)")
 
             Button {
                 Task { await viewModel.refresh() }
             } label: {
                 Text("Try Again")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.body.weight(.bold))
                     .padding(.horizontal, 18)
                     .padding(.vertical, 10)
             }
@@ -278,8 +349,10 @@ struct TrendsView: View {
 
     private var emptyState: some View {
         Text("No trend data available.")
-            .font(.system(size: 15, weight: .semibold))
+            .font(.body.weight(.semibold))
             .foregroundStyle(muted)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, minHeight: 160)
             .background(surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
@@ -292,11 +365,17 @@ struct TrendsView: View {
 private struct TrendCard: View {
     let item: TrendItem
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var trailerSheet: TrailerSheet?
 
-    private let cardWidth: CGFloat = 154
-    private let posterHeight: CGFloat = 231
-    private let contentHeight: CGFloat = 142
+    private var cardWidth: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 224 : 154
+    }
+
+    private var posterHeight: CGFloat {
+        cardWidth * 1.5
+    }
+
     private let muted = Color(red: 0.56, green: 0.64, blue: 0.78)
     private let premiumBlue = Color(red: 0.30, green: 0.59, blue: 1.0)
     private let ratingGold = Color(red: 1.0, green: 0.84, blue: 0.36)
@@ -306,25 +385,7 @@ private struct TrendCard: View {
             poster
 
             VStack(alignment: .leading, spacing: 7) {
-                Text(item.title)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.82)
-                    .frame(minHeight: 38, alignment: .topLeading)
-
-                HStack(spacing: 8) {
-                    Text(item.ratingText)
-                        .font(.system(size: 12.5, weight: .heavy))
-                        .monospacedDigit()
-                        .foregroundStyle(ratingGold)
-
-                    Spacer(minLength: 4)
-
-                    Text(item.releaseYear ?? "N/A")
-                        .font(.system(size: 12.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(muted)
-                }
+                cardSummary
 
                 if let trailerURL = item.trailerURL {
                     Button {
@@ -332,15 +393,16 @@ private struct TrendCard: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "play.fill")
-                                .font(.system(size: 11, weight: .heavy))
+                                .font(.caption.weight(.heavy))
+                                .accessibilityHidden(true)
                             Text("Trailer")
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.86)
+                                .lineLimit(2)
                         }
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.subheadline.weight(.bold))
                             .foregroundStyle(premiumBlue)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 34)
+                            .frame(minHeight: 34)
+                            .padding(.vertical, 4)
                             .background(premiumBlue.opacity(0.13), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -349,11 +411,12 @@ private struct TrendCard: View {
                             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(TrendPressStyle())
+                    .accessibilityLabel("Watch trailer for \(item.title)")
                 }
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 14)
-            .frame(height: contentHeight, alignment: .top)
+            .frame(minHeight: 142, alignment: .top)
         }
         .frame(width: cardWidth, alignment: .top)
         .background(Color(red: 0.055, green: 0.105, blue: 0.175), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -368,34 +431,117 @@ private struct TrendCard: View {
         }
     }
 
+    private var cardSummary: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(item.title)
+                .font(.subheadline.weight(.bold))
+                .fontDesign(.rounded)
+                .foregroundStyle(.white)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 3)
+                .frame(minHeight: dynamicTypeSize.isAccessibilitySize ? 0 : 38, alignment: .topLeading)
+
+            metadata
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(item.title)
+        .accessibilityValue(cardAccessibilityValue)
+    }
+
     @ViewBuilder
-    private var poster: some View {
-        if let posterURL = item.posterURL {
-            AsyncImage(url: posterURL) { phase in
-                switch phase {
-                case .empty:
-                    posterPlaceholder(text: "Loading")
-                        .overlay {
-                            ProgressView()
-                                .tint(.white)
-                        }
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .failure:
-                    posterPlaceholder(text: "No poster")
-                @unknown default:
-                    posterPlaceholder(text: "No poster")
+    private var metadata: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) {
+                ratingLabel
+                releaseYearLabel
+                if let language = item.language {
+                    languageLabel(language)
                 }
             }
-            .frame(width: cardWidth, height: posterHeight)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         } else {
-            posterPlaceholder(text: "No poster")
-                .frame(width: cardWidth, height: posterHeight)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    ratingLabel
+                    Spacer(minLength: 4)
+                    releaseYearLabel
+                }
+                if let language = item.language {
+                    languageLabel(language)
+                }
+            }
         }
+    }
+
+    private var ratingLabel: some View {
+        Text(item.ratingText)
+            .font(.caption.weight(.heavy))
+            .monospacedDigit()
+            .foregroundStyle(ratingGold)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var releaseYearLabel: some View {
+        Text(item.releaseYear ?? "N/A")
+            .font(.caption.weight(.bold))
+            .fontDesign(.monospaced)
+            .foregroundStyle(muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func languageLabel(_ language: String) -> some View {
+        Text("Language \(language.uppercased())")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var cardAccessibilityValue: String {
+        var details = [item.mediaType == "tv" ? "Series" : "Movie"]
+
+        if let rating = item.rating, rating.isFinite, (0...10).contains(rating) {
+            details.append("Rating \(String(format: "%.1f", rating)) out of 10")
+        }
+        if let releaseYear = item.releaseYear {
+            details.append("Released \(releaseYear)")
+        }
+        if let language = item.language {
+            details.append("Language \(language)")
+        }
+
+        return details.joined(separator: ", ")
+    }
+
+    @ViewBuilder
+    private var poster: some View {
+        Group {
+            if let posterURL = item.posterURL {
+                AsyncImage(url: posterURL) { phase in
+                    switch phase {
+                    case .empty:
+                        posterPlaceholder(text: "Loading")
+                            .overlay {
+                                ProgressView()
+                                    .tint(.white)
+                            }
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure:
+                        posterPlaceholder(text: "No poster")
+                    @unknown default:
+                        posterPlaceholder(text: "No poster")
+                    }
+                }
+                .frame(width: cardWidth, height: posterHeight)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            } else {
+                posterPlaceholder(text: "No poster")
+                    .frame(width: cardWidth, height: posterHeight)
+            }
+        }
+        .accessibilityHidden(true)
     }
 
     private func posterPlaceholder(text: String) -> some View {
@@ -414,7 +560,7 @@ private struct TrendCard: View {
                 Image(systemName: "photo")
                     .font(.system(size: 28, weight: .semibold))
                 Text(text)
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.caption.weight(.bold))
             }
             .foregroundStyle(Color.white.opacity(0.58))
         }
@@ -525,6 +671,33 @@ private struct TrendsResponse: Decodable {
         case indiaMovies = "india_movies"
         case indiaSeries = "india_series"
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        globalMovies = try Self.decodeItems(forKey: .globalMovies, from: container)
+        globalSeries = try Self.decodeItems(forKey: .globalSeries, from: container)
+        indiaMovies = try Self.decodeItems(forKey: .indiaMovies, from: container)
+        indiaSeries = try Self.decodeItems(forKey: .indiaSeries, from: container)
+    }
+
+    private static func decodeItems(
+        forKey key: CodingKeys,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> [TrendItem] {
+        try container
+            .decode([FailableDecodable<TrendItem>].self, forKey: key)
+            .compactMap(\.value)
+    }
+}
+
+private struct FailableDecodable<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        value = try? Value(from: decoder)
+    }
 }
 
 private struct TrendItem: Decodable, Identifiable, Hashable {
@@ -533,14 +706,14 @@ private struct TrendItem: Decodable, Identifiable, Hashable {
     let rating: Double?
     let releaseYear: String?
     let trailerURL: URL?
-    let mediaType: String?
+    let mediaType: String
     let language: String?
 
     var id: String {
         [
             title,
             releaseYear ?? "",
-            mediaType ?? "",
+            mediaType,
             language ?? ""
         ].joined(separator: "|")
     }
@@ -558,6 +731,95 @@ private struct TrendItem: Decodable, Identifiable, Hashable {
         case trailerURL = "trailer_url"
         case mediaType = "media_type"
         case language
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedTitle = try container.decode(String.self, forKey: .title)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !decodedTitle.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .title,
+                in: container,
+                debugDescription: "Trend title must not be empty."
+            )
+        }
+
+        let decodedMediaType = try container.decode(String.self, forKey: .mediaType)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        guard decodedMediaType == "movie" || decodedMediaType == "tv" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .mediaType,
+                in: container,
+                debugDescription: "Trend media type must be movie or tv."
+            )
+        }
+
+        title = decodedTitle
+        mediaType = decodedMediaType
+        rating = try? container.decode(Double.self, forKey: .rating)
+        releaseYear = Self.decodeReleaseYear(forKey: .releaseYear, from: container)
+        language = Self.decodeNonEmptyString(forKey: .language, from: container)
+        posterURL = Self.decodeWebURL(forKey: .posterURL, from: container)
+        trailerURL = Self.decodeHTTPSURL(forKey: .trailerURL, from: container)
+    }
+
+    private static func decodeNonEmptyString(
+        forKey key: CodingKeys,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> String? {
+        guard let value = try? container.decode(String.self, forKey: key) else {
+            return nil
+        }
+
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedValue.isEmpty ? nil : trimmedValue
+    }
+
+    private static func decodeReleaseYear(
+        forKey key: CodingKeys,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> String? {
+        guard let value = Self.decodeNonEmptyString(forKey: key, from: container),
+              value.count == 4,
+              value.allSatisfy({ $0.isNumber }) else {
+            return nil
+        }
+
+        return value
+    }
+
+    private static func decodeWebURL(
+        forKey key: CodingKeys,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> URL? {
+        guard let value = Self.decodeNonEmptyString(forKey: key, from: container),
+              let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              url.host != nil else {
+            return nil
+        }
+
+        return url
+    }
+
+    private static func decodeHTTPSURL(
+        forKey key: CodingKeys,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> URL? {
+        guard let value = Self.decodeNonEmptyString(forKey: key, from: container),
+              let url = URL(string: value),
+              url.scheme?.lowercased() == "https",
+              let host = url.host,
+              !host.isEmpty else {
+            return nil
+        }
+
+        return url
     }
 }
 

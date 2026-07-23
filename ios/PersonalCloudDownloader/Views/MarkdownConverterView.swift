@@ -1,8 +1,13 @@
 import Foundation
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
+
+private let markdownUploadMaxBytes = 25 * 1024 * 1024
+private let markdownPhotoMaxPixelDimension = 3_000
+private let markdownPhotoJPEGQuality: CGFloat = 0.85
 
 struct MarkdownConverterView: View {
     @State private var selectedFile: PickedDocument?
@@ -11,8 +16,9 @@ struct MarkdownConverterView: View {
     @State private var emptyResultMessage: String?
     @State private var urlText = ""
     @State private var convertedURL: String?
-    @State private var lastConversion: MarkdownConversionKind?
+    @State private var retrySnapshot: MarkdownRetrySnapshot?
     @State private var isConverting = false
+    @State private var conversionGeneration = 0
     @State private var isPickerPresented = false
     @State private var isSharePresented = false
     @State private var isSavePresented = false
@@ -81,6 +87,7 @@ struct MarkdownConverterView: View {
             .sheet(isPresented: $isPickerPresented) {
                 DocumentPicker { document in
                     selectedFile = document
+                    retrySnapshot = nil
                     errorMessage = nil
                     emptyResultMessage = nil
                 }
@@ -150,8 +157,11 @@ struct MarkdownConverterView: View {
                 .buttonStyle(ConverterPillStyle(tint: premiumBlue, isProminent: true))
 
                 if #available(iOS 16.0, *) {
-                    PhotoPickerButton(isDisabled: isConverting) { result in
-                        await loadSelectedPhoto(result)
+                    PhotoPickerButton(
+                        isDisabled: isConverting,
+                        onPickStart: beginPhotoConversion
+                    ) { result, generation in
+                        await loadSelectedPhoto(result, generation: generation)
                     }
                     .buttonStyle(ConverterPillStyle(tint: premiumBlue, isProminent: false))
                 }
@@ -336,7 +346,7 @@ struct MarkdownConverterView: View {
             Button("Retry", systemImage: "arrow.clockwise") {
                 Task { await retryLastConversion() }
             }
-            .disabled((lastConversion == nil && selectedFile == nil) || isConverting)
+            .disabled(retrySnapshot == nil || isConverting)
             .buttonStyle(ConverterActionButtonStyle())
 
             Button("Clear", systemImage: "xmark.circle") {
@@ -387,11 +397,13 @@ struct MarkdownConverterView: View {
     }
 
     private func clearAll() {
+        conversionGeneration += 1
         dismissKeyboard()
+        isConverting = false
         selectedFile = nil
         urlText = ""
         convertedURL = nil
-        lastConversion = nil
+        retrySnapshot = nil
         markdown = ""
         errorMessage = nil
         emptyResultMessage = nil
@@ -402,88 +414,154 @@ struct MarkdownConverterView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    private func convertSelectedFile() async {
-        guard let selectedFile else { return }
-        lastConversion = .file
+    private func convertSelectedFile(
+        file retryFile: PickedDocument? = nil,
+        snapshot retrySource: MarkdownRetrySnapshot? = nil
+    ) async {
+        guard !isConverting, let file = retryFile ?? selectedFile else { return }
+        let source = retrySource ?? (
+            file.data == nil ? .document(file) : .photo(file)
+        )
+        conversionGeneration += 1
+        let generation = conversionGeneration
+        retrySnapshot = source
         isConverting = true
         errorMessage = nil
         emptyResultMessage = nil
-        defer { isConverting = false }
+        defer {
+            if generation == conversionGeneration {
+                isConverting = false
+            }
+        }
 
         do {
-            let response = try await MarkdownConverterAPI.convert(file: selectedFile)
+            let response = try await MarkdownConverterAPI.convert(file: file)
+            guard generation == conversionGeneration else { return }
             markdown = response.markdown
             convertedURL = nil
             if !hasMarkdown {
                 emptyResultMessage = "Conversion finished, but no Markdown text was extracted from this file. This can happen with scanned PDFs or PDFs with broken text encoding."
             }
         } catch let error as MarkdownConverterAPIError {
+            guard generation == conversionGeneration else { return }
             errorMessage = error.friendlyMessage
         } catch {
+            guard generation == conversionGeneration else { return }
             errorMessage = "Could not reach CloudBox. Check Tailscale and try again."
         }
     }
 
-    private func convertURL() async {
-        let url = trimmedURL
+    private func convertURL(retryURL: String? = nil) async {
+        guard !isConverting else { return }
+        let url = retryURL ?? trimmedURL
         guard !url.isEmpty else {
             errorMessage = MarkdownConverterAPIError.invalidURL.friendlyMessage
             return
         }
 
+        conversionGeneration += 1
+        let generation = conversionGeneration
         dismissKeyboard()
-        lastConversion = .url
+        retrySnapshot = .url(url)
         isConverting = true
         errorMessage = nil
         emptyResultMessage = nil
         convertedURL = nil
-        defer { isConverting = false }
+        defer {
+            if generation == conversionGeneration {
+                isConverting = false
+            }
+        }
 
         do {
             let response = try await MarkdownConverterAPI.convert(url: url)
+            guard generation == conversionGeneration else { return }
             markdown = response.markdown
             convertedURL = response.url
-            lastConversion = .url
             if !hasMarkdown {
                 emptyResultMessage = "Conversion finished, but no Markdown text was extracted from this page."
             }
         } catch let error as MarkdownConverterAPIError {
+            guard generation == conversionGeneration else { return }
             errorMessage = error.friendlyMessage
         } catch {
+            guard generation == conversionGeneration else { return }
             errorMessage = "Could not reach CloudBox. Check Tailscale and try again."
         }
     }
 
     private func retryLastConversion() async {
-        switch lastConversion {
-        case .file:
-            await convertSelectedFile()
-        case .url:
-            await convertURL()
-        case nil:
-            await convertSelectedFile()
+        guard !isConverting, let snapshot = retrySnapshot else { return }
+        switch snapshot {
+        case .document(let file), .photo(let file):
+            await convertSelectedFile(file: file, snapshot: snapshot)
+        case .url(let url):
+            await convertURL(retryURL: url)
         }
     }
 
-    private func loadSelectedPhoto(_ result: Result<Data, Error>) async {
+    private func beginPhotoConversion() -> Int? {
+        guard !isConverting else { return nil }
+        conversionGeneration += 1
+        retrySnapshot = nil
+        isConverting = true
         errorMessage = nil
         emptyResultMessage = nil
+        return conversionGeneration
+    }
+
+    private func loadSelectedPhoto(
+        _ result: Result<Data, Error>,
+        generation: Int
+    ) async {
+        guard generation == conversionGeneration else { return }
+        defer {
+            if generation == conversionGeneration {
+                isConverting = false
+            }
+        }
 
         do {
-            let data = try result.get()
-            guard
-                let image = UIImage(data: data),
-                let uploadData = image.jpegData(compressionQuality: 0.9)
-            else {
-                throw MarkdownConverterAPIError.photoLoadFailed
+            let uploadData = try autoreleasepool {
+                let data = try result.get()
+                guard let source = CGImageSourceCreateWithData(
+                    data as CFData,
+                    [kCGImageSourceShouldCache: false] as CFDictionary
+                ) else {
+                    throw MarkdownConverterAPIError.photoLoadFailed
+                }
+                let options: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: markdownPhotoMaxPixelDimension,
+                    kCGImageSourceShouldCacheImmediately: true,
+                ]
+                guard
+                    let image = CGImageSourceCreateThumbnailAtIndex(
+                        source,
+                        0,
+                        options as CFDictionary
+                    ),
+                    let jpeg = UIImage(cgImage: image).jpegData(
+                        compressionQuality: markdownPhotoJPEGQuality
+                    )
+                else {
+                    throw MarkdownConverterAPIError.photoLoadFailed
+                }
+                return jpeg
+            }
+            guard generation == conversionGeneration else { return }
+            guard uploadData.count <= markdownUploadMaxBytes else {
+                throw MarkdownConverterAPIError.tooLarge
             }
             selectedFile = PickedDocument(data: uploadData, filename: "photo.jpg", contentType: "image/jpeg")
             markdown = ""
             convertedURL = nil
-            lastConversion = nil
         } catch let error as MarkdownConverterAPIError {
+            guard generation == conversionGeneration else { return }
             errorMessage = error.friendlyMessage
         } catch {
+            guard generation == conversionGeneration else { return }
             errorMessage = MarkdownConverterAPIError.photoLoadFailed.friendlyMessage
         }
     }
@@ -643,7 +721,8 @@ private struct MarkdownPreviewBlock: Identifiable {
 @available(iOS 16.0, *)
 private struct PhotoPickerButton: View {
     let isDisabled: Bool
-    let onPick: (Result<Data, Error>) async -> Void
+    let onPickStart: () -> Int?
+    let onPick: (Result<Data, Error>, Int) async -> Void
     @State private var item: PhotosPickerItem?
 
     var body: some View {
@@ -653,14 +732,15 @@ private struct PhotoPickerButton: View {
         .disabled(isDisabled)
         .onChange(of: item) { newItem in
             guard let newItem else { return }
+            guard let generation = onPickStart() else { return }
             Task {
                 do {
                     guard let data = try await newItem.loadTransferable(type: Data.self) else {
                         throw MarkdownConverterAPIError.photoLoadFailed
                     }
-                    await onPick(.success(data))
+                    await onPick(.success(data), generation)
                 } catch {
-                    await onPick(.failure(error))
+                    await onPick(.failure(error), generation)
                 }
             }
         }
@@ -750,7 +830,7 @@ private struct PickedDocument: Identifiable {
         self.url = url
         self.data = nil
         self.filename = filename
-        self.contentType = nil
+        self.contentType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
     }
 
     init(data: Data, filename: String, contentType: String) {
@@ -761,9 +841,10 @@ private struct PickedDocument: Identifiable {
     }
 }
 
-private enum MarkdownConversionKind {
-    case file
-    case url
+private enum MarkdownRetrySnapshot {
+    case document(PickedDocument)
+    case photo(PickedDocument)
+    case url(String)
 }
 
 private struct MarkdownConversionResponse: Decodable {
@@ -939,13 +1020,27 @@ private enum MarkdownConverterAPI {
         let contentType = file.contentType ?? UTType(filenameExtension: fileExtension)?.preferredMIMEType ?? "application/octet-stream"
         let uploadData: Data
         if let data = file.data {
+            guard data.count <= markdownUploadMaxBytes else {
+                throw MarkdownConverterAPIError.tooLarge
+            }
             uploadData = data
         } else if let url = file.url {
+            let values = try url.resourceValues(forKeys: [.fileSizeKey])
+            guard let fileSize = values.fileSize else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            guard fileSize <= markdownUploadMaxBytes else {
+                throw MarkdownConverterAPIError.tooLarge
+            }
             uploadData = try Data(contentsOf: url)
+            guard uploadData.count <= markdownUploadMaxBytes else {
+                throw MarkdownConverterAPIError.tooLarge
+            }
         } else {
             throw MarkdownConverterAPIError.conversionFailed
         }
 
+        body.reserveCapacity(uploadData.count + 512)
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n")
         body.append("Content-Type: \(contentType)\r\n\r\n")

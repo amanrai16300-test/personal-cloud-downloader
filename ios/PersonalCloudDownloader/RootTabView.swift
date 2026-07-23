@@ -111,16 +111,9 @@ struct RootTabView: View {
             }
         }
         .onChange(of: reconnectCoordinator.completedCycle) { _ in
-            switch selection {
-            case .home:
-                homeRefreshToken += 1
-            case .videos:
-                videosRefreshToken += 1
-            case .network:
-                networkRefreshToken += 1
-            case .downloader, .more:
-                break
-            }
+            homeRefreshToken += 1
+            videosRefreshToken += 1
+            networkRefreshToken += 1
         }
     }
 
@@ -163,7 +156,7 @@ final class ForegroundReconnectCoordinator: ObservableObject {
     private var task: Task<Void, Never>?
 
     func start() {
-        task?.cancel()
+        guard task == nil else { return }
         cycle += 1
         let activeCycle = cycle
         status = .reconnecting
@@ -177,7 +170,7 @@ final class ForegroundReconnectCoordinator: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 if await probeHealth() {
-                    guard activeCycle == cycle else { return }
+                    guard !Task.isCancelled, activeCycle == cycle else { return }
                     status = .connected
                     completedCycle += 1
                     return
@@ -186,6 +179,22 @@ final class ForegroundReconnectCoordinator: ObservableObject {
 
             guard !Task.isCancelled, activeCycle == cycle else { return }
             status = .unavailable
+
+            while !Task.isCancelled, activeCycle == cycle {
+                do {
+                    try await Task.sleep(nanoseconds: 10_000_000_000)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, activeCycle == cycle else { return }
+
+                if await probeHealth() {
+                    guard !Task.isCancelled, activeCycle == cycle else { return }
+                    status = .connected
+                    completedCycle += 1
+                    return
+                }
+            }
         }
     }
 
@@ -312,6 +321,8 @@ private struct TabPressStyle: ButtonStyle {
 }
 
 private struct MoreView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     private let background = Color(red: 0.015, green: 0.035, blue: 0.075)
     private let panel = Color(red: 0.025, green: 0.075, blue: 0.145)
     private let elevatedPanel = Color(red: 0.035, green: 0.105, blue: 0.205)
@@ -326,11 +337,12 @@ private struct MoreView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Server Tools")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(muted)
                             .textCase(.uppercase)
                             .tracking(1.0)
                             .padding(.horizontal, 2)
+                            .accessibilityAddTraits(.isHeader)
 
                         VStack(spacing: 12) {
                             NavigationLink {
@@ -430,42 +442,19 @@ private struct MoreView: View {
     }
 
     private var moreHero: some View {
-        HStack(spacing: 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.blue.opacity(0.34), elevatedPanel.opacity(0.72)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 72, height: 72)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.blue.opacity(0.46), lineWidth: 1)
-                    }
-
-                Image(systemName: "shippingbox.fill")
-                    .font(.system(size: 32, weight: .semibold))
-                    .foregroundStyle(.white)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 16) {
+                    moreHeroIcon
+                    moreHeroText
+                }
+            } else {
+                HStack(spacing: 16) {
+                    moreHeroIcon
+                    moreHeroText
+                    Spacer(minLength: 0)
+                }
             }
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text("More")
-                    .font(.system(size: 40, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.84)
-
-                Text("CloudBox controls and server tools")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(muted)
-                    .lineLimit(2)
-            }
-            .layoutPriority(1)
-
-            Spacer(minLength: 0)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -484,40 +473,65 @@ private struct MoreView: View {
         .shadow(color: Color.blue.opacity(0.20), radius: 22, y: 12)
     }
 
-    private func moreRow(title: String, subtitle: String, systemImage: String, tint: Color) -> some View {
-        HStack(spacing: 15) {
-            Image(systemName: systemImage)
-                .font(.system(size: 23, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 56, height: 56)
-                .background(tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    private var moreHeroIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.blue.opacity(0.34), elevatedPanel.opacity(0.72)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 72, height: 72)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(tint.opacity(0.38), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.blue.opacity(0.46), lineWidth: 1)
                 }
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
+            Image(systemName: "shippingbox.fill")
+                .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+        .accessibilityHidden(true)
+    }
 
-                Text(subtitle)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-            }
-            .layoutPriority(1)
+    private var moreHeroText: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("More")
+                .font(.largeTitle.weight(.bold))
+                .fontDesign(.rounded)
+                .foregroundStyle(.white)
+                .lineLimit(2)
 
-            Spacer(minLength: 8)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 15, weight: .bold))
+            Text("CloudBox controls and server tools")
+                .font(.body.weight(.medium))
                 .foregroundStyle(muted)
-                .frame(width: 34, height: 34)
-                .background(elevatedPanel.opacity(0.60), in: Circle())
+                .lineLimit(3)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .layoutPriority(1)
+    }
+
+    private func moreRow(title: String, subtitle: String, systemImage: String, tint: Color) -> some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        moreRowIcon(systemImage, tint: tint)
+                        Spacer(minLength: 8)
+                        moreRowChevron
+                    }
+                    moreRowText(title: title, subtitle: subtitle)
+                }
+            } else {
+                HStack(spacing: 15) {
+                    moreRowIcon(systemImage, tint: tint)
+                    moreRowText(title: title, subtitle: subtitle)
+                    Spacer(minLength: 8)
+                    moreRowChevron
+                }
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
@@ -535,6 +549,49 @@ private struct MoreView: View {
         }
         .shadow(color: tint.opacity(0.12), radius: 14, y: 8)
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(subtitle)
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func moreRowIcon(_ systemImage: String, tint: Color) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 23, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: 56, height: 56)
+            .background(tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(tint.opacity(0.38), lineWidth: 1)
+            }
+            .accessibilityHidden(true)
+    }
+
+    private func moreRowText(title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.headline.weight(.bold))
+                .fontDesign(.rounded)
+                .foregroundStyle(.white)
+                .lineLimit(3)
+
+            Text(subtitle)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(muted)
+                .lineLimit(3)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .layoutPriority(1)
+    }
+
+    private var moreRowChevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(muted)
+            .frame(width: 34, height: 34)
+            .background(elevatedPanel.opacity(0.60), in: Circle())
+            .accessibilityHidden(true)
     }
 }
 

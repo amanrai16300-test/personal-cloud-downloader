@@ -11,6 +11,7 @@ struct NetworkUsageView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var usage: NetworkUsageResponse?
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -55,20 +56,26 @@ struct NetworkUsageView: View {
                 stopAutoRefresh()
             }
             .onChange(of: scenePhase) { phase in
-                if phase != .active {
+                if phase == .active {
+                    guard isVisible else { return }
+                    startAutoRefresh()
+                } else {
                     stopAutoRefresh()
-                    refreshGeneration += 1
-                    isLoading = false
                 }
             }
             .onChange(of: reconnectCycle) { _ in
                 stopAutoRefresh()
-                refreshGeneration += 1
-                isLoading = false
+                guard isVisible, scenePhase == .active else { return }
+                startAutoRefresh()
             }
             .onChange(of: reconnectRefreshToken) { _ in
-                guard isVisible else { return }
-                startAutoRefresh()
+                guard isVisible, scenePhase == .active else { return }
+                if isLoading {
+                    startAutoRefresh()
+                } else {
+                    stopAutoRefresh()
+                    startAutoRefresh()
+                }
             }
         }
     }
@@ -95,11 +102,12 @@ struct NetworkUsageView: View {
                 .scaleEffect(1.15)
             VStack(spacing: 5) {
                 Text("Loading network usage")
-                    .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .font(.system(.title3, design: .rounded, weight: .semibold))
                     .foregroundStyle(.white)
                 Text("Checking the CloudBox link")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(mutedText)
+                    .lineLimit(3)
             }
         }
         .padding(24)
@@ -118,13 +126,16 @@ struct NetworkUsageView: View {
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .stroke(hairline, lineWidth: 1)
                 }
+                .accessibilityHidden(true)
             Text("Network usage unavailable")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(.system(.title3, design: .rounded, weight: .bold))
                 .foregroundStyle(.white)
+                .lineLimit(3)
             Text(errorMessage ?? "Pull to refresh or check the server connection.")
-                .font(.system(size: 15, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(mutedText)
                 .multilineTextAlignment(.center)
+                .lineLimit(4)
                 .padding(.horizontal, 18)
         }
         .padding(24)
@@ -168,10 +179,11 @@ struct NetworkUsageView: View {
                     let dailyRows = usage.latestDailyRows
                     if !dailyRows.isEmpty {
                         section("Daily Usage") {
+                            let indexedDailyRows = Array(dailyRows.enumerated())
                             VStack(spacing: 0) {
-                                ForEach(dailyRows) { row in
+                                ForEach(indexedDailyRows, id: \.offset) { index, row in
                                     dailyRow(row)
-                                    if row.id != dailyRows.last?.id {
+                                    if index < indexedDailyRows.count - 1 {
                                         rowDivider
                                     }
                                 }
@@ -194,8 +206,8 @@ struct NetworkUsageView: View {
     private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
-                .tracking(1.6)
+                .font(.caption2.weight(.bold))
+                .tracking(dynamicTypeSize.isAccessibilitySize ? 0 : 1.6)
                 .foregroundStyle(premiumBlue)
                 .padding(.horizontal, 2)
 
@@ -212,9 +224,10 @@ struct NetworkUsageView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text("LIVE MONITOR")
-                    .font(.system(size: 11, weight: .bold))
-                    .tracking(1.6)
+                    .font(.caption2.weight(.bold))
+                    .tracking(dynamicTypeSize.isAccessibilitySize ? 0 : 1.6)
                     .foregroundStyle(premiumBlue)
+                    .lineLimit(2)
 
                 Spacer(minLength: 8)
 
@@ -223,12 +236,17 @@ struct NetworkUsageView: View {
                     animates: !reduceMotion
                 )
 
-                Text(isLoading ? "Refreshing" : "Live")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                Text(connectionStatusText)
+                    .font(.system(.caption, design: .rounded, weight: .bold))
                     .foregroundStyle(errorMessage == nil ? premiumBlue : warningOrange)
                     .contentTransition(.opacity)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
             }
             .padding(.bottom, 14)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Connection status")
+            .accessibilityValue(connectionStatusText)
 
             HStack(spacing: 10) {
                 Image(systemName: "antenna.radiowaves.left.and.right")
@@ -237,10 +255,10 @@ struct NetworkUsageView: View {
                     .accessibilityHidden(true)
 
                 Text(usage.interface)
-                    .font(.system(size: 23, weight: .semibold, design: .monospaced))
+                    .font(.system(.title2, design: .monospaced, weight: .semibold))
                     .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Interface \(usage.interface)")
 
                 Spacer(minLength: 0)
@@ -259,23 +277,24 @@ struct NetworkUsageView: View {
                     .accessibilityHidden(true)
 
                 Text(isLoading ? "Refreshing latest counters" : "Updated")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(mutedText)
+                    .lineLimit(2)
 
                 if !isLoading {
                     Text(usage.updatedAtDisplay)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced, weight: .bold))
                         .foregroundStyle(Color.white.opacity(0.92))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .lineLimit(2)
                         .contentTransition(.opacity)
                 }
 
                 Spacer(minLength: 8)
 
                 Text("vnstat · Oracle")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(mutedText.opacity(0.85))
+                    .lineLimit(2)
             }
 
             if let errorMessage {
@@ -315,12 +334,20 @@ struct NetworkUsageView: View {
         }
     }
 
+    private var connectionStatusText: String {
+        if isLoading { return "Refreshing" }
+        return errorMessage == nil ? "Live data" : "Last refresh failed"
+    }
+
     // MARK: Summary tiles — flat raised pair, no gradients or glow.
 
     @ViewBuilder
     private func summaryTiles(_ usage: NetworkUsageResponse) -> some View {
         if usage.month != nil || usage.today != nil {
-            HStack(spacing: 12) {
+            let layout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                : AnyLayout(HStackLayout(spacing: 12))
+            layout {
                 if let month = usage.month {
                     summaryTile(
                         icon: "arrow.up.right",
@@ -352,29 +379,29 @@ struct NetworkUsageView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(mutedText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .lineLimit(2)
 
                 Text(value)
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.system(.title2, design: .rounded, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.62)
+                    .lineLimit(2)
                     .contentTransition(.opacity)
 
                 Text(detail)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(mutedText)
-                    .lineLimit(1)
+                    .lineLimit(2)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(metricSurface(tint: tint))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
     }
 
     /// Shared raised metric surface with a whisper of tint at the top edge —
@@ -414,7 +441,7 @@ struct NetworkUsageView: View {
 
     private func usageSection(title: String, row: NetworkUsageRow, showEstimate: Bool) -> some View {
         section(title) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 108), spacing: 8)], spacing: 8) {
+            LazyVGrid(columns: usageMetricColumns, spacing: 8) {
                 metric("RX", row.rx)
                 metric("TX", row.tx)
                 metric("Total", row.total)
@@ -432,15 +459,13 @@ struct NetworkUsageView: View {
     private func metric(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(mutedText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .lineLimit(2)
             Text(value)
-                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                .font(.system(.subheadline, design: .monospaced, weight: .bold))
                 .foregroundStyle(Color.white.opacity(0.94))
-                .lineLimit(1)
-                .minimumScaleFactor(0.66)
+                .lineLimit(2)
                 .contentTransition(.opacity)
         }
         .padding(.horizontal, 11)
@@ -451,6 +476,21 @@ struct NetworkUsageView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(hairline, lineWidth: 1)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
+    }
+
+    private var usageMetricColumns: [GridItem] {
+        dynamicTypeSize.isAccessibilitySize
+            ? [GridItem(.flexible())]
+            : [GridItem(.adaptive(minimum: 108), spacing: 8)]
+    }
+
+    private var storageMetricColumns: [GridItem] {
+        dynamicTypeSize.isAccessibilitySize
+            ? [GridItem(.flexible())]
+            : [GridItem(.flexible()), GridItem(.flexible())]
     }
 
     // MARK: Storage panel
@@ -460,34 +500,26 @@ struct NetworkUsageView: View {
         if let disk = storage?.rootDisk {
             section("Storage") {
                 VStack(alignment: .leading, spacing: 13) {
-                    HStack(alignment: .center, spacing: 12) {
-                        iconChip("internaldrive.fill", tint: premiumBlue)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Boot Volume")
-                                .font(.system(size: 14, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color.white)
-                            Text("\(disk.mount) (\(disk.path))")
-                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(mutedText)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.74)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .center, spacing: 12) {
+                            iconChip("internaldrive.fill", tint: premiumBlue)
+                            storageIdentity(disk)
+                            Spacer(minLength: 8)
+                            storagePercentage(disk)
                         }
 
-                        Spacer(minLength: 8)
-
-                        Text("\(disk.usedPercentDisplay)%")
-                            .font(.system(size: 27, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(Color.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                            .contentTransition(.opacity)
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .top, spacing: 12) {
+                                iconChip("internaldrive.fill", tint: premiumBlue)
+                                storageIdentity(disk)
+                            }
+                            storagePercentage(disk)
+                        }
                     }
 
-                    storageProgress(disk.progress)
+                    storageProgress(disk)
 
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    LazyVGrid(columns: storageMetricColumns, spacing: 8) {
                         metric("Used", disk.used)
                         metric("Total", disk.total)
                         metric("Available", disk.available)
@@ -507,34 +539,91 @@ struct NetworkUsageView: View {
         }
     }
 
-    private func storageProgress(_ value: Double) -> some View {
+    private func storageIdentity(_ disk: StorageDisk) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(storageTitle(for: disk))
+                .font(.system(.headline, design: .rounded, weight: .bold))
+                .foregroundStyle(Color.white)
+                .lineLimit(2)
+            Text("\(disk.mount) (\(disk.path))")
+                .font(.system(.caption, design: .monospaced, weight: .semibold))
+                .foregroundStyle(mutedText)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func storagePercentage(_ disk: StorageDisk) -> some View {
+        Text("\(disk.usedPercentDisplay)%")
+            .font(.system(.title, design: .rounded, weight: .bold))
+            .monospacedDigit()
+            .foregroundStyle(Color.white)
+            .lineLimit(2)
+            .contentTransition(.opacity)
+    }
+
+    private func storageTitle(for disk: StorageDisk) -> String {
+        let path = disk.path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mount = disk.mount.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if path == "/" {
+            return "Boot Volume"
+        }
+
+        if path == "/srv/personal-cloud" || mount == "/srv/personal-cloud" {
+            return "CloudBox Storage"
+        }
+
+        return "Storage Volume"
+    }
+
+    private func storageProgress(_ disk: StorageDisk) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.white.opacity(0.10))
+                    .accessibilityHidden(true)
                 Capsule()
                     .fill(premiumBlue)
-                    .frame(width: geo.size.width * CGFloat(min(max(value, 0), 1)))
+                    .frame(width: geo.size.width * CGFloat(disk.progress))
+                    .accessibilityHidden(true)
             }
         }
         .frame(height: 6)
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(storageTitle(for: disk))
+        .accessibilityValue(
+            "Used \(disk.used), total \(disk.total), \(Int(disk.usedPercent.rounded())) percent"
+        )
     }
 
     // MARK: Daily rows
 
     private func dailyRow(_ row: NetworkUsageRow) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(row.date)
-                    .font(.system(size: 13.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                Spacer()
-                Text(row.total)
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundStyle(premiumBlue)
-                    .lineLimit(1)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(row.date)
+                        .font(.system(.subheadline, design: .monospaced, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(2)
+                    Spacer()
+                    Text(row.total)
+                        .font(.system(.subheadline, design: .monospaced, weight: .bold))
+                        .foregroundStyle(premiumBlue)
+                        .lineLimit(2)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(row.date)
+                        .font(.system(.subheadline, design: .monospaced, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(2)
+                    Text(row.total)
+                        .font(.system(.subheadline, design: .monospaced, weight: .bold))
+                        .foregroundStyle(premiumBlue)
+                        .lineLimit(2)
+                }
             }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
@@ -550,18 +639,27 @@ struct NetworkUsageView: View {
                     }
                     dailyPill(row.avgRate)
                 }
+
+                VStack(spacing: 8) {
+                    dailyPill("RX \(row.rx)")
+                    dailyPill("TX \(row.tx)")
+                    dailyPill(row.avgRate)
+                }
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.date)
+        .accessibilityValue("Received \(row.rx), transmitted \(row.tx)")
     }
 
     private func dailyPill(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+            .font(.system(.caption, design: .monospaced, weight: .semibold))
             .foregroundStyle(mutedText)
-            .lineLimit(1)
-            .minimumScaleFactor(0.72)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity)
@@ -582,6 +680,7 @@ struct NetworkUsageView: View {
         Text(raw)
             .font(.system(.caption, design: .monospaced))
             .foregroundStyle(Color(red: 0.47, green: 0.92, blue: 0.63))
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -595,9 +694,9 @@ struct NetworkUsageView: View {
 
     private func warningLine(_ text: String) -> some View {
         Label(text, systemImage: "exclamationmark.triangle.fill")
-            .font(.system(size: 13, weight: .semibold))
+            .font(.footnote.weight(.semibold))
             .foregroundStyle(warningOrange)
-            .lineLimit(2)
+            .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -621,9 +720,10 @@ struct NetworkUsageView: View {
             }
     }
 
-    // MARK: Refresh (unchanged behavior)
+    // MARK: Refresh
 
     private func startAutoRefresh() {
+        guard isVisible, scenePhase == .active else { return }
         guard autoRefreshTask == nil else { return }
         autoRefreshTask = Task {
             await loadUsage()
@@ -638,6 +738,8 @@ struct NetworkUsageView: View {
     private func stopAutoRefresh() {
         autoRefreshTask?.cancel()
         autoRefreshTask = nil
+        refreshGeneration += 1
+        isLoading = false
     }
 
     @MainActor
@@ -760,7 +862,14 @@ private struct NetworkUsageResponse: Decodable {
     let storage: StorageUsage?
 
     var updatedAtDisplay: String {
-        guard let date = ISO8601DateFormatter().date(from: updatedAt) else {
+        let fractionalSecondsFormatter = ISO8601DateFormatter()
+        fractionalSecondsFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let standardFormatter = ISO8601DateFormatter()
+        standardFormatter.formatOptions = [.withInternetDateTime]
+
+        guard let date = fractionalSecondsFormatter.date(from: updatedAt)
+            ?? standardFormatter.date(from: updatedAt) else {
             return updatedAt
         }
         return date.formatted(date: .abbreviated, time: .shortened)

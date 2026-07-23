@@ -9,10 +9,17 @@ struct WebScreen: View {
 
     @State private var isLoading = false
     @State private var error: Error?
+    @State private var reloadGeneration = 0
+    @State private var retryInProgress = false
 
     var body: some View {
         ZStack {
-            WebView(url: url, isLoading: $isLoading, error: $error)
+            WebView(
+                url: url,
+                isLoading: $isLoading,
+                error: $error,
+                reloadGeneration: reloadGeneration
+            )
 
             if isLoading {
                 ProgressView()
@@ -21,6 +28,11 @@ struct WebScreen: View {
 
             if let error {
                 errorView(error)
+            }
+        }
+        .onChange(of: isLoading) { loading in
+            if !loading {
+                retryInProgress = false
             }
         }
     }
@@ -38,6 +50,15 @@ struct WebScreen: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+
+            Button("Retry") {
+                guard !retryInProgress else { return }
+                retryInProgress = true
+                self.error = nil
+                reloadGeneration += 1
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(retryInProgress)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -28,7 +28,7 @@ struct VideoProgress: Codable, Hashable {
 ///
 /// Reached over Tailscale only. No other endpoints are used yet.
 enum CompletedFilesAPI {
-    static let baseURL = "http://100.95.39.107:8000"
+    static let baseURL = CloudBoxEndpoints.fastAPIBaseURL.absoluteString
 
     /// Video extensions surfaced in the Videos library.
     static let videoExtensions: Set<String> = ["mp4", "mov", "m4v", "mkv", "avi", "webm"]

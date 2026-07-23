@@ -7,11 +7,7 @@ import SwiftUI
 /// changed.
 struct SettingsView: View {
     @Environment(\.openURL) private var openURL
-
-    private let tailscaleIP = "100.95.39.107"
-    private let downloaderURL = "http://100.95.39.107:8090/app/"
-    private let qbittorrentURL = "http://100.95.39.107:8080"
-    private let filesURL = "http://100.95.39.107:8090/files/"
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     // MARK: Palette — mirrored from the Home redesign tokens.
     private let screenBackground = Color(red: 0.008, green: 0.022, blue: 0.055)
@@ -71,10 +67,11 @@ struct SettingsView: View {
     private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption2.weight(.bold))
                 .tracking(1.6)
                 .foregroundStyle(premiumBlue)
                 .padding(.horizontal, 2)
+                .accessibilityAddTraits(.isHeader)
 
             content()
         }
@@ -83,44 +80,64 @@ struct SettingsView: View {
     // MARK: Identity panel
 
     private var identityPanel: some View {
-        HStack(spacing: 13) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [premiumBlue, Color(red: 0.07, green: 0.22, blue: 0.55)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 46, height: 46)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                    }
-
-                Image(systemName: "cloud.fill")
-                    .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(Color.white)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 10) {
+                    identityIcon
+                    identityText
+                }
+            } else {
+                HStack(spacing: 13) {
+                    identityIcon
+                    identityText
+                    Spacer(minLength: 0)
+                }
             }
-            .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Personal Cloud Downloader")
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-
-                Text("CloudBox · private by Tailscale")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(mutedText)
-            }
-
-            Spacer(minLength: 0)
         }
         .padding(.top, 4)
         .padding(.horizontal, 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Personal Cloud Downloader")
+        .accessibilityValue("CloudBox, private by Tailscale")
+    }
+
+    private var identityIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [premiumBlue, Color(red: 0.07, green: 0.22, blue: 0.55)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 46, height: 46)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                }
+
+            Image(systemName: "cloud.fill")
+                .font(.system(size: 21, weight: .semibold))
+                .foregroundStyle(Color.white)
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var identityText: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Personal Cloud Downloader")
+                .font(.headline.weight(.bold))
+                .fontDesign(.rounded)
+                .foregroundStyle(Color.white)
+                .lineLimit(3)
+
+            Text("CloudBox · private by Tailscale")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(mutedText)
+                .lineLimit(3)
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Server endpoints — one panel, hairline-divided rows, mono values.
@@ -130,28 +147,28 @@ struct SettingsView: View {
             endpointRow(
                 icon: "lock.shield.fill",
                 label: "Oracle Tailscale IP",
-                value: tailscaleIP,
+                value: CloudBoxEndpoints.serverHost,
                 tint: premiumBlue
             )
             rowDivider
             endpointRow(
                 icon: "arrow.down.circle.fill",
                 label: "Downloader",
-                value: downloaderURL,
+                value: CloudBoxEndpoints.downloaderWebAppURL.absoluteString,
                 tint: premiumBlue
             )
             rowDivider
             endpointRow(
                 icon: "magnet",
                 label: "qBittorrent",
-                value: qbittorrentURL,
+                value: CloudBoxEndpoints.qBittorrentURL.absoluteString,
                 tint: .orange
             )
             rowDivider
             endpointRow(
                 icon: "externaldrive.fill",
                 label: "Files",
-                value: filesURL,
+                value: CloudBoxEndpoints.filesURL.absoluteString,
                 tint: Color(red: 0.28, green: 0.76, blue: 0.70)
             )
         }
@@ -163,52 +180,91 @@ struct SettingsView: View {
             .fill(hairline)
             .frame(height: 1)
             .padding(.leading, 64)
+            .accessibilityHidden(true)
     }
 
     private func endpointRow(icon: String, label: String, value: String, tint: Color) -> some View {
-        HStack(spacing: 12) {
-            iconChip(icon, tint: tint)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(label)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(mutedText)
-
-                Text(value)
-                    .font(.system(size: 13.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.94))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.62)
-                    .textSelection(.enabled)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 12) {
+                        iconChip(icon, tint: tint)
+                        endpointLabel(label)
+                    }
+                    endpointValue(value)
+                }
+            } else {
+                HStack(spacing: 12) {
+                    iconChip(icon, tint: tint)
+                    VStack(alignment: .leading, spacing: 3) {
+                        endpointLabel(label)
+                        endpointValue(value)
+                    }
+                    Spacer(minLength: 0)
+                }
             }
-
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) service endpoint")
+        .accessibilityValue(value)
+    }
+
+    private func endpointLabel(_ label: String) -> some View {
+        Text(label)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(mutedText)
+            .lineLimit(2)
+    }
+
+    private func endpointValue(_ value: String) -> some View {
+        Text(value)
+            .font(.subheadline.weight(.semibold))
+            .fontDesign(.monospaced)
+            .foregroundStyle(Color.white.opacity(0.94))
+            .lineLimit(4)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
     }
 
     // MARK: Privacy panel
 
     private var privacyPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                iconChip("lock.shield", tint: premiumBlue)
-
-                Text("This app works only through Tailscale / private network.")
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.94))
-                    .fixedSize(horizontal: false, vertical: true)
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 8) {
+                        iconChip("lock.shield", tint: premiumBlue)
+                        privacyPrimaryText
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        iconChip("lock.shield", tint: premiumBlue)
+                        privacyPrimaryText
+                    }
+                }
             }
 
             Text("Do not expose Oracle ports publicly.")
-                .font(.system(size: 12.5, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(mutedText)
-                .padding(.leading, 50)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 0 : 50)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(panelSurface)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Privacy")
+        .accessibilityValue("This app works only through Tailscale or a private network. Do not expose Oracle ports publicly.")
+    }
+
+    private var privacyPrimaryText: some View {
+        Text("This app works only through Tailscale / private network.")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.white.opacity(0.94))
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Tailscale panel — helper note + the action row.
@@ -216,7 +272,7 @@ struct SettingsView: View {
     private var tailscalePanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Open Tailscale and confirm the VPN is connected before using the app.")
-                .font(.system(size: 12.5, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(mutedText)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 2)
@@ -226,48 +282,24 @@ struct SettingsView: View {
                     openURL(url)
                 }
             } label: {
-                HStack(spacing: 13) {
-                    ZStack(alignment: .bottomTrailing) {
-                        Image(systemName: "globe")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.62, green: 0.80, blue: 1.0))
-                            .frame(width: 46, height: 46)
-                            .background(premiumBlue.opacity(0.14), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .stroke(premiumBlue.opacity(0.32), lineWidth: 1)
+                Group {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                tailscaleIcon
+                                Spacer(minLength: 8)
+                                tailscaleArrow
                             }
-
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Color.white)
-                            .frame(width: 18, height: 18)
-                            .background(premiumBlue, in: Circle())
-                            .offset(x: 5, y: 5)
+                            tailscaleActionText
+                        }
+                    } else {
+                        HStack(spacing: 13) {
+                            tailscaleIcon
+                            tailscaleActionText
+                            Spacer(minLength: 8)
+                            tailscaleArrow
+                        }
                     }
-                    .accessibilityHidden(true)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Open Tailscale")
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.white)
-                            .lineLimit(1)
-
-                        Text("Private connection / VPN route")
-                            .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(mutedText)
-                            .lineLimit(1)
-                    }
-                    .layoutPriority(1)
-
-                    Spacer(minLength: 8)
-
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(premiumBlue)
-                        .frame(width: 34, height: 34)
-                        .background(premiumBlue.opacity(0.12), in: Circle())
-                        .accessibilityHidden(true)
                 }
                 .padding(.horizontal, 15)
                 .padding(.vertical, 13)
@@ -280,7 +312,60 @@ struct SettingsView: View {
                 .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
             .buttonStyle(SettingsPressStyle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Open Tailscale")
+            .accessibilityValue("Private connection and VPN route")
+            .accessibilityHint("Opens the Tailscale app")
+            .accessibilityAddTraits(.isButton)
         }
+    }
+
+    private var tailscaleIcon: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Image(systemName: "globe")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Color(red: 0.62, green: 0.80, blue: 1.0))
+                .frame(width: 46, height: 46)
+                .background(premiumBlue.opacity(0.14), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .stroke(premiumBlue.opacity(0.32), lineWidth: 1)
+                }
+
+            Image(systemName: "lock.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Color.white)
+                .frame(width: 18, height: 18)
+                .background(premiumBlue, in: Circle())
+                .offset(x: 5, y: 5)
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var tailscaleActionText: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Open Tailscale")
+                .font(.headline.weight(.bold))
+                .fontDesign(.rounded)
+                .foregroundStyle(Color.white)
+                .lineLimit(2)
+
+            Text("Private connection / VPN route")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(mutedText)
+                .lineLimit(3)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .layoutPriority(1)
+    }
+
+    private var tailscaleArrow: some View {
+        Image(systemName: "arrow.up.right")
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(premiumBlue)
+            .frame(width: 34, height: 34)
+            .background(premiumBlue.opacity(0.12), in: Circle())
+            .accessibilityHidden(true)
     }
 
     // MARK: Shared pieces

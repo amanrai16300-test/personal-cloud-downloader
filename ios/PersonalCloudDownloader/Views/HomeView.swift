@@ -40,6 +40,9 @@ struct HomeView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .largeTitle) private var brandTitleSize: CGFloat = 42
+    @ScaledMetric(relativeTo: .body) private var continueWatchingCardHeight: CGFloat = 184
     @State private var dashboard = HomeDashboardState()
     @State private var refreshTask: Task<Void, Never>?
     @State private var refreshGeneration = 0
@@ -51,6 +54,10 @@ struct HomeView: View {
     /// Pushed when a media card is tapped — the matched real `CompletedFile`,
     /// which drives PlayerView's stream URL and AVPlayer/VLC routing.
     @State private var selectedVideo: CompletedFile?
+    @State private var completedVideosCache: [CompletedFile]?
+    @State private var lastProcessedRecentlyAddedSet: Set<String>?
+    @State private var isCardMatchInFlight = false
+    @State private var showMediaUnavailableAlert = false
 
     /// Drives the player push (iOS 16-compatible). Clearing on pop releases the
     /// matched file so a later tap re-matches fresh.
@@ -108,7 +115,7 @@ struct HomeView: View {
                 FolderVideosView(folder: folder, progressByPath: [:])
             }
             .refreshable {
-                await refreshDashboard()
+                await refreshDashboard(forceLibraryReconciliation: true)
             }
             .onAppear {
                 isVisible = true
@@ -135,6 +142,14 @@ struct HomeView: View {
             .onChange(of: reconnectRefreshToken) { _ in
                 startRefreshLoop()
             }
+            .alert(
+                "Video unavailable",
+                isPresented: $showMediaUnavailableAlert
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Refresh Home or check the connection.")
+            }
         }
     }
 
@@ -160,16 +175,18 @@ struct HomeView: View {
     private var brandHeader: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(dashboard.greetingText)
-                .font(.system(size: 15.5, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(mutedText)
 
             Text("CloudBox")
-                .font(.system(size: 42, weight: .heavy))
+                .font(.system(size: brandTitleSize, weight: .heavy))
                 .foregroundStyle(Color.white)
+                .lineLimit(2)
 
             Text("Your private cloud. Always connected.")
-                .font(.system(size: 14.5, weight: .regular))
+                .font(.subheadline)
                 .foregroundStyle(mutedText)
+                .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -182,18 +199,18 @@ struct HomeView: View {
                 HStack(spacing: 8) {
                     StatusOrb(color: connectionDotColor, animates: !reduceMotion)
                     Text(dashboard.connectionLabel)
-                        .font(.system(size: 12, weight: .bold))
-                        .tracking(1.4)
+                        .font(.caption.weight(.bold))
+                        .tracking(dynamicTypeSize.isAccessibilitySize ? 0 : 1.4)
                         .foregroundStyle(connectionDotColor)
                         .contentTransition(.opacity)
+                        .lineLimit(2)
                 }
                 .padding(.bottom, 8)
 
                 Text("Oracle • Tokyo")
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.title2.weight(.bold))
                     .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .lineLimit(2)
                     .padding(.bottom, 6)
 
                 (
@@ -202,9 +219,17 @@ struct HomeView: View {
                     + Text(" latency")
                         .foregroundColor(mutedText)
                 )
-                .font(.system(size: 14, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .contentTransition(.opacity)
-                .padding(.bottom, 14)
+                .padding(.bottom, cachedDataAgeText == nil ? 14 : 5)
+
+                if let cachedDataAgeText {
+                    Text(cachedDataAgeText)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(mutedText)
+                        .lineLimit(2)
+                        .padding(.bottom, 14)
+                }
 
                 // Switches to the existing Network bottom tab.
                 Button {
@@ -212,7 +237,7 @@ struct HomeView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Text("View Network")
-                            .font(.system(size: 13.5, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Color.white.opacity(0.92))
                         Image(systemName: "chevron.right")
                             .font(.system(size: 11, weight: .bold))
@@ -240,6 +265,17 @@ struct HomeView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(connectionPanelSurface)
+    }
+
+    private var cachedDataAgeText: String? {
+        guard dashboard.isShowingCachedData,
+              let lastUpdated = dashboard.lastUpdated else {
+            return nil
+        }
+
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return "Last updated \(formatter.localizedString(for: lastUpdated, relativeTo: Date()))"
     }
 
     /// Connection panel only — keeps the dotted "global" texture. Tighter radius
@@ -288,7 +324,7 @@ struct HomeView: View {
                         // layout width).
                         Color.clear
                             .frame(maxWidth: .infinity)
-                            .frame(height: 184)
+                            .frame(height: continueWatchingCardHeight)
                             .overlay {
                                 mediaArtwork(item, wide: true)
                             }
@@ -319,22 +355,21 @@ struct HomeView: View {
                         // Title block + integrated progress, bottom-left.
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.title)
-                                .font(.system(size: 23, weight: .bold))
+                                .font(.title2.weight(.bold))
                                 .foregroundStyle(.white)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
+                                .lineLimit(2)
 
                             if let subtitle = item.subtitleText {
                                 Text(subtitle)
-                                    .font(.system(size: 14.5, weight: .semibold))
+                                    .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(Color(red: 0.70, green: 0.80, blue: 1.0))
-                                    .lineLimit(1)
+                                    .lineLimit(2)
                             }
 
                             Text(item.remainingText)
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.footnote.weight(.medium))
                                 .foregroundStyle(Color.white.opacity(0.78))
-                                .lineLimit(1)
+                                .lineLimit(2)
                                 .padding(.bottom, 4)
 
                             mediaProgressBar(item.progressFraction)
@@ -344,7 +379,7 @@ struct HomeView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 184)
+                    .frame(height: continueWatchingCardHeight)
                     .background(surface)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay {
@@ -354,6 +389,9 @@ struct HomeView: View {
                     .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .buttonStyle(HomePressStyle())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(continueWatchingAccessibilityLabel(for: item))
+                .accessibilityValue(item.watchProgressAccessibilityValue)
             }
         }
     }
@@ -426,31 +464,31 @@ struct HomeView: View {
 
             (
                 Text(value)
-                    .font(.system(size: 23, weight: .bold))
+                    .font(.title2.weight(.bold))
                     .foregroundColor(.white)
                 + Text(unit.map { " \($0)" } ?? "")
-                    .font(.system(size: 12.5, weight: .bold))
+                    .font(.caption.weight(.bold))
                     .foregroundColor(mutedText)
             )
             .monospacedDigit()
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
             .contentTransition(.numericText())
 
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.white.opacity(0.92))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
 
             Text(detail)
-                .font(.system(size: 11, weight: .medium))
+                .font(.caption2.weight(.medium))
                 .foregroundStyle(mutedText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 4)
-        .frame(maxWidth: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity)
     }
 
     // MARK: Network Activity + System Status pair.
@@ -465,8 +503,9 @@ struct HomeView: View {
     private var networkActivityCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Network Activity")
-                .font(.system(size: 15, weight: .bold))
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(.white)
+                .lineLimit(2)
                 .padding(.bottom, 12)
 
             EqualizerBars(tint: premiumBlue, animates: !reduceMotion)
@@ -475,13 +514,15 @@ struct HomeView: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(dashboard.networkSpeedText)
-                    .font(.system(size: 19, weight: .bold))
+                    .font(.headline.weight(.bold))
                     .foregroundStyle(premiumBlue)
                     .monospacedDigit()
                     .contentTransition(.numericText())
+                    .lineLimit(2)
                 Text("Current Speed")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(mutedText)
+                    .lineLimit(2)
             }
         }
         .padding(15)
@@ -492,8 +533,9 @@ struct HomeView: View {
     private var systemStatusCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("System Status")
-                .font(.system(size: 15, weight: .bold))
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(.white)
+                .lineLimit(2)
                 .padding(.bottom, 16)
 
             HStack(spacing: 9) {
@@ -501,17 +543,19 @@ struct HomeView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(dashboard.serverStatus == .online ? onlineGreen : mutedText)
                 Text(dashboard.systemStatusText)
-                    .font(.system(size: 14.5, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(3)
             }
             .padding(.bottom, 6)
 
             Text(dashboard.uptimeText)
-                .font(.system(size: 12.5, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(mutedText)
                 .padding(.leading, 27)
                 .contentTransition(.opacity)
+                .lineLimit(2)
 
             Spacer(minLength: 0)
         }
@@ -550,14 +594,14 @@ struct HomeView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Open Tailscale")
-                        .font(.system(size: 17, weight: .bold))
+                        .font(.headline.weight(.bold))
                         .foregroundStyle(Color.white)
-                        .lineLimit(1)
+                        .lineLimit(2)
 
                     Text("Private connection / VPN route")
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(mutedText)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
                 .layoutPriority(1)
 
@@ -603,6 +647,11 @@ struct HomeView: View {
                                     )
                                 }
                                 .buttonStyle(HomePressStyle())
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(entry.posterTitle)
+                                .accessibilityValue(
+                                    recentlyAddedAccessibilityValue(for: item, episodeCount: nil)
+                                )
 
                             case .series(let folder, let item):
                                 // Tapping opens the existing folder/episode
@@ -615,6 +664,14 @@ struct HomeView: View {
                                     )
                                 }
                                 .buttonStyle(HomePressStyle())
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(entry.posterTitle)
+                                .accessibilityValue(
+                                    recentlyAddedAccessibilityValue(
+                                        for: item,
+                                        episodeCount: folder.videos.count
+                                    )
+                                )
                             }
                         }
                     }
@@ -645,18 +702,17 @@ struct HomeView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .lineLimit(2)
 
                     if let episodeCount {
                         Text(episodeCount == 1 ? "1 ep" : "\(episodeCount) eps")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(Color.white.opacity(0.75))
                     } else if let year = item.yearText {
                         Text(year)
-                            .font(.system(size: 11.5, weight: .medium))
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(Color.white.opacity(0.75))
                             .monospacedDigit()
                     }
@@ -681,16 +737,24 @@ struct HomeView: View {
     private func sectionHeader(_ text: String, trailing: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(text)
-                .font(.system(size: 21, weight: .bold))
+                .font(.title3.weight(.bold))
                 .foregroundStyle(.white)
+                .lineLimit(2)
 
             Spacer(minLength: 8)
 
-            // Visual-only "see more" affordance (no list routing from Home).
-            Text(trailing)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(premiumBlue)
-                .accessibilityHidden(true)
+            Button {
+                selectedTab?.wrappedValue = .videos
+            } label: {
+                Text(trailing)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(premiumBlue)
+                    .padding(.leading, 8)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(trailing) videos")
         }
     }
 
@@ -749,6 +813,29 @@ struct HomeView: View {
         .frame(height: 4)
     }
 
+    private func continueWatchingAccessibilityLabel(for item: HomeMediaItem) -> String {
+        [item.title, item.subtitleText, "Watch progress"]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+    }
+
+    private func recentlyAddedAccessibilityValue(
+        for item: HomeMediaItem,
+        episodeCount: Int?
+    ) -> String {
+        var details: [String] = []
+        if let episodeCount {
+            details.append(episodeCount == 1 ? "1 episode" : "\(episodeCount) episodes")
+        } else if let year = item.yearText {
+            details.append(year)
+        }
+        let percent = Int((item.progressFraction * 100).rounded())
+        if percent > 0 {
+            details.append("\(percent) percent watched")
+        }
+        return details.isEmpty ? "Recently added" : details.joined(separator: ", ")
+    }
+
     // MARK: Status mapping (unchanged behavior)
 
     private var connectionDotColor: Color {
@@ -770,23 +857,36 @@ struct HomeView: View {
     /// file's `path`, the VLC resume key) so playback resumes at the backend
     /// `position_seconds`. Playback never uses the artwork/thumbnail.
     private func openMedia(_ item: HomeMediaItem) {
+        if let cachedVideos = completedVideosCache,
+           let matched = matchVideo(for: item, in: cachedVideos) {
+            seedResume(for: matched, item: item)
+            selectedVideo = matched
+            return
+        }
+
+        guard !isCardMatchInFlight else { return }
+        isCardMatchInFlight = true
+        let generation = refreshGeneration
+
         Task {
-            let matched = await matchCompletedFile(for: item)
+            let fetchedVideos = try? await CompletedFilesAPI.fetchVideos()
             await MainActor.run {
-                guard let matched else { return }
+                defer { isCardMatchInFlight = false }
+                guard !Task.isCancelled, generation == refreshGeneration else { return }
+                guard let fetchedVideos else {
+                    showMediaUnavailableAlert = true
+                    return
+                }
+
+                completedVideosCache = fetchedVideos
+                guard let matched = matchVideo(for: item, in: fetchedVideos) else {
+                    showMediaUnavailableAlert = true
+                    return
+                }
                 seedResume(for: matched, item: item)
                 selectedVideo = matched
             }
         }
-    }
-
-    /// Find the `CompletedFile` whose relative path matches the home item's
-    /// `relativePath` / `videoId`. Both the backend home item and `CompletedFile`
-    /// use the completed-files relative path as the stable identifier.
-    private func matchCompletedFile(for item: HomeMediaItem) async -> CompletedFile? {
-        guard let videos = try? await CompletedFilesAPI.fetchVideos() else { return nil }
-        let target = item.relativePath
-        return videos.first { normalizePath($0.path) == normalizePath(target) || normalizePath($0.name) == normalizePath(target) }
     }
 
     private func normalizePath(_ path: String) -> String {
@@ -840,7 +940,7 @@ struct HomeView: View {
         refreshGeneration += 1
     }
 
-    private func refreshDashboard() async {
+    private func refreshDashboard(forceLibraryReconciliation: Bool = false) async {
         let generation = await MainActor.run {
             refreshGeneration += 1
             dashboard.isRefreshing = true
@@ -861,6 +961,15 @@ struct HomeView: View {
         }
 
         guard let response = result?.response else { return }
+        let items = response.recentlyAdded ?? []
+        let recentlyAddedSet = recentlyAddedIdentitySet(for: items)
+        let shouldReconcileLibrary = await MainActor.run {
+            guard generation == refreshGeneration else { return false }
+            return forceLibraryReconciliation
+                || completedVideosCache == nil
+                || lastProcessedRecentlyAddedSet != recentlyAddedSet
+        }
+        guard shouldReconcileLibrary else { return }
 
         // Phase 2: resolve Recently Added grouping off the main actor: match
         // each item to its real CompletedFile and group by torrent folder (the
@@ -868,9 +977,25 @@ struct HomeView: View {
         // into one series entry; everything else stays an individual (movie)
         // card. Guarded by the same generation so a stale grouping can never
         // overwrite a newer refresh.
-        let entries = await makeRecentlyAddedEntries(from: response.recentlyAdded ?? [])
+        let fetchedVideos = try? await CompletedFilesAPI.fetchVideos()
+        let cachedVideos = await MainActor.run { completedVideosCache }
+        let videosForGrouping = fetchedVideos ?? cachedVideos
+        let entries: [RecentlyAddedEntry]
+        if let videosForGrouping {
+            entries = makeRecentlyAddedEntries(from: items, videos: videosForGrouping)
+        } else {
+            let movies = items.enumerated().map { index, item in
+                RecentlyAddedEntry(kind: .movie(item), sortDate: backendOrderDate(at: index))
+            }
+            entries = Array(movies.prefix(Self.recentlyAddedDisplayLimit))
+        }
+
         await MainActor.run {
             guard generation == refreshGeneration else { return }
+            if let fetchedVideos {
+                completedVideosCache = fetchedVideos
+                lastProcessedRecentlyAddedSet = recentlyAddedSet
+            }
             dashboard.recentlyAddedEntries = entries
         }
     }
@@ -878,6 +1003,7 @@ struct HomeView: View {
     // MARK: Cache-first launch
 
     private static let dashboardCacheKey = "homeDashboardCacheV1"
+    private static let dashboardCacheTimestampKey = "homeDashboardCacheTimestampV1"
 
     /// Render the last-good dashboard snapshot immediately on a cold launch,
     /// before any network round-trip. Connection status and latency always come
@@ -889,8 +1015,9 @@ struct HomeView: View {
               let cached = try? JSONDecoder().decode(HomeDashboardResponse.self, from: data)
         else { return }
 
+        let cachedAt = UserDefaults.standard.object(forKey: Self.dashboardCacheTimestampKey) as? Date
         var state = makeState(
-            from: DashboardFetch(response: cached, latencyMs: 0),
+            from: DashboardFetch(response: cached, latencyMs: 0, fetchedAt: cachedAt),
             recentlyAddedEntries: (cached.recentlyAdded ?? [])
                 .prefix(Self.recentlyAddedDisplayLimit)
                 .enumerated()
@@ -899,19 +1026,19 @@ struct HomeView: View {
         state.serverStatus = .loading
         state.latencyMs = nil
         state.isRefreshing = true
+        state.isShowingCachedData = true
         dashboard = state
     }
 
-    /// Build the view state from a fetch outcome, preserving the existing
-    /// online/offline semantics: a failed fetch is "offline" with cleared
-    /// counts, a success is "online" with whatever fields decoded.
+    /// Build the view state from a fetch outcome. A failed fetch marks the
+    /// retained dashboard offline; a successful response replaces its data.
     private func makeState(from result: DashboardFetch?, recentlyAddedEntries: [RecentlyAddedEntry]) -> HomeDashboardState {
         guard let result else {
             var cached = dashboard
             cached.serverStatus = .offline
-            cached.lastUpdated = Date()
             cached.isRefreshing = false
             cached.isReconnecting = false
+            cached.isShowingCachedData = cached.lastUpdated != nil
             cached.hasLoaded = true
             return cached
         }
@@ -930,9 +1057,10 @@ struct HomeView: View {
             continueWatching: response.continueWatching,
             recentlyAdded: response.recentlyAdded ?? [],
             recentlyAddedEntries: recentlyAddedEntries,
-            lastUpdated: Date(),
+            lastUpdated: result.fetchedAt,
             isRefreshing: false,
             isReconnecting: false,
+            isShowingCachedData: false,
             hasLoaded: true
         )
     }
@@ -948,19 +1076,11 @@ struct HomeView: View {
     /// positioned by their newest member episode's timestamp; the original
     /// Recently Added order (already newest-first from the backend) is otherwise
     /// preserved, and each series appears once.
-    private func makeRecentlyAddedEntries(from items: [HomeMediaItem]) async -> [RecentlyAddedEntry] {
+    private func makeRecentlyAddedEntries(
+        from items: [HomeMediaItem],
+        videos: [CompletedFile]
+    ) -> [RecentlyAddedEntry] {
         guard !items.isEmpty else { return [] }
-
-        // Full library, grouped exactly like the Videos tab. If it can't be
-        // fetched, fall back to one movie card per item in the backend's order
-        // (newest-first), preserving prior behavior so the strip still renders
-        // and still opens the player.
-        guard let videos = try? await CompletedFilesAPI.fetchVideos() else {
-            let movies = items.enumerated().map { index, item in
-                RecentlyAddedEntry(kind: .movie(item), sortDate: backendOrderDate(at: index))
-            }
-            return Array(movies.prefix(Self.recentlyAddedDisplayLimit))
-        }
 
         let grouped = VideoGrouping.group(videos)
         // Folder name (series key) → its complete VideoFolder.
@@ -1005,11 +1125,19 @@ struct HomeView: View {
         Date(timeIntervalSinceReferenceDate: -Double(index))
     }
 
-    /// Synchronous CompletedFile match against an already-fetched list, mirroring
-    /// `matchCompletedFile`'s path/name identity (used for grouping only).
+    /// Synchronous CompletedFile match against an already-fetched list.
     private func matchVideo(for item: HomeMediaItem, in videos: [CompletedFile]) -> CompletedFile? {
         let target = item.relativePath
         return videos.first { normalizePath($0.path) == normalizePath(target) || normalizePath($0.name) == normalizePath(target) }
+    }
+
+    private func recentlyAddedIdentitySet(for items: [HomeMediaItem]) -> Set<String> {
+        Set(items.flatMap { item in
+            [
+                "id:\(item.videoId)",
+                "path:\(normalizePath(item.relativePath))"
+            ]
+        })
     }
 
     /// One aggregated request. Measures the round-trip time client-side for the
@@ -1027,10 +1155,16 @@ struct HomeView: View {
                 return nil
             }
             let decoded = try JSONDecoder().decode(HomeDashboardResponse.self, from: data)
+            let fetchedAt = Date()
             // Persist the raw (small, secret-free) payload as the last-good
             // snapshot for instant cold-launch rendering.
             UserDefaults.standard.set(data, forKey: Self.dashboardCacheKey)
-            return DashboardFetch(response: decoded, latencyMs: Int(elapsedNs / 1_000_000))
+            UserDefaults.standard.set(fetchedAt, forKey: Self.dashboardCacheTimestampKey)
+            return DashboardFetch(
+                response: decoded,
+                latencyMs: Int(elapsedNs / 1_000_000),
+                fetchedAt: fetchedAt
+            )
         } catch {
             return nil
         }
@@ -1041,6 +1175,7 @@ struct HomeView: View {
 private struct DashboardFetch {
     let response: HomeDashboardResponse
     let latencyMs: Int
+    let fetchedAt: Date?
 }
 
 // MARK: - Backend response models (GET /api/home-dashboard)
@@ -1172,6 +1307,16 @@ private struct HomeMediaItem: Decodable, Identifiable, Hashable {
         return percent > 0 ? "\(percent)% watched" : "Resume watching"
     }
 
+    var watchProgressAccessibilityValue: String {
+        let percent = Int((progressFraction * 100).rounded())
+        guard durationSeconds > 0,
+              positionSeconds >= 0,
+              positionSeconds <= durationSeconds else {
+            return percent > 0 ? "\(percent) percent" : "Resume watching"
+        }
+        return "\(percent) percent. \(Self.clockText(positionSeconds)) elapsed. \(remainingText)"
+    }
+
     private static func clockText(_ seconds: Int) -> String {
         let h = seconds / 3600
         let m = (seconds % 3600) / 60
@@ -1297,6 +1442,7 @@ private struct HomeDashboardState {
     var lastUpdated: Date?
     var isRefreshing = false
     var isReconnecting = false
+    var isShowingCachedData = false
     var hasLoaded = false
 
     var greetingText: String {
