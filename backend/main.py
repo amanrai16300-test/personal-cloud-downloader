@@ -34,6 +34,7 @@ from settings import settings
 app = FastAPI(title="Personal Cloud Downloader")
 qb = QBittorrentClient()
 monitor_task: asyncio.Task[None] | None = None
+markdown_conversion_tasks: set[asyncio.Task[Any]] = set()
 
 app.add_middleware(
     CORSMiddleware,
@@ -148,6 +149,7 @@ MARKDOWN_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MARKDOWN_ALLOWED_EXTENSIONS = MARKDOWN_ALLOWED_EXTENSIONS | MARKDOWN_IMAGE_EXTENSIONS
 MARKDOWN_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MARKDOWN_CONVERSION_TIMEOUT_SECONDS = 60
+MARKDOWN_TEMP_PREFIX = "cloudbox-markdown-"
 MARKDOWN_URL_MAX_BYTES = 5 * 1024 * 1024
 MARKDOWN_URL_TIMEOUT_SECONDS = 10
 MARKDOWN_URL_MAX_REDIRECTS = 5
@@ -682,15 +684,20 @@ def strip_unbalanced_punctuation(title: str) -> str:
 
 @app.post("/api/convert-markdown")
 async def convert_markdown(file: UploadFile = File(...)) -> dict[str, str]:
-    filename = Path(file.filename or "").name
-    extension = Path(filename).suffix.lower()
-    if extension not in MARKDOWN_ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Unsupported file type.")
-
     temp_path: Path | None = None
+    worker_owns_temp_path = False
     size = 0
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as temp_file:
+        filename = Path(file.filename or "").name
+        extension = Path(filename).suffix.lower()
+        if extension not in MARKDOWN_ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail="Unsupported file type.")
+
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            prefix=MARKDOWN_TEMP_PREFIX,
+            suffix=extension,
+        ) as temp_file:
             temp_path = Path(temp_file.name)
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
@@ -698,15 +705,22 @@ async def convert_markdown(file: UploadFile = File(...)) -> dict[str, str]:
                     raise HTTPException(status_code=413, detail="File is too large.")
                 temp_file.write(chunk)
 
-        converter = convert_local_image_to_markdown if extension in MARKDOWN_IMAGE_EXTENSIONS else convert_local_markdown_file
+        if size == 0:
+            raise HTTPException(status_code=422, detail="Markdown conversion produced no content.")
+
+        conversion_task = asyncio.create_task(
+            asyncio.to_thread(convert_local_upload_to_markdown, temp_path, extension)
+        )
+        retain_markdown_conversion_task(conversion_task)
+        worker_owns_temp_path = True
         markdown = await asyncio.wait_for(
-            asyncio.to_thread(converter, temp_path),
+            asyncio.shield(conversion_task),
             timeout=MARKDOWN_CONVERSION_TIMEOUT_SECONDS,
         )
         return {
             "filename": filename,
             "extension": extension,
-            "markdown": clean_markdown_output(markdown),
+            "markdown": validate_local_markdown_output(markdown),
             "conversion_mode": "local",
         }
     except asyncio.TimeoutError as exc:
@@ -716,10 +730,10 @@ async def convert_markdown(file: UploadFile = File(...)) -> dict[str, str]:
     except Exception as exc:
         raise HTTPException(status_code=422, detail="Markdown conversion failed.") from exc
     finally:
-        await file.close()
-        if temp_path is not None:
-            with suppress(OSError):
-                temp_path.unlink(missing_ok=True)
+        if temp_path is not None and not worker_owns_temp_path:
+            remove_markdown_temp_file(temp_path)
+        with suppress(Exception):
+            file.file.close()
 
 
 @app.post("/api/convert-markdown-url")
@@ -747,12 +761,52 @@ async def convert_markdown_url(payload: ConvertMarkdownURLRequest) -> dict[str, 
         raise HTTPException(status_code=422, detail="URL Markdown conversion failed.") from exc
 
 
-def convert_local_markdown_file(path: Path) -> str:
+def convert_local_upload_to_markdown(path: Path, extension: str) -> Any:
+    try:
+        converter = convert_local_image_to_markdown if extension in MARKDOWN_IMAGE_EXTENSIONS else convert_local_markdown_file
+        return converter(path)
+    finally:
+        remove_markdown_temp_file(path)
+
+
+def retain_markdown_conversion_task(task: asyncio.Task[Any]) -> None:
+    markdown_conversion_tasks.add(task)
+
+    def finish(completed_task: asyncio.Task[Any]) -> None:
+        markdown_conversion_tasks.discard(completed_task)
+        if not completed_task.cancelled():
+            with suppress(Exception):
+                completed_task.result()
+
+    task.add_done_callback(finish)
+
+
+def remove_markdown_temp_file(path: Path) -> None:
+    try:
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        resolved_path = path.resolve()
+        if resolved_path.parent != temp_root or not resolved_path.name.startswith(MARKDOWN_TEMP_PREFIX):
+            return
+        resolved_path.unlink(missing_ok=True)
+    except (OSError, RuntimeError):
+        return
+
+
+def validate_local_markdown_output(markdown: Any) -> str:
+    if not isinstance(markdown, str):
+        raise HTTPException(status_code=422, detail="Markdown conversion produced no content.")
+    cleaned = clean_markdown_output(markdown)
+    if not cleaned.strip():
+        raise HTTPException(status_code=422, detail="Markdown conversion produced no content.")
+    return cleaned
+
+
+def convert_local_markdown_file(path: Path) -> Any:
     result = MarkItDown(enable_plugins=False).convert_local(path)
     markdown = getattr(result, "text_content", None)
     if markdown is None:
-        markdown = getattr(result, "markdown", "")
-    return str(markdown)
+        markdown = getattr(result, "markdown", None)
+    return markdown
 
 
 def normalize_public_url(raw_url: str) -> str:

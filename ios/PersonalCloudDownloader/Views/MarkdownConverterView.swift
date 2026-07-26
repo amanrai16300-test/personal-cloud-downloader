@@ -259,12 +259,14 @@ struct MarkdownConverterView: View {
                 Label("Converting...", systemImage: "sparkles")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(premiumBlue)
+                    .accessibilityLabel("Status: Converting")
             }
 
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color(red: 1.0, green: 0.62, blue: 0.26))
+                    .accessibilityLabel("Error: \(errorMessage)")
             }
 
             if let emptyResultMessage {
@@ -414,6 +416,14 @@ struct MarkdownConverterView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
+    private func showFileConversionError(_ message: String) {
+        guard errorMessage != message else { return }
+        errorMessage = message
+        if UIAccessibility.isVoiceOverRunning {
+            UIAccessibility.post(notification: .announcement, argument: "Error: \(message)")
+        }
+    }
+
     private func convertSelectedFile(
         file retryFile: PickedDocument? = nil,
         snapshot retrySource: MarkdownRetrySnapshot? = nil
@@ -439,15 +449,12 @@ struct MarkdownConverterView: View {
             guard generation == conversionGeneration else { return }
             markdown = response.markdown
             convertedURL = nil
-            if !hasMarkdown {
-                emptyResultMessage = "Conversion finished, but no Markdown text was extracted from this file. This can happen with scanned PDFs or PDFs with broken text encoding."
-            }
         } catch let error as MarkdownConverterAPIError {
             guard generation == conversionGeneration else { return }
-            errorMessage = error.friendlyMessage
+            showFileConversionError(error.friendlyMessage)
         } catch {
             guard generation == conversionGeneration else { return }
-            errorMessage = "Could not reach CloudBox. Check Tailscale and try again."
+            showFileConversionError("Could not reach CloudBox. Check Tailscale and try again.")
         }
     }
 
@@ -559,10 +566,10 @@ struct MarkdownConverterView: View {
             convertedURL = nil
         } catch let error as MarkdownConverterAPIError {
             guard generation == conversionGeneration else { return }
-            errorMessage = error.friendlyMessage
+            showFileConversionError(error.friendlyMessage)
         } catch {
             guard generation == conversionGeneration else { return }
-            errorMessage = MarkdownConverterAPIError.photoLoadFailed.friendlyMessage
+            showFileConversionError(MarkdownConverterAPIError.photoLoadFailed.friendlyMessage)
         }
     }
 }
@@ -940,7 +947,13 @@ private enum MarkdownConverterAPI {
 
         switch http.statusCode {
         case 200...299:
-            return try JSONDecoder().decode(MarkdownConversionResponse.self, from: data)
+            guard
+                let decoded = try? JSONDecoder().decode(MarkdownConversionResponse.self, from: data),
+                !decoded.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                throw MarkdownConverterAPIError.conversionFailed
+            }
+            return decoded
         case 400:
             throw MarkdownConverterAPIError.unsupportedFile
         case 413:
