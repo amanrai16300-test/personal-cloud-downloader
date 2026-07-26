@@ -9,7 +9,7 @@ import SwiftUI
 ///
 /// Data layer (unchanged): one aggregated `GET /api/home-dashboard` request
 /// feeds server, library, downloads, network, Continue Watching, and Recently
-/// Added. Request round-trip time is measured client-side for the latency
+/// Added. Request round-trip time is measured client-side for the request-time
 /// readout. Media taps reuse the existing VideosView → PlayerView flow: the
 /// home item is matched to the real `CompletedFile` (for the correct stream URL
 /// + AVPlayer/VLC routing) and its saved-resume position is seeded before
@@ -216,7 +216,7 @@ struct HomeView: View {
                 (
                     Text(dashboard.latencyValueText)
                         .foregroundColor(onlineGreen)
-                    + Text(" latency")
+                    + Text(dashboard.latencyDescriptionText)
                         .foregroundColor(mutedText)
                 )
                 .font(.subheadline.weight(.medium))
@@ -1037,7 +1037,6 @@ struct HomeView: View {
             var cached = dashboard
             cached.serverStatus = .offline
             cached.isRefreshing = false
-            cached.isReconnecting = false
             cached.isShowingCachedData = cached.lastUpdated != nil
             cached.hasLoaded = true
             return cached
@@ -1059,7 +1058,6 @@ struct HomeView: View {
             recentlyAddedEntries: recentlyAddedEntries,
             lastUpdated: result.fetchedAt,
             isRefreshing: false,
-            isReconnecting: false,
             isShowingCachedData: false,
             hasLoaded: true
         )
@@ -1141,7 +1139,7 @@ struct HomeView: View {
     }
 
     /// One aggregated request. Measures the round-trip time client-side for the
-    /// latency readout (the backend deliberately does not compute latency).
+    /// request-time readout (the backend deliberately does not compute it).
     private func fetchDashboard() async -> DashboardFetch? {
         guard let url = URL(string: "\(backendBaseURL)/api/home-dashboard") else { return nil }
 
@@ -1441,7 +1439,6 @@ private struct HomeDashboardState {
     var recentlyAddedEntries: [RecentlyAddedEntry] = []
     var lastUpdated: Date?
     var isRefreshing = false
-    var isReconnecting = false
     var isShowingCachedData = false
     var hasLoaded = false
 
@@ -1458,7 +1455,6 @@ private struct HomeDashboardState {
     }
 
     var connectionLabel: String {
-        if isReconnecting { return "RECONNECTING" }
         if isCheckingUnknownServer { return "CHECKING" }
         switch serverStatus {
         case .loading: return "CHECKING"
@@ -1509,9 +1505,13 @@ private struct HomeDashboardState {
     }
 
     var latencyValueText: String {
-        if isReconnecting || isRefreshing { return "— ms" }
-        guard let latencyMs else { return "— ms" }
+        if !hasLoaded || isRefreshing { return latencyMs == nil ? "Measuring" : "Updating" }
+        guard let latencyMs else { return "Request time" }
         return "\(latencyMs) ms"
+    }
+
+    var latencyDescriptionText: String {
+        latencyMs == nil && hasLoaded && !isRefreshing ? " unavailable" : " request time"
     }
 
     var systemStatusText: String {
@@ -1530,12 +1530,11 @@ private struct HomeDashboardState {
     }
 
     var serverStatusText: String {
-        if isReconnecting { return "Reconnecting" }
         return isCheckingUnknownServer ? "Checking" : serverStatus.label
     }
 
     var isCheckingUnknownServer: Bool {
-        (isRefreshing || isReconnecting) && serverStatus != .online
+        isRefreshing && serverStatus != .online
     }
 
     // MARK: Formatting helpers
