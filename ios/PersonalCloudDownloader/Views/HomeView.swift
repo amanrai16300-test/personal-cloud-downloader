@@ -140,7 +140,7 @@ struct HomeView: View {
                 }
             }
             .onChange(of: reconnectRefreshToken) { _ in
-                startRefreshLoop()
+                startRefreshLoop(force: true)
             }
             .alert(
                 "Video unavailable",
@@ -910,12 +910,13 @@ struct HomeView: View {
 
     // MARK: Refresh loop
 
-    private func startRefreshLoop() {
+    private func startRefreshLoop(force: Bool = false) {
         // Dedupe: onAppear, foreground reconnect, and the reconnect token can
         // all fire within moments of each other. If a loop is already running
         // and its refresh started seconds ago, keep it instead of restarting
         // the whole fetch chain.
-        if refreshTask != nil,
+        if !force,
+           refreshTask != nil,
            let last = lastRefreshStart,
            Date().timeIntervalSince(last) < 3 {
             return
