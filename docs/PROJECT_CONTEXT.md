@@ -131,6 +131,21 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - Deployment lesson: run PowerShell `scp` commands from Windows PowerShell, not inside the Oracle Bash shell. Use a unique `/tmp/` filename and verify its checksum and content before copying over the live backend.
 - A stale `/tmp/main.py` was copied once and caused a temporary crash loop from an unrelated `psycopg` import. The known-good backup was restored immediately, endpoints recovered, and the correct verified guard file was then deployed. This incident is resolved.
 
+### Storage monitoring
+
+- `backend/main.py` validates that `/srv/personal-cloud` is an actual mount or bind mount before reporting it as CloudBox storage.
+- An existing but unmounted CloudBox directory can no longer inherit Oracle root-disk totals.
+- Mount detection uses `/proc/self/mountinfo` with filesystem identity and performs a second identity check after reading usage to guard against mount-change races.
+- CloudBox data storage and Oracle root storage are reported separately.
+- Existing `library.storage_used_bytes` and `library.storage_total_bytes` remain CloudBox-only and backward compatible.
+- `root_disk` is an optional additive response containing safe status and usage fields.
+- When both targets share one filesystem, the API returns `shared_with_cloudbox` without duplicating totals.
+- Missing, inaccessible, or changed storage returns safe unavailable/error states without exposing paths, raw exceptions, or internal details.
+- Uploaded backend SHA-256: `ba0750cfab5e2018fd69c49e4829f05d47a2644c1028666031dd9a51008fdb02`.
+- Python AST and `py_compile` checks passed. `personal-downloader-api.service` restarted and remained active, and Uvicorn completed startup successfully.
+- `/srv/personal-cloud` was verified as `/dev/sdb`, ext4, and a real mount. `GET /api/home-dashboard` returned storage service available, separate CloudBox storage totals, `root_disk.status: ok`, and `same_filesystem_as_cloudbox: false`.
+- No rollback was required.
+
 ## 6. Current iOS app and reconnect architecture
 
 - App: CloudBox, in `ios/PersonalCloudDownloader/`.
@@ -167,7 +182,7 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - Network refresh cancellation, re-entry, reconnect, and loading-state handling are fixed.
 - Fractional ISO timestamps decode correctly; storage labels are accurate; daily rows have stable enumerated identity.
 - Network telemetry supports Dynamic Type and VoiceOver grouping.
-- Backend currently reports CloudBox storage; separate boot/root-disk presentation is optional future work.
+- Backend and the Home dashboard now distinguish CloudBox data storage from Oracle root storage.
 - Failed WebViews expose a real Retry action that reloads the same persistent `WKWebView` and website data store.
 - qBittorrent session login may still be lost after a full app restart.
 
@@ -185,9 +200,24 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - The UI reconciles with fresh server data instead of optimistically clearing all completed files.
 - The completed-file delete-modal accessibility fix is implemented in `frontend/app.js`. Cancel receives initial focus; Tab and Shift+Tab remain trapped inside the open modal; Escape closes without deleting; and focus returns to the original Delete button when it still exists.
 - The modal retains `role="dialog"`, its accessible name and description, and `aria-modal="true"`. Temporary keyboard listeners are removed on close, and repeated opens do not create duplicate listeners.
-- Existing appearance, wording, exact-path delete API behavior, full/partial/failure handling, completed-files refresh and polling, and torrent deletion remain unchanged.
+- The focus-preserving rerender fix is implemented in `frontend/app.js`. Polling and refreshes previously replaced the entire torrent and completed-file containers with `innerHTML`, destroying focused controls and causing unnecessary accessibility-tree churn.
+- Torrent and completed-file rows now use keyed DOM reconciliation. Unchanged rows remain mounted, while new, changed, removed, and reordered rows still update normally.
+- Focus is preserved using the stable row key and control position. Completed-file delete-modal opener references are remapped when their row changes, preserving existing modal focus restoration.
+- Unchanged empty states and rows are not repeatedly rewritten, reducing unnecessary screen-reader announcements.
+- Polling intervals, generation guards, API behavior, ordering, design, error handling, modal behavior, and Trends remain unchanged.
 - Static verification passed: `node --check frontend/app.js` and `git diff --check`.
-- This updated `app.js` has not yet been deployed or browser-verified in production.
+- The updated frontend was committed, pushed, deployed to Oracle, and browser-verified.
+
+### Web Trends refresh and staleness
+
+- The fix is implemented in `frontend/app.js`. `trendsState.loaded` previously prevented later `/api/trends` requests, manual Refresh did not refresh Trends, and refresh/error rendering replaced valid cached content.
+- Trends data becomes refresh-due after 5 minutes. Opening Trends refreshes only when due; manual Refresh forces a Trends refresh while the Trends view is visible.
+- Overlapping Trends requests are prevented, at most one forced follow-up is queued, and older request responses cannot overwrite newer state.
+- Stale data is shown only when the API returns `stale: true` or `updated_at` is at least 24 hours old. Missing or malformed `updated_at` does not falsely mark data stale.
+- Last valid Trends cards remain visible when a background refresh fails. Unchanged Trends responses do not rebuild the cards.
+- Existing design, wording, sorting, cards, endpoint, Downloader behavior, polling, modal, and focus reconciliation remain unchanged.
+- Static verification passed: `node --check frontend/app.js` and `git diff --check -- frontend/app.js`.
+- The change was committed, pushed, deployed to Oracle, checksum/live-file verified, and browser-verified.
 
 ### Oracle production verification
 
@@ -198,7 +228,7 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - Completed-file Delete controls appeared.
 - No important media was deleted during deployment verification.
 
-Remaining web follow-ups are lower priority: production browser verification of delete-modal keyboard/focus accessibility, reducing full `innerHTML` rerender focus/screen-reader churn, and Web Trends refresh/staleness behavior.
+Remaining web follow-ups are lower priority: production browser verification of delete-modal keyboard/focus accessibility.
 
 ## 8. Current Home dashboard and TMDB artwork
 
@@ -210,8 +240,17 @@ Remaining web follow-ups are lower priority: production browser verification of 
 - Last successful Home refresh time is persisted; stale-data age can be shown after temporary backend loss.
 - Cache-first launch, generation guards, reconnect refresh, and the fixed-width Continue Watching artwork layout remain in place.
 - The Continue Watching artwork width fix is included in the successfully built and installed consolidated IPA; it is no longer an unbuilt or inspection-only change.
-- Displayed Home latency is request/response round-trip time including backend work; precise network-only latency wording is a possible cleanup.
-- Dead/unused reconnect-state cleanup is low priority if still applicable.
+- The request-time wording cleanup is implemented in `ios/PersonalCloudDownloader/Views/HomeView.swift`. The foreground reconnect mode had already been removed, but remaining request timing text incorrectly described the dashboard round-trip as “latency.”
+- Initial load now shows “Measuring request time,” refresh with an existing value shows “Updating request time,” failure shows “Request time unavailable,” and successful requests continue showing the measured milliseconds.
+- Dead foreground-reconnect state and unreachable reconnect wording were removed. `reconnectCycle` and `reconnectRefreshToken` remain unchanged as valid refresh triggers.
+- Home layout, cards, navigation, cache flow, refresh loop, API request, and reconnect-triggered refreshes remain unchanged.
+- Static verification passed: `git diff --check` and the obsolete-symbol scan.
+- The change was committed as `0eccea6` and pushed to `origin/fix/cloudbox-audit-reliability`.
+- `ios/PersonalCloudDownloader/Views/HomeView.swift` optionally decodes `root_disk` and the storage service status.
+- The existing storage column distinguishes separate CloudBox and Oracle filesystems, a shared filesystem, CloudBox unavailable, Oracle root unavailable, and legacy cached responses without the new fields.
+- New response fields are optional, so older cached dashboard JSON still decodes.
+- Existing layout, cards, navigation, cache, refresh, reconnect, media actions, and API compatibility remain unchanged.
+- `git diff --check` passed.
 
 TMDB artwork remains server-side metadata enrichment. Missing keys, network failures, non-200 responses, parse failures, and no matches return safely without failing the dashboard; the key is never returned to iOS.
 
@@ -222,8 +261,22 @@ TMDB artwork remains server-side metadata enrichment. Missing keys, network fail
 - Conversion requests use generation guards; Clear invalidates stale work; duplicate submissions are blocked.
 - Retry stores an immutable snapshot of the previous URL/document/photo input.
 - Backend URL conversion uses the connected-peer SSRF validation described in Section 5.
+- Failure-path hardening is implemented in `backend/main.py` and `ios/PersonalCloudDownloader/Views/MarkdownConverterView.swift`. Validation and cancellation paths could previously bypass temporary-file cleanup, timed-out workers could race endpoint cleanup, blank or malformed output could be treated as success, and iOS malformed responses appeared as generic network failures and could erase a valid preview.
+- Converter uploads now use guarded `cloudbox-markdown-` temporary files. Pre-worker failures clean up synchronously; after launch, the worker owns cleanup on success, conversion failure, timeout, cancellation, or exception.
+- Cleanup is restricted to the system temporary directory and converter-prefixed files. It cannot remove files outside that location or without the prefix.
+- Empty uploads and blank, malformed, or non-string conversion results return safe `422` responses. Internal paths, tracebacks, secrets, and raw exceptions are not exposed.
+- iOS maps malformed or empty successful responses to one safe conversion error before changing the preview. Failed retries preserve the last valid preview, and stale requests cannot update state or announce errors.
+- VoiceOver announces the current file-conversion error once without changing focus or opening the keyboard.
+- Valid document conversion, image OCR, URL conversion, limits, formatting, preview layout, and existing actions remain unchanged.
+- Backend AST/compile checks and `git diff --check` passed. The changes were committed and pushed.
 
-Lower-priority follow-ups: copied temporary-document cleanup, malformed-success-response messaging, brittle substring-based backend error mapping, remaining Markdown Dynamic Type/accessibility polish, and background completion of a request after leaving the screen.
+### Production and device verification
+
+- `personal-downloader-api.service` was active and `/api/health` returned `200`.
+- A valid text conversion returned `200` with Markdown; an empty upload returned a safe `422`; no `cloudbox-markdown-*` temporary files leaked.
+- A new IPA was built, installed, and device-verified. Valid file/photo conversion worked, a failed retry preserved the preview, VoiceOver announced the error once, focus remained stable, and existing actions were unchanged.
+
+Lower-priority follow-ups: brittle substring-based backend error mapping, remaining Markdown Dynamic Type polish, and background completion of a request after leaving the screen.
 
 ## 10. Current Player and progress status
 
@@ -233,6 +286,9 @@ Lower-priority follow-ups: copied temporary-document cleanup, malformed-success-
 - Pending/in-flight synchronization retains only the newest snapshot.
 - Backend failure does not block playback or dismissal.
 - Completion threshold is 90%; completed progress cannot be resurrected by a stale lower update.
+- The compiler-warning cleanup is implemented in `ios/PersonalCloudDownloader/Views/PlayerView.swift`. Two `VLCTime.stringValue` expressions used `?? "--:--"` even though `stringValue` returns a non-optional `String`, causing unreachable nil-coalescing warnings.
+- Only the two redundant fallbacks in `VLCFullscreenView.scrubTimeLabels` were removed. Playback, fullscreen controls, subtitles, audio, progress saving, resume, locking, gestures, menus, alerts, navigation, and UI remain unchanged.
+- `git diff --check` passed. The change was committed as `73d90fd` and pushed to `origin/fix/cloudbox-audit-reliability`.
 
 ### AVPlayer parity
 
@@ -326,7 +382,9 @@ Authoritative branch:
 ## 15. Final status
 
 - Oracle backend, web frontend, and Trends script are deployed and production-verified.
+- Backend storage separation is deployed and production-verified.
 - The consolidated IPA from `fix/cloudbox-audit-reliability` built successfully, was installed, and is working.
+- The latest Home presentation remains pending a new IPA build/install and iPhone verification.
 - Backend, Downloader, Home, Videos, folders, Player, Network, Trends, Markdown Converter, qBittorrent WebView, Files WebView, TMDB artwork, subtitles, AVPlayer/VLC progress, and reconnect infrastructure are operational.
 - Everything remains private through Tailscale.
 - 10GB is guidance only; legal-files-only, Tailscale-private, and quick-delete rules remain mandatory.
@@ -344,12 +402,7 @@ Authoritative branch:
 ### Lower-priority code cleanup
 
 - Production browser verification of Web delete-modal keyboard/focus accessibility.
-- Web full-rerender accessibility/focus churn.
-- Web Trends refresh/staleness.
-- Home latency wording and dead reconnect-state cleanup.
-- Markdown temporary-file and malformed-response cleanup.
-- Remaining player text/warning cleanup.
-- Root-disk monitoring in addition to CloudBox data-disk monitoring.
+- Remaining player text cleanup.
 
 ### Optional features
 
@@ -360,6 +413,7 @@ Authoritative branch:
 - Paste-image OCR.
 - Monthly egress budget.
 - Videos search, sort, unwatched, and Up Next.
-- Separate root-disk and data-disk presentation.
+
+- Build and install a new IPA and verify Home shows separate CloudBox and Oracle root totals, preserves legacy cached-response loading, and leaves other Home behavior unchanged.
 
 Do not re-add hard 10GB enforcement as an optional feature.
