@@ -1422,8 +1422,8 @@ private struct VLCFullscreenView: View {
     private var scrubTimeLabels: (current: String, remaining: String)? {
         guard let lengthMs = fsVlc.player.media?.length.intValue, lengthMs > 0 else { return nil }
         let targetMs = Int32((Double(lengthMs) * min(max(fsVlc.progress, 0), 1)).rounded())
-        let current = VLCTime(int: targetMs).stringValue ?? "--:--"
-        let remaining = VLCTime(int: max(0, lengthMs - targetMs)).stringValue ?? "--:--"
+        let current = VLCTime(int: targetMs).stringValue
+        let remaining = VLCTime(int: max(0, lengthMs - targetMs)).stringValue
         return (current, "-\(remaining)")
     }
 
