@@ -433,7 +433,7 @@ struct HomeView: View {
                 value: dashboard.storageUsedValue,
                 unit: dashboard.storageUsedUnit,
                 title: dashboard.storageTotalText,
-                detail: "Storage used"
+                detail: dashboard.rootDiskText
             )
         }
         .padding(.vertical, 16)
@@ -1051,6 +1051,11 @@ struct HomeView: View {
             indexedFileCount: response.library?.fileCount,
             storageUsedBytes: response.library?.storageUsedBytes,
             storageTotalBytes: response.library?.storageTotalBytes,
+            cloudBoxStorageAvailable: response.server?.services?.storage,
+            rootDiskStatus: response.rootDisk?.status,
+            rootDiskSharesCloudBox: response.rootDisk?.sameFilesystemAsCloudBox,
+            rootDiskUsedBytes: response.rootDisk?.usedBytes,
+            rootDiskTotalBytes: response.rootDisk?.totalBytes,
             networkBytesPerSecond: response.network?.totalBytesPerSecond,
             latencyMs: result.latencyMs,
             continueWatching: response.continueWatching,
@@ -1186,11 +1191,13 @@ private struct HomeDashboardResponse: Decodable {
     let library: LibraryInfo?
     let downloads: DownloadsInfo?
     let network: NetworkInfo?
+    let rootDisk: RootDiskInfo?
     let continueWatching: HomeMediaItem?
     let recentlyAdded: [HomeMediaItem]?
 
     enum CodingKeys: String, CodingKey {
         case server, library, downloads, network
+        case rootDisk = "root_disk"
         case continueWatching = "continue_watching"
         case recentlyAdded = "recently_added"
     }
@@ -1199,10 +1206,15 @@ private struct HomeDashboardResponse: Decodable {
         let online: Bool?
         let location: String?
         let uptimeSeconds: Int?
+        let services: ServicesInfo?
 
         enum CodingKeys: String, CodingKey {
-            case online, location
+            case online, location, services
             case uptimeSeconds = "uptime_seconds"
+        }
+
+        struct ServicesInfo: Decodable {
+            let storage: Bool?
         }
     }
 
@@ -1241,6 +1253,20 @@ private struct HomeDashboardResponse: Decodable {
         var totalBytesPerSecond: Int? {
             guard rxBytesPerSecond != nil || txBytesPerSecond != nil else { return nil }
             return (rxBytesPerSecond ?? 0) + (txBytesPerSecond ?? 0)
+        }
+    }
+
+    struct RootDiskInfo: Decodable {
+        let status: String?
+        let sameFilesystemAsCloudBox: Bool?
+        let usedBytes: Int?
+        let totalBytes: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case status
+            case sameFilesystemAsCloudBox = "same_filesystem_as_cloudbox"
+            case usedBytes = "used_bytes"
+            case totalBytes = "total_bytes"
         }
     }
 }
@@ -1432,6 +1458,11 @@ private struct HomeDashboardState {
     var indexedFileCount: Int?
     var storageUsedBytes: Int?
     var storageTotalBytes: Int?
+    var cloudBoxStorageAvailable: Bool?
+    var rootDiskStatus: String?
+    var rootDiskSharesCloudBox: Bool?
+    var rootDiskUsedBytes: Int?
+    var rootDiskTotalBytes: Int?
     var networkBytesPerSecond: Int?
     var latencyMs: Int?
     var continueWatching: HomeMediaItem?
@@ -1485,18 +1516,36 @@ private struct HomeDashboardState {
     /// Numeric portion of the storage-used readout (e.g. "82"). The unit is shown
     /// separately so it can be set in a smaller weight, matching the reference.
     var storageUsedValue: String {
+        guard cloudBoxStorageAvailable != false else { return "—" }
         guard let storageUsedBytes else { return "—" }
         return Self.byteValue(storageUsedBytes)
     }
 
     var storageUsedUnit: String? {
+        guard cloudBoxStorageAvailable != false else { return nil }
         guard let storageUsedBytes else { return nil }
         return Self.byteUnit(storageUsedBytes)
     }
 
     var storageTotalText: String {
-        guard let storageTotalBytes else { return "Storage" }
-        return "of \(Self.byteValue(storageTotalBytes)) \(Self.byteUnit(storageTotalBytes))"
+        guard cloudBoxStorageAvailable != false else { return "CloudBox unavailable" }
+        guard let storageTotalBytes else { return "CloudBox storage" }
+        return "CloudBox · \(Self.byteValue(storageTotalBytes)) \(Self.byteUnit(storageTotalBytes)) total"
+    }
+
+    var rootDiskText: String {
+        if rootDiskStatus == "shared_with_cloudbox" || rootDiskSharesCloudBox == true {
+            return "Same as Oracle root"
+        }
+        if rootDiskStatus == "unavailable" {
+            return "Oracle root unavailable"
+        }
+        if rootDiskStatus == "ok",
+           let rootDiskUsedBytes,
+           let rootDiskTotalBytes {
+            return "Oracle · \(Self.byteValue(rootDiskUsedBytes)) \(Self.byteUnit(rootDiskUsedBytes)) of \(Self.byteValue(rootDiskTotalBytes)) \(Self.byteUnit(rootDiskTotalBytes))"
+        }
+        return "CloudBox storage used"
     }
 
     var networkSpeedText: String {

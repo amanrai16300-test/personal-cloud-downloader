@@ -127,6 +127,7 @@ _thumbnail_jobs_lock = Lock()
 NETWORK_INTERFACE = "enp0s6"
 VNSTAT_TIMEOUT_SECONDS = 5
 STORAGE_PATHS = ("/srv/personal-cloud",)
+ROOT_STORAGE_PATH = "/"
 TRENDS_FILE = Path("/tmp/trends.json")
 MARKDOWN_ALLOWED_EXTENSIONS = {
     ".pdf",
@@ -230,8 +231,9 @@ def home_dashboard() -> dict[str, Any]:
     now = datetime.now(timezone.utc)
 
     qb_ok = qbittorrent_reachable()
-    storage = get_storage_usage()
+    storage = get_storage_usage(include_filesystem_identity=True)
     storage_ok = storage_mount_available(storage)
+    root_disk = get_root_disk_usage(storage)
 
     library = build_home_library(storage)
     downloads = {"active_count": count_active_downloads()}
@@ -254,6 +256,7 @@ def home_dashboard() -> dict[str, Any]:
         "library": library,
         "downloads": downloads,
         "network": network,
+        "root_disk": root_disk,
         "continue_watching": continue_watching,
         "recently_added": recently_added,
     }
@@ -268,10 +271,20 @@ def qbittorrent_reachable() -> bool:
 
 
 def storage_mount_available(storage: dict[str, Any]) -> bool:
+    return configured_storage_disk(storage, STORAGE_PATHS[0]) is not None
+
+
+def configured_storage_disk(storage: dict[str, Any], configured_path: str) -> dict[str, Any] | None:
     disks = storage.get("disks") if isinstance(storage, dict) else None
-    if not isinstance(disks, list) or not disks:
-        return False
-    return any(Path(str(disk.get("path"))).exists() for disk in disks if isinstance(disk, dict))
+    if not isinstance(disks, list):
+        return None
+    return next(
+        (
+            disk for disk in disks
+            if isinstance(disk, dict) and disk.get("path") == configured_path
+        ),
+        None,
+    )
 
 
 def count_active_downloads() -> int:
@@ -298,12 +311,9 @@ def build_home_library(storage: dict[str, Any]) -> dict[str, Any]:
             if file_path.is_file() and is_visible_completed_file(file_path, download_dir):
                 file_count += 1
 
-    used_bytes = 0
-    total_bytes = 0
-    disks = storage.get("disks") if isinstance(storage, dict) else None
-    if isinstance(disks, list) and disks and isinstance(disks[0], dict):
-        used_bytes = int(disks[0].get("used_bytes", 0) or 0)
-        total_bytes = int(disks[0].get("total_bytes", 0) or 0)
+    cloudbox_disk = configured_storage_disk(storage, STORAGE_PATHS[0])
+    used_bytes = int(cloudbox_disk.get("used_bytes", 0) or 0) if cloudbox_disk else 0
+    total_bytes = int(cloudbox_disk.get("total_bytes", 0) or 0) if cloudbox_disk else 0
 
     return {
         "video_count": video_count,
@@ -2813,27 +2823,111 @@ def run_fixed_command(command: list[str]) -> subprocess.CompletedProcess[str] | 
     return result
 
 
-def get_storage_usage() -> dict[str, Any]:
+def decode_mountinfo_path(value: str) -> str:
+    for encoded, decoded in (
+        ("\\040", " "),
+        ("\\011", "\t"),
+        ("\\012", "\n"),
+        ("\\134", "\\"),
+    ):
+        value = value.replace(encoded, decoded)
+    return value
+
+
+def mounted_filesystem_id(storage_path: Path) -> int | None:
+    try:
+        resolved_path = storage_path.resolve(strict=True)
+        mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+        is_mountpoint = any(
+            len(fields) >= 5 and decode_mountinfo_path(fields[4]) == str(resolved_path)
+            for fields in (line.split() for line in mountinfo.splitlines())
+        )
+        return resolved_path.stat().st_dev if is_mountpoint else None
+    except OSError:
+        try:
+            return storage_path.stat().st_dev if storage_path.is_mount() else None
+        except OSError:
+            return None
+
+
+def get_storage_usage(*, include_filesystem_identity: bool = False) -> dict[str, Any]:
     disks: list[dict[str, Any]] = []
     errors: list[str] = []
+    seen_filesystems: set[int] = set()
+    duplicate_filesystems_omitted = False
     for path in STORAGE_PATHS:
-        if path != "/" and not Path(path).exists():
+        storage_path = Path(path)
+        filesystem_id = mounted_filesystem_id(storage_path)
+        if filesystem_id is None:
+            errors.append("CloudBox storage is unavailable.")
+            continue
+        if filesystem_id in seen_filesystems:
+            duplicate_filesystems_omitted = True
             continue
         result = run_fixed_command(["df", "-B1", path])
         if result is None:
-            errors.append(f"Could not load storage usage for {path}.")
+            errors.append("Could not load CloudBox storage usage.")
             continue
         disk = parse_df_output(result.stdout, path)
         if disk is None:
-            errors.append(f"Could not parse storage usage for {path}.")
+            errors.append("Could not parse CloudBox storage usage.")
             continue
+        if mounted_filesystem_id(storage_path) != filesystem_id:
+            errors.append("CloudBox storage changed while usage was loading.")
+            continue
+        if include_filesystem_identity:
+            disk["_filesystem_id"] = filesystem_id
+        seen_filesystems.add(filesystem_id)
         disks.append(disk)
 
     status = "ok" if disks and not errors else "partial" if disks else "error"
     storage: dict[str, Any] = {"status": status, "disks": disks}
     if errors:
-        storage["error"] = " ".join(errors)
+        storage["error"] = " ".join(dict.fromkeys(errors))
+    if duplicate_filesystems_omitted:
+        storage["duplicate_filesystems_omitted"] = True
     return storage
+
+
+def get_root_disk_usage(cloudbox_storage: dict[str, Any]) -> dict[str, Any]:
+    root_path = Path(ROOT_STORAGE_PATH)
+    try:
+        root_usage = shutil.disk_usage(root_path)
+        root_filesystem_id = root_path.stat().st_dev
+    except OSError:
+        return {"status": "unavailable", "same_filesystem_as_cloudbox": None}
+
+    cloudbox_disk = configured_storage_disk(cloudbox_storage, STORAGE_PATHS[0])
+    cloudbox_filesystem_id = (
+        cloudbox_disk.get("_filesystem_id")
+        if cloudbox_disk is not None
+        else None
+    )
+
+    same_filesystem = (
+        None
+        if not isinstance(cloudbox_filesystem_id, int)
+        else cloudbox_filesystem_id == root_filesystem_id
+    )
+    if same_filesystem is True:
+        return {
+            "status": "shared_with_cloudbox",
+            "same_filesystem_as_cloudbox": True,
+        }
+
+    used_percent = (
+        round(root_usage.used / root_usage.total * 100, 1)
+        if root_usage.total > 0
+        else 0.0
+    )
+    return {
+        "status": "ok",
+        "same_filesystem_as_cloudbox": same_filesystem,
+        "used_bytes": root_usage.used,
+        "total_bytes": root_usage.total,
+        "available_bytes": root_usage.free,
+        "used_percent": used_percent,
+    }
 
 
 def parse_df_output(output: str, path: str) -> dict[str, Any] | None:
