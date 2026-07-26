@@ -1,6 +1,8 @@
 const API_BASE_URL = `http://${window.location.hostname}:8000`;
 const POLL_MS = 5000;
 const COMPLETED_FILES_POLL_MS = 30000;
+const TRENDS_REFRESH_MS = 5 * 60 * 1000;
+const TRENDS_STALE_MS = 24 * 60 * 60 * 1000;
 const APP_JS_VERSION = "cloudbox-theme-2026-06-12";
 
 console.info(`Personal Cloud Downloader app.js ${APP_JS_VERSION}`);
@@ -31,6 +33,9 @@ let trendsState = {
   loading: false,
   error: "",
   data: null,
+  lastRefreshAt: 0,
+  requestGeneration: 0,
+  pendingRefresh: false,
 };
 
 function setStatus(message, isError = false) {
@@ -723,27 +728,59 @@ function closeTrendsView() {
   document.querySelector("#trendsHomeEntry")?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-async function loadTrends() {
-  if (trendsState.loading) return;
-  if (trendsState.loaded) {
+function isTrendsRefreshDue() {
+  return !trendsState.loaded
+    || Date.now() - trendsState.lastRefreshAt >= TRENDS_REFRESH_MS;
+}
+
+function isTrendsDataStale(data) {
+  if (data?.stale === true) return true;
+  const updatedAt = Date.parse(data?.updated_at || "");
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt >= TRENDS_STALE_MS;
+}
+
+function hasTrendsContent(data) {
+  return ["global_movies", "global_series", "india_movies", "india_series"]
+    .some((key) => Array.isArray(data?.[key]));
+}
+
+async function loadTrends({ force = false } = {}) {
+  if (trendsState.loading) {
+    if (force) {
+      trendsState.pendingRefresh = true;
+      trendsState.requestGeneration += 1;
+    }
+    return;
+  }
+  if (!force && !isTrendsRefreshDue()) {
     renderTrendsView();
     return;
   }
 
+  const requestGeneration = ++trendsState.requestGeneration;
   trendsState.loading = true;
   trendsState.error = "";
   renderTrendsView();
 
   try {
     const data = await apiFetch("/api/trends");
-    if (data?.error) throw new Error(data.error);
+    if (requestGeneration !== trendsState.requestGeneration) return;
+    if (data?.error && !hasTrendsContent(data)) throw new Error(data.error);
     trendsState.data = data;
     trendsState.loaded = true;
+    trendsState.lastRefreshAt = Date.now();
+    trendsState.error = data?.error || "";
   } catch (error) {
-    trendsState.error = error.message || "data not available";
+    if (requestGeneration === trendsState.requestGeneration) {
+      trendsState.error = error.message || "data not available";
+    }
   } finally {
     trendsState.loading = false;
     renderTrendsView();
+    if (trendsState.pendingRefresh) {
+      trendsState.pendingRefresh = false;
+      loadTrends({ force: true });
+    }
   }
 }
 
@@ -752,28 +789,49 @@ function renderTrendsView() {
   const updated = document.querySelector("[data-trends-updated]");
   if (!content) return;
 
-  if (trendsState.loading) {
+  if (trendsState.loading && !trendsState.data) {
     updated.textContent = "";
     content.innerHTML = `<div class="trend-message">Loading TMDB trends...</div>`;
     return;
   }
 
-  if (trendsState.error) {
+  if (trendsState.error && !trendsState.data) {
     updated.textContent = "";
     content.innerHTML = `<div class="trend-message">Trends unavailable. ${escapeHtml(trendsState.error)}</div>`;
     return;
   }
 
   const data = trendsState.data || {};
-  updated.textContent = data.updated_at ? `Updated ${formatDateTime(data.updated_at)}` : "";
-  content.innerHTML = `
-    <div class="trends-sections">
-      ${renderTrendSection("Global Movies", data.global_movies)}
-      ${renderTrendSection("Global Series", data.global_series)}
-      ${renderTrendSection("India Movies", data.india_movies)}
-      ${renderTrendSection("India Series", data.india_series)}
-    </div>
-  `;
+  const staleLabel = isTrendsDataStale(data) ? " · Stale data" : "";
+  const updatedText = data.updated_at ? `Updated ${formatDateTime(data.updated_at)}${staleLabel}` : "";
+  if (updated.textContent !== updatedText) updated.textContent = updatedText;
+
+  const dataSignature = JSON.stringify([
+    data.updated_at,
+    data.global_movies,
+    data.global_series,
+    data.india_movies,
+    data.india_series,
+  ]);
+  if (content._cloudboxTrendsSignature !== dataSignature) {
+    content.innerHTML = `
+      <div class="trend-message" data-trends-error hidden></div>
+      <div class="trends-sections">
+        ${renderTrendSection("Global Movies", data.global_movies)}
+        ${renderTrendSection("Global Series", data.global_series)}
+        ${renderTrendSection("India Movies", data.india_movies)}
+        ${renderTrendSection("India Series", data.india_series)}
+      </div>
+    `;
+    content._cloudboxTrendsSignature = dataSignature;
+  }
+
+  const errorMessage = content.querySelector("[data-trends-error]");
+  const errorText = trendsState.error
+    ? `Trends unavailable. ${trendsState.error}`
+    : "";
+  if (errorMessage.textContent !== errorText) errorMessage.textContent = errorText;
+  errorMessage.hidden = !trendsState.error;
 }
 
 function renderTrendSection(title, items) {
@@ -1561,7 +1619,11 @@ async function refreshAll({ quiet = false, fullReconciliation = true } = {}) {
 }
 
 addMagnetButton.addEventListener("click", () => addMagnet().catch((error) => setStatus(error.message, true)));
-refreshButton.addEventListener("click", () => refreshAll());
+refreshButton.addEventListener("click", () => {
+  refreshAll();
+  const trendsView = document.querySelector("#trendsView");
+  if (trendsView && !trendsView.hidden) loadTrends({ force: true });
+});
 
 magnetLinkInput.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
