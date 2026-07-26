@@ -243,7 +243,11 @@ Remaining web follow-ups are lower priority: production browser verification of 
 - The request-time wording cleanup is implemented in `ios/PersonalCloudDownloader/Views/HomeView.swift`. The foreground reconnect mode had already been removed, but remaining request timing text incorrectly described the dashboard round-trip as “latency.”
 - Initial load now shows “Measuring request time,” refresh with an existing value shows “Updating request time,” failure shows “Request time unavailable,” and successful requests continue showing the measured milliseconds.
 - Dead foreground-reconnect state and unreachable reconnect wording were removed. `reconnectCycle` and `reconnectRefreshToken` remain unchanged as valid refresh triggers.
-- Home layout, cards, navigation, cache flow, refresh loop, API request, and reconnect-triggered refreshes remain unchanged.
+- Confirmed foreground reconnect fix is implemented in `ios/PersonalCloudDownloader/Views/HomeView.swift`: the reconnect-token refresh previously hit the existing 3-second `startRefreshLoop()` dedupe guard and was swallowed.
+- `startRefreshLoop(force: Bool = false)` now exists; only `.onChange(of: reconnectRefreshToken)` passes `force: true`. The forced path bypasses dedupe, cancels the pre-recovery refresh, increments the existing generation, and starts a fresh dashboard request.
+- Existing generation guards prevent the cancelled request from applying stale offline or dashboard state. Normal `onAppear`, reconnect-cycle, cache-first, and 12-second polling behavior remain unchanged.
+- A new IPA was built, installed, and tested on iPhone. After CloudBox remained in the background, returning later kept the user on Home and refreshed successfully. Existing reconnect indicator remains sufficient; no Oracle/backend or web deployment was required.
+- Only `HomeView.swift` changed for the code fix. Home layout, cards, navigation, cache flow, API request, and Videos/Network behavior remain unchanged.
 - Static verification passed: `git diff --check` and the obsolete-symbol scan.
 - The change was committed as `0eccea6` and pushed to `origin/fix/cloudbox-audit-reliability`.
 - `ios/PersonalCloudDownloader/Views/HomeView.swift` optionally decodes `root_disk` and the storage service status.
@@ -275,6 +279,7 @@ TMDB artwork remains server-side metadata enrichment. Missing keys, network fail
 - `personal-downloader-api.service` was active and `/api/health` returned `200`.
 - A valid text conversion returned `200` with Markdown; an empty upload returned a safe `422`; no `cloudbox-markdown-*` temporary files leaked.
 - A new IPA was built, installed, and device-verified. Valid file/photo conversion worked, a failed retry preserved the preview, VoiceOver announced the error once, focus remained stable, and existing actions were unchanged.
+- The same new IPA passed Home foreground reconnect verification: returning to CloudBox after backgrounding it refreshed Home without changing tabs.
 
 Lower-priority follow-ups: brittle substring-based backend error mapping, remaining Markdown Dynamic Type polish, and background completion of a request after leaving the screen.
 
@@ -384,7 +389,7 @@ Authoritative branch:
 - Oracle backend, web frontend, and Trends script are deployed and production-verified.
 - Backend storage separation is deployed and production-verified.
 - The consolidated IPA from `fix/cloudbox-audit-reliability` built successfully, was installed, and is working.
-- The latest Home presentation remains pending a new IPA build/install and iPhone verification.
+- The latest Home foreground reconnect fix is built, installed, and iPhone-verified.
 - Backend, Downloader, Home, Videos, folders, Player, Network, Trends, Markdown Converter, qBittorrent WebView, Files WebView, TMDB artwork, subtitles, AVPlayer/VLC progress, and reconnect infrastructure are operational.
 - Everything remains private through Tailscale.
 - 10GB is guidance only; legal-files-only, Tailscale-private, and quick-delete rules remain mandatory.
