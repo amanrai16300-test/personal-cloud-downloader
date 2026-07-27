@@ -164,6 +164,15 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - It centralizes Completed Files API, Downloader, Files, qBittorrent, Settings, Player, and VLC player endpoints.
 - `project.yml` did not require changes for this centralization.
 
+### iOS Downloader WebView cache-busting
+
+- The iOS Downloader tab previously loaded the unversioned `http://100.95.39.107:8090/app/`. `DownloaderView.swift` passes `CloudBoxEndpoints.downloaderWebAppURL` through `WebScreen` to the shared `WebView`.
+- The shared WebView creates `URLRequest(url:)` with the default `.useProtocolCachePolicy`. Because the HTML URL retained the same cache key after the Phase 6 web deployment, WKWebView could reuse stale `/app/` HTML and never discover the versioned CSS and JavaScript references.
+- The minimal native fix changed only `ios/PersonalCloudDownloader/CloudBoxEndpoints.swift`. The Downloader URL is now `http://100.95.39.107:8090/app/?v=phase6-20260728`; no commit hash is recorded here.
+- No shared WebView cache policy changed. `WKWebsiteDataStore.default()`, cookies, sessions, Retry behavior, navigation, popup handling, and every other WebView remain unchanged.
+- This native endpoint change required no backend or Oracle deployment. A new IPA was built, installed, and verified on iPhone.
+- The iOS Downloader tab now shows the current Phase 6 interface, including the compact `Start a download` composer, redesigned torrent cards, Delete buttons, and queue summary chips when applicable. The fix is confirmed working.
+
 ### Root reconnect
 
 - `RootTabView.swift` coordinates reconnect state.
