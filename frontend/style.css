@@ -316,6 +316,7 @@ textarea:focus {
 }
 
 #status.status-line {
+  --toast-rail: var(--accent);
   position: fixed;
   left: 50%;
   bottom: max(16px, env(safe-area-inset-bottom));
@@ -335,11 +336,21 @@ textarea:focus {
   pointer-events: none;
 }
 
+#status.status-line::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  border-radius: 14px 0 0 14px;
+  background: var(--toast-rail);
+}
+
 #status.status-line[hidden] {
   display: none;
 }
 
 #status.status-line.warning {
+  --toast-rail: oklch(75% 0.13 80);
   border-color: oklch(72% 0.11 80 / 0.7);
   background: oklch(28% 0.045 75);
   color: oklch(90% 0.07 85);
@@ -347,6 +358,7 @@ textarea:focus {
 
 #status.status-line.error,
 #status.status-line.offline {
+  --toast-rail: var(--danger);
   border-color: oklch(65% 0.13 28 / 0.72);
   background: oklch(25% 0.055 28);
   color: oklch(90% 0.055 28);
@@ -355,6 +367,59 @@ textarea:focus {
 .stack {
   display: grid;
   gap: 10px;
+}
+
+.row-heading > div {
+  min-width: 0;
+}
+
+.dl-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 8px;
+}
+
+.dl-summary[hidden] {
+  display: none;
+}
+
+.dl-summary__chip {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.dl-summary__chip--active {
+  border-color: rgba(77, 150, 255, 0.3);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.dl-summary__chip--ready {
+  border-color: rgba(74, 222, 128, 0.3);
+  background: var(--ok-soft);
+  color: #4ADE80;
+}
+
+.dl-summary__chip--failed {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: var(--danger-soft);
+  color: #FCA5A5;
+}
+
+.dl-summary__chip--waiting {
+  border-color: rgba(111, 130, 159, 0.3);
+  background: var(--wait-soft);
+  color: #8FA3C7;
 }
 
 .file-card,

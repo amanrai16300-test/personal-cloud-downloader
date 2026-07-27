@@ -14,6 +14,7 @@ const magnetLinkInput = document.querySelector("#magnetLink");
 const addMagnetButton = document.querySelector("#addMagnetButton");
 const refreshButton = document.querySelector("#refreshButton");
 const torrentList = document.querySelector("#torrentList");
+const queueSummary = document.querySelector("#queueSummary");
 const completedFiles = document.querySelector("#completedFiles");
 const statusText = document.querySelector("#status");
 const lastUpdated = document.querySelector("#lastUpdated");
@@ -1057,6 +1058,34 @@ function reconcileRenderedRows(container, rows, emptyHtml) {
 }
 
 function renderTorrents(torrents) {
+  const summaryCounts = {
+    active: 0,
+    ready: 0,
+    failed: 0,
+    waiting: 0,
+  };
+  torrents.forEach((torrent) => {
+    const status = normalizeStatus(torrent);
+    if (status === "Downloading") summaryCounts.active += 1;
+    else if (status === "Completed") summaryCounts.ready += 1;
+    else if (status === "Failed") summaryCounts.failed += 1;
+    else summaryCounts.waiting += 1;
+  });
+  const summaryItems = Object.entries(summaryCounts).filter(([, count]) => count > 0);
+  const summarySignature = summaryItems.map(([state, count]) => `${state}:${count}`).join("|");
+  if (queueSummary._cloudboxSummarySignature !== summarySignature) {
+    const fragment = document.createDocumentFragment();
+    summaryItems.forEach(([state, count]) => {
+      const chip = document.createElement("span");
+      chip.className = `dl-summary__chip dl-summary__chip--${state}`;
+      chip.textContent = `${count} ${state}`;
+      fragment.appendChild(chip);
+    });
+    queueSummary.replaceChildren(fragment);
+    queueSummary.hidden = summaryItems.length === 0;
+    queueSummary._cloudboxSummarySignature = summarySignature;
+  }
+
   if (!torrents.length) {
     reconcileRenderedRows(
       torrentList,
