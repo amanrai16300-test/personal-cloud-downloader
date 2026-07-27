@@ -49,8 +49,12 @@ Use only `100.95.39.107` for current Oracle work. Older Oracle and AWS Tailscale
 ```text
 Local backend:             backend/main.py
 Live Oracle backend:       /home/ubuntu/personal-cloud-downloader/backend/main.py
-Local web frontend:        frontend/app.js
-Live Oracle web frontend:  /home/ubuntu/personal-cloud-downloader/backend/app.js
+Local web files:           frontend/app.js
+                           frontend/index.html
+                           frontend/style.css
+Live `/app/` web files:    /var/www/personal-cloud/app/app.js
+                           /var/www/personal-cloud/app/index.html
+                           /var/www/personal-cloud/app/style.css
 Local Trends script:        scripts/fetch_trends.py
 Live Trends script:        /home/ubuntu/personal-cloud-downloader/scripts/fetch_trends.py
 Generated Trends data:     /tmp/trends.json
@@ -59,7 +63,8 @@ TMDB env file:             /home/ubuntu/.config/cloudbox/tmdb.env
 ```
 
 - Backend deployment is manual: copy `backend/main.py`, run `python3 -m py_compile backend/main.py`, then restart `personal-downloader-api.service`.
-- Web deployment is manual: copy `frontend/app.js` to live `backend/app.js`; normally no backend restart is needed.
+- Web deployment is manual: copy and verify `frontend/app.js`, `frontend/index.html`, and `frontend/style.css` together under `/var/www/personal-cloud/app/`. No backend restart is needed for these static frontend files.
+- `/home/ubuntu/personal-cloud-downloader/backend/app.js` is not the file currently served by `/app/`.
 - Trends deployment is manual: copy the script, compile it, then run it with the production environment.
 - Native iOS deployment uses the manual unsigned IPA workflow and Sideloadly.
 - Documentation-only changes require no Oracle deploy and no IPA build.
@@ -188,6 +193,22 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 
 ## 7. Current Web Downloader status
 
+### Phase 6 redesign checkpoint
+
+- Redesign branch: `ui/cloudbox-responsive-redesign`.
+- Confirmed pushed commits include `8316905` (responsive Downloader interface) and `3764b05` (status-led torrent cards). Later compact-composer, queue-summary, toast-polish, and cache-busting commits exist on the same branch; their hashes are not recorded here.
+- The redesign preserves the existing single-page interface. It adds no Home, Videos, Network, or More web navigation, routes, sidebar, rail, or bottom tab bar.
+- Below 760px, the Downloader form is no longer sticky. At 760px and wider, the form and queue use a readable two-column layout; the Trends entry and opened Trends view span the full grid width.
+- Torrent cards use status-led 3px left rails and state-specific content: Downloading uses a blue rail, percentage, and one accessible progress bar; Waiting uses a muted rail, `Waiting for peers`, and a zero track; Completed uses a green rail and `✓ Ready — see Completed files` with no redundant bar; Failed uses a red rail and `✗ Download failed` with no empty bar.
+- Torrent Delete is visually secondary, at least 44px high, and retains the existing confirmation flow. Full raw torrent hashes are not displayed in cards or delete confirmation.
+- Progress uses one `role="progressbar"` representation with valid ARIA minimum, maximum, and current values.
+- The compact composer uses the heading `Start a download`, a two-row magnet field, a prominent full-width Start button, and a visible Ctrl+Enter hint connected through `aria-describedby`.
+- The Downloads header shows passive, non-zero summary chips for active, ready, failed, and waiting counts.
+- Status feedback uses fixed success, warning, error, and offline toasts with timer ownership protection. Identical persistent offline errors are not rewritten on later five-second polls, preventing repeated live-region announcements.
+- Initial queue loading shows exactly two reduced-motion-aware skeleton cards once. A torrent connectivity failure preserves and subtly dims existing cards; successful recovery restores their normal presentation.
+- Existing API contracts, hostname-derived API URL, five-second torrent polling, thirty-second completed-file polling, generation guards, keyed reconciliation, focus preservation, delete-modal behavior, Completed Files, and Trends behavior remain unchanged.
+- Cache-busting asset URLs are `style.css?v=phase6-20260728` and `app.js?v=phase6-20260728`.
+
 - API base URL derives from `window.location.hostname`; the historical hardcoded Oracle IP is gone.
 - API requests use a 15-second `AbortController` timeout with stale-controller cleanup.
 - Data-generation guards prevent old poll responses from overwriting newer add/delete results.
@@ -221,12 +242,11 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 
 ### Oracle production verification
 
-- Live frontend file: `/home/ubuntu/personal-cloud-downloader/backend/app.js`.
-- Backup: `backend/app.js.before-audit-fixes`.
-- New `frontend/app.js` was deployed.
-- Downloader loaded at `http://100.95.39.107:8090/app/`; torrents and Completed Files loaded; hostname-based API calls worked.
-- Completed-file Delete controls appeared.
-- No important media was deleted during deployment verification.
+- Live URL remains `http://100.95.39.107:8090/app/`.
+- The live files served by `/app/` are `/var/www/personal-cloud/app/app.js`, `/var/www/personal-cloud/app/index.html`, and `/var/www/personal-cloud/app/style.css`; Oracle served-file checksums matched the uploaded Phase 6 files.
+- Browser verification confirmed that the versioned `app.js` loaded, `.dl-card` rows rendered, old `Delete torrent/files` text was absent, the queue summary displayed (for example, `5 ready`), and the compact `Start a download` composer appeared.
+- The backend/API remained healthy and returned live torrent data.
+- The redesign remains Tailscale-private and preserves the legal-files-only, quick-delete, and 10GB-guidance rules.
 
 Remaining web follow-ups are lower priority: production browser verification of delete-modal keyboard/focus accessibility.
 
@@ -364,18 +384,19 @@ Verified live script: `/home/ubuntu/personal-cloud-downloader/scripts/fetch_tren
 
 ## 13. Branch and build status
 
-Authoritative branch:
+Authoritative branches:
 
-- `fix/cloudbox-audit-reliability`
+- `fix/cloudbox-audit-reliability` remains the consolidated backend/iOS reliability branch.
 - Main audit commit: `17fe898`.
 - Later iOS archive compatibility commit exists on the same branch; its hash is not recorded here.
 - Branch is pushed and tracks `origin/fix/cloudbox-audit-reliability`.
 - Working tree was clean after the main push.
+- `ui/cloudbox-responsive-redesign` is the current production-deployed Web Downloader redesign branch. Confirmed pushed commits include `8316905` and `3764b05`; later Phase 5, Phase 6, toast-polish, and cache-busting commits exist on the same branch without hashes recorded here.
 - Oracle deploys are manual because the Oracle directory is not a Git repository.
 - IPA workflow is manual-only.
 - Current consolidated IPA builds must use `fix/cloudbox-audit-reliability`.
 - Do not use `feature/series-progress-fix-current-ui`, `feature/subtitle-gesture-controls`, or `feature/video-thumbnails-v2` for current builds. They may remain historical milestones.
-- Do not claim this branch is merged into `main` unless that is later verified.
+- Neither current branch is documented as merged into `main`; do not claim either is merged unless that is later verified.
 
 ## 14. Historical and superseded experiments
 
