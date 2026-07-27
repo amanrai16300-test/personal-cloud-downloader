@@ -18,18 +18,16 @@
       </header>
 
       <div class="dashboard-grid">
-        <section class="command-panel" aria-labelledby="addTitle">
+        <section class="command-panel dl-composer" aria-labelledby="addTitle">
           <div class="section-heading">
-            <p class="panel-kicker">New job</p>
-            <h2 id="addTitle">Send a magnet to the cloud</h2>
-            <p>One private queue for legal files. Stream, save, then clean up.</p>
+            <h2 id="addTitle">Start a download</h2>
           </div>
           <label class="magnet-field">
-            <span>Magnet link</span>
-            <textarea id="magnetLink" rows="4" placeholder="magnet:?xt=urn:btih:..." aria-describedby="magnetKeyboardHint"></textarea>
+            <span class="visually-hidden">Magnet link</span>
+            <textarea id="magnetLink" rows="2" placeholder="magnet:?xt=urn:btih:..." aria-describedby="magnetKeyboardHint"></textarea>
           </label>
-          <small id="magnetKeyboardHint" class="keyboard-hint">Ctrl+Enter also starts the download</small>
           <button id="addMagnetButton" class="primary-button" type="button">Start download</button>
+          <small id="magnetKeyboardHint" class="keyboard-hint">Ctrl+Enter also starts the download</small>
           <p id="status" class="status-line" role="status" aria-live="polite">Connecting to private backend...</p>
         </section>
 
