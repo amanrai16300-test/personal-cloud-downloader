@@ -1,6 +1,9 @@
 const API_BASE_URL = `http://${window.location.hostname}:8000`;
 const POLL_MS = 5000;
 const COMPLETED_FILES_POLL_MS = 30000;
+const TORRENT_STALE_MS = 60 * 1000;
+const STATUS_SUCCESS_MS = 4000;
+const STATUS_WARNING_MS = 8000;
 const TRENDS_REFRESH_MS = 5 * 60 * 1000;
 const TRENDS_STALE_MS = 24 * 60 * 60 * 1000;
 const APP_JS_VERSION = "cloudbox-theme-2026-06-12";
@@ -21,6 +24,11 @@ let isSubmitting = false;
 let isRefreshing = false;
 let downloaderDataGeneration = 0;
 let lastCompletedFilesRefreshAt = 0;
+let lastSuccessfulTorrentRefreshAt = 0;
+let statusDismissTimer = 0;
+let statusRevision = 0;
+let offlineStatusMessage = "";
+let isInitialTorrentLoad = true;
 let incompleteTorrentHashes = new Set();
 let pendingRefreshMode = "";
 let pendingDeleteHash = "";
@@ -39,8 +47,73 @@ let trendsState = {
 };
 
 function setStatus(message, isError = false) {
-  statusText.textContent = message;
-  statusText.classList.toggle("error", isError);
+  const text = String(message ?? "");
+  const isOffline = isError && isConnectivityErrorMessage(text);
+  if (
+    isOffline
+    && !statusText.hidden
+    && statusText.textContent === text
+    && statusText.classList.contains("offline")
+  ) {
+    return;
+  }
+
+  const revision = ++statusRevision;
+  const isWarning = isError
+    && !/list refresh failed/i.test(text)
+    && /warnings?:|partial|may remain|no completed files were removed|was not removed/i.test(text);
+
+  window.clearTimeout(statusDismissTimer);
+  statusDismissTimer = 0;
+  statusText.textContent = text;
+  statusText.hidden = !text;
+  statusText.classList.toggle("warning", isWarning);
+  statusText.classList.toggle("error", isError && !isWarning);
+  statusText.classList.toggle("offline", isOffline);
+
+  if (!text) return;
+  if (isOffline) {
+    offlineStatusMessage = text;
+    return;
+  }
+
+  const dismissAfter = isError || isWarning ? STATUS_WARNING_MS : STATUS_SUCCESS_MS;
+  statusDismissTimer = window.setTimeout(() => {
+    if (revision !== statusRevision) return;
+    if (offlineStatusMessage) {
+      setStatus(offlineStatusMessage, true);
+    } else {
+      setStatus("");
+    }
+  }, dismissAfter);
+}
+
+function isConnectivityErrorMessage(message) {
+  return message === "CloudBox server is unreachable" || message === "Server request timed out";
+}
+
+function renderInitialTorrentSkeletons() {
+  torrentList.innerHTML = Array.from({ length: 2 }, () => `
+    <article class="download-card torrent-skeleton" aria-hidden="true">
+      <div class="skeleton-line skeleton-title"></div>
+      <div class="skeleton-line skeleton-meta"></div>
+      <div class="skeleton-line skeleton-progress"></div>
+    </article>
+  `).join("");
+}
+
+function finishInitialTorrentLoad() {
+  if (!isInitialTorrentLoad) return;
+  isInitialTorrentLoad = false;
+  torrentList.querySelectorAll(".torrent-skeleton").forEach((element) => element.remove());
+}
+
+function setTorrentPollingOnline() {
+  torrentList.classList.remove("offline");
+  if (offlineStatusMessage && statusText.textContent === offlineStatusMessage) {
+    setStatus("");
+  }
+  offlineStatusMessage = "";
 }
 
 function normalizeApiError(status, body) {
@@ -139,6 +212,15 @@ async function apiFetch(path, options = {}) {
   }
 }
 
+async function fetchTorrents() {
+  try {
+    return await apiFetch("/api/torrents");
+  } catch (error) {
+    error.isTorrentPollingFailure = true;
+    throw error;
+  }
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -167,6 +249,15 @@ function normalizeStatus(torrent) {
 
 function torrentHash(torrent) {
   return String(torrent.hash ?? "").trim().toLowerCase();
+}
+
+function torrentDisplayName(torrent, emptyFallback = "Preparing download") {
+  const rawHash = String(torrent?.hash ?? "").trim();
+  const providedName = String(torrent?.name ?? "").trim();
+  const hasUsableName = providedName
+    && (!rawHash || providedName.toLowerCase() !== rawHash.toLowerCase());
+  if (hasUsableName) return providedName;
+  return rawHash ? `Preparing download · ${rawHash.slice(0, 8)}…` : emptyFallback;
 }
 
 function hasTorrentCompletionTransition(torrents) {
@@ -216,6 +307,18 @@ function torrentTimeText(torrent, status) {
   return torrent.added_at
     ? `Added ${formatDateTime(torrent.added_at)}`
     : "Time unavailable.";
+}
+
+function renderLastUpdated() {
+  if (!lastSuccessfulTorrentRefreshAt) return;
+
+  const isStale = Date.now() - lastSuccessfulTorrentRefreshAt > TORRENT_STALE_MS;
+  const time = new Date(lastSuccessfulTorrentRefreshAt).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  lastUpdated.textContent = `Updated ${time}${isStale ? " · stale" : ""}`;
+  lastUpdated.classList.toggle("stale", isStale);
 }
 
 function emptyCard(title, text) {
@@ -970,18 +1073,19 @@ function renderTorrents(torrents) {
   const rows = sortedTorrents.map((torrent, index) => {
     const status = normalizeStatus(torrent);
     const progress = normalizeProgress(torrent);
-    const name = torrent.name || torrent.hash || "Preparing download";
+    const name = torrentDisplayName(torrent);
+    const rowKey = torrent.hash || `${name}:${index}`;
+    const titleId = `torrent-title-${String(torrent.hash || index).replace(/[^a-z0-9_-]/gi, "-")}`;
     const timeText = torrentTimeText(torrent, status);
     const content = `
       <div class="card-top">
         <div class="download-title">
-          <h3>${escapeHtml(name)}</h3>
-          <p class="meta">${progress}% downloaded</p>
+          <h3 id="${escapeHtml(titleId)}">${escapeHtml(name)}</h3>
           <p class="meta">${escapeHtml(timeText)}</p>
         </div>
         <span class="pill ${statusClass(status)}">${status}</span>
       </div>
-      <div class="progress-row" aria-label="${progress}% complete">
+      <div class="progress-row" role="progressbar" aria-labelledby="${escapeHtml(titleId)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
         <div class="progress-track">
           <div class="progress-fill" style="--progress: ${progress}%"></div>
         </div>
@@ -995,7 +1099,7 @@ function renderTorrents(torrents) {
     `;
 
     return {
-      key: `torrent:${torrent.hash || `${name}:${index}`}`,
+      key: `torrent:${rowKey}`,
       signature: content,
       html: `<article class="download-card">${content}</article>`,
       update: (element) => {
@@ -1236,8 +1340,8 @@ function getDeleteConfirmationModal() {
         <h3 id="deleteConfirmTitle" style="margin:0 0 8px;font-size:18px;">Delete download?</h3>
         <p id="deleteConfirmName" style="margin:0 0 16px;color:#8FA3C7;line-height:1.35;word-break:break-word;"></p>
         <div style="display:flex;gap:10px;justify-content:flex-end;">
-          <button type="button" data-delete-cancel style="border:1px solid rgba(255,255,255,.14);background:transparent;color:#F2F6FF;border-radius:10px;padding:10px 14px;">Cancel</button>
-          <button type="button" data-delete-confirm style="border:0;background:#dc2626;color:white;border-radius:10px;padding:10px 14px;">Delete</button>
+          <button type="button" data-delete-cancel style="min-height:44px;border:1px solid rgba(255,255,255,.14);background:transparent;color:#F2F6FF;border-radius:10px;padding:10px 14px;">Cancel</button>
+          <button type="button" data-delete-confirm style="min-height:44px;border:0;background:#dc2626;color:white;border-radius:10px;padding:10px 14px;">Delete</button>
         </div>
       </section>
     `;
@@ -1264,7 +1368,7 @@ function showDeleteConfirmation(hash) {
   if (isCompletedDeleteActive) return;
 
   const torrent = cachedTorrents.find((item) => item.hash === hash);
-  const name = torrent?.name || hash || "this download";
+  const name = torrentDisplayName(torrent || { hash }, "this download");
   pendingDeleteHash = hash;
   pendingCompletedDelete = null;
 
@@ -1576,11 +1680,11 @@ async function refreshAll({ quiet = false, fullReconciliation = true } = {}) {
 
     if (fullReconciliation) {
       [torrents, files] = await Promise.all([
-        apiFetch("/api/torrents"),
+        fetchTorrents(),
         apiFetch("/api/completed-files"),
       ]);
     } else {
-      torrents = await apiFetch("/api/torrents");
+      torrents = await fetchTorrents();
       if (refreshGeneration !== downloaderDataGeneration) return;
 
       const torrentData = Array.isArray(torrents) ? torrents : [];
@@ -1596,17 +1700,23 @@ async function refreshAll({ quiet = false, fullReconciliation = true } = {}) {
     const torrentData = Array.isArray(torrents) ? torrents : [];
     rememberIncompleteTorrents(torrentData);
     renderTorrents(torrentData);
+    setTorrentPollingOnline();
+    lastSuccessfulTorrentRefreshAt = Date.now();
     if (refreshedCompletedFiles) {
       renderCompletedFiles(Array.isArray(files) ? files : []);
       lastCompletedFilesRefreshAt = Date.now();
     }
-    lastUpdated.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     if (!quiet) setStatus("Ready.");
   } catch (error) {
     if (refreshGeneration === downloaderDataGeneration) {
+      if (error.isTorrentPollingFailure && isConnectivityErrorMessage(error.message)) {
+        torrentList.classList.add("offline");
+      }
       setStatus(error.message, true);
     }
   } finally {
+    finishInitialTorrentLoad();
+    renderLastUpdated();
     isRefreshing = false;
     refreshButton.disabled = false;
 
@@ -1651,5 +1761,6 @@ completedFiles.addEventListener("click", (event) => {
 
 installCloudBoxTheme();
 installTrendsHomeEntry();
+renderInitialTorrentSkeletons();
 refreshAll();
 window.setInterval(() => refreshAll({ quiet: true, fullReconciliation: false }), POLL_MS);

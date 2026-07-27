@@ -26,8 +26,9 @@
           </div>
           <label class="magnet-field">
             <span>Magnet link</span>
-            <textarea id="magnetLink" rows="4" placeholder="magnet:?xt=urn:btih:..."></textarea>
+            <textarea id="magnetLink" rows="4" placeholder="magnet:?xt=urn:btih:..." aria-describedby="magnetKeyboardHint"></textarea>
           </label>
+          <small id="magnetKeyboardHint" class="keyboard-hint">Ctrl+Enter also starts the download</small>
           <button id="addMagnetButton" class="primary-button" type="button">Start download</button>
           <p id="status" class="status-line" role="status" aria-live="polite">Connecting to private backend...</p>
         </section>
