@@ -94,10 +94,10 @@ function isConnectivityErrorMessage(message) {
 
 function renderInitialTorrentSkeletons() {
   torrentList.innerHTML = Array.from({ length: 2 }, () => `
-    <article class="download-card torrent-skeleton" aria-hidden="true">
-      <div class="skeleton-line skeleton-title"></div>
-      <div class="skeleton-line skeleton-meta"></div>
-      <div class="skeleton-line skeleton-progress"></div>
+    <article class="dl-card dl-card--waiting dl-skeleton" aria-hidden="true">
+      <div class="dl-skeleton__line dl-skeleton__title"></div>
+      <div class="dl-skeleton__line dl-skeleton__bar"></div>
+      <div class="dl-skeleton__line dl-skeleton__meta"></div>
     </article>
   `).join("");
 }
@@ -105,7 +105,7 @@ function renderInitialTorrentSkeletons() {
 function finishInitialTorrentLoad() {
   if (!isInitialTorrentLoad) return;
   isInitialTorrentLoad = false;
-  torrentList.querySelectorAll(".torrent-skeleton").forEach((element) => element.remove());
+  torrentList.querySelectorAll(".dl-skeleton").forEach((element) => element.remove());
 }
 
 function setTorrentPollingOnline() {
@@ -1077,31 +1077,50 @@ function renderTorrents(torrents) {
     const rowKey = torrent.hash || `${name}:${index}`;
     const titleId = `torrent-title-${String(torrent.hash || index).replace(/[^a-z0-9_-]/gi, "-")}`;
     const timeText = torrentTimeText(torrent, status);
+    const stateClass = statusClass(status);
+    let statusContent;
+
+    if (status === "Downloading") {
+      statusContent = `
+        <div class="dl-progress" role="progressbar" aria-labelledby="${escapeHtml(titleId)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
+          <div class="dl-bar">
+            <div class="dl-bar__fill" style="--progress: ${progress}%"></div>
+          </div>
+        </div>
+      `;
+    } else if (status === "Waiting") {
+      statusContent = `
+        <div class="dl-card__state-row">
+          <p class="dl-card__state">Waiting for peers</p>
+          <div class="dl-progress" role="progressbar" aria-labelledby="${escapeHtml(titleId)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="dl-bar dl-bar--waiting"></div>
+          </div>
+        </div>
+      `;
+    } else if (status === "Completed") {
+      statusContent = `<p class="dl-card__state dl-card__state--completed">✓ Ready — see Completed files</p>`;
+    } else {
+      statusContent = `<p class="dl-card__state dl-card__state--failed">✗ Download failed</p>`;
+    }
+
     const content = `
-      <div class="card-top">
-        <div class="download-title">
-          <h3 id="${escapeHtml(titleId)}">${escapeHtml(name)}</h3>
-          <p class="meta">${escapeHtml(timeText)}</p>
-        </div>
-        <span class="pill ${statusClass(status)}">${status}</span>
-      </div>
-      <div class="progress-row" role="progressbar" aria-labelledby="${escapeHtml(titleId)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
-        <div class="progress-track">
-          <div class="progress-fill" style="--progress: ${progress}%"></div>
-        </div>
-        <span class="progress-value">${progress}%</span>
-      </div>
-      <div class="actions">
-        <button class="action-button danger" type="button" data-delete-hash="${escapeHtml(torrent.hash)}">
-          Delete torrent/files
+      <header class="dl-card__header">
+        <h3 id="${escapeHtml(titleId)}" class="dl-card__title">${escapeHtml(name)}</h3>
+        ${status === "Downloading" ? `<span class="dl-card__percent">${progress}%</span>` : ""}
+      </header>
+      ${statusContent}
+      <footer class="dl-card__footer">
+        <p class="dl-card__time">${escapeHtml(timeText)}</p>
+        <button class="dl-delete" type="button" data-delete-hash="${escapeHtml(torrent.hash)}" aria-label="Delete ${escapeHtml(name)}">
+          Delete
         </button>
-      </div>
+      </footer>
     `;
 
     return {
       key: `torrent:${rowKey}`,
       signature: content,
-      html: `<article class="download-card">${content}</article>`,
+      html: `<article class="dl-card dl-card--${stateClass}">${content}</article>`,
       update: (element) => {
         const order = String(index);
         if (element.style.order !== order) element.style.order = order;
