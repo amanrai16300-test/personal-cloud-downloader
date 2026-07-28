@@ -101,6 +101,15 @@ The current production-verified state, implemented code, remaining runtime check
 - An untracked root video can still be organized after the complete qBittorrent inventory is read successfully and no exact path matches it. Multiple torrents matching one path combine conservatively, so one unsafe match blocks movement.
 - Matching `.srt` and `.vtt` sidecars move only after the video is approved. A failure affecting one candidate does not fail `GET /api/completed-files`; `_cloudbox-thumbnails` exclusion and the completed-files API response shape are unchanged.
 
+Deletion fix checkpoint:
+
+- Root cause: `GET /api/completed-files` organized direct-root videos as `ROOT/<stem>/<filename>`, while qBittorrent retained the stale original paths. `DELETE /api/torrents/{hash}` then removed the qB entry with `delete_files=False`, allowing the moved file to remain and consume storage.
+- The first backend fix mapped the exact deterministic organizer destination and required completed-root containment, a supported regular video file, and an exact qB-recorded byte-size match. Production testing then showed that stale qB `Failed`/`0%` metadata could still reject a valid moved file.
+- The final backend fix removed the stale progress requirements while continuing to reject active and moving torrents. Exact-path matching remains mandatory; no fuzzy, partial-name, recursive, or arbitrary rename matching is used.
+- Existing orphan cleanup removed Governor 720p, Disclosure Day, In the Grey, Seven Snipers, and subtitle-only leftovers. CloudBox storage use fell from about 20 GB to 7.7 GB.
+- Final production verification passed: delete returned `200 OK`; the torrent disappeared from `/api/torrents`; the file disappeared from `/api/completed-files`; the physical organizer folder was removed; and storage fell by the deleted file size.
+- Final commit: `cfd3e83`. Status: deployed to Oracle and verified working. This was a backend-only fix; no IPA rebuild was required.
+
 ### Security
 
 - CORS is restricted to `http://100.95.39.107:8090`.
