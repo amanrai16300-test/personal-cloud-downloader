@@ -1269,7 +1269,7 @@ def delete_torrent(torrent_hash: str) -> dict[str, Any]:
                 f"Could not verify qBittorrent file paths before delete: {exc.detail}"
             )
 
-    candidates, content_root = build_delete_candidates(torrent, torrent_files)
+    candidates, content_root, organizer_roots = build_delete_candidates(torrent, torrent_files)
     result["candidate_paths_checked"] = [str(path) for path in candidates]
     if torrent and not candidates:
         result["warnings"].append("No content-verified completed files were found.")
@@ -1286,7 +1286,7 @@ def delete_torrent(torrent_hash: str) -> dict[str, Any]:
         result["warnings"].append(f"qBittorrent delete failed: {exc.detail}")
 
     delete_completed_candidates(candidates, result)
-    remove_empty_content_directories(candidates, content_root, result)
+    remove_empty_content_directories(candidates, content_root, organizer_roots, result)
     set_delete_status(result, qbittorrent_deleted=qbittorrent_deleted)
     return result
 
@@ -1301,22 +1301,23 @@ def find_torrent(torrent_hash: str) -> dict[str, Any] | None:
 def build_delete_candidates(
     torrent: dict[str, Any] | None,
     torrent_files: list[dict[str, Any]],
-) -> tuple[list[Path], Path | None]:
+) -> tuple[list[Path], Path | None, set[Path]]:
     if torrent is None or not torrent_files:
-        return [], None
+        return [], None, set()
 
     download_root = settings.download_complete_dir.resolve()
     content_path = str(torrent.get("content_path") or "").strip()
     save_path = str(torrent.get("save_path") or "").strip()
     if not content_path or not save_path:
-        return [], None
+        return [], None, set()
 
     try:
         content_root = resolve_safe_download_target(Path(content_path), download_root)
     except ValueError:
-        return [], None
+        return [], None, set()
 
     safe_candidates: list[Path] = []
+    organizer_roots: set[Path] = set()
     seen: set[Path] = set()
     for torrent_file in torrent_files:
         relative_name = Path(str(torrent_file.get("name") or "").strip())
@@ -1334,11 +1335,48 @@ def build_delete_candidates(
 
         if safe != content_root and not safe.is_relative_to(content_root):
             continue
-        if safe not in seen:
-            seen.add(safe)
-            safe_candidates.append(safe)
 
-    return safe_candidates, content_root
+        candidate = safe
+        if not candidate.exists():
+            try:
+                torrent_complete = float(torrent.get("progress", 0)) >= 1
+                file_complete = float(torrent_file.get("progress", 0)) >= 1
+                expected_size = int(torrent_file.get("size"))
+            except (TypeError, ValueError):
+                continue
+
+            state = str(torrent.get("state") or "").strip()
+            if (
+                not torrent_complete
+                or not file_complete
+                or state in QB_ACTIVE_STATES
+                or candidate.parent != download_root
+                or not is_video_file(candidate)
+                or expected_size < 0
+            ):
+                continue
+
+            try:
+                moved_candidate = resolve_safe_download_target(
+                    download_root / candidate.stem / candidate.name,
+                    download_root,
+                )
+            except ValueError:
+                continue
+            try:
+                if not moved_candidate.is_file() or moved_candidate.stat().st_size != expected_size:
+                    continue
+            except OSError:
+                continue
+
+            candidate = moved_candidate
+            organizer_roots.add(candidate.parent)
+
+        if candidate not in seen:
+            seen.add(candidate)
+            safe_candidates.append(candidate)
+
+    return safe_candidates, content_root, organizer_roots
 
 
 def delete_completed_candidates(candidates: list[Path], result: dict[str, Any]) -> None:
@@ -1413,20 +1451,23 @@ def thumbnail_cache_paths_for_video(video_path: Path, download_root: Path) -> li
 def remove_empty_content_directories(
     candidates: list[Path],
     content_root: Path | None,
+    organizer_roots: set[Path],
     result: dict[str, Any],
 ) -> None:
     download_root = settings.download_complete_dir.resolve()
-    if content_root is None or content_root == download_root:
-        return
-
-    directories: set[Path] = set()
-    for candidate in candidates:
-        directory = candidate.parent
-        while directory == content_root or directory.is_relative_to(content_root):
-            directories.add(directory)
-            if directory == content_root:
-                break
-            directory = directory.parent
+    directories = {
+        directory
+        for directory in organizer_roots
+        if directory != download_root and directory.is_relative_to(download_root)
+    }
+    if content_root is not None and content_root != download_root:
+        for candidate in candidates:
+            directory = candidate.parent
+            while directory == content_root or directory.is_relative_to(content_root):
+                directories.add(directory)
+                if directory == content_root:
+                    break
+                directory = directory.parent
 
     for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
         try:
