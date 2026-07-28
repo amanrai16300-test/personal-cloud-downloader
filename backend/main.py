@@ -1339,17 +1339,14 @@ def build_delete_candidates(
         candidate = safe
         if not candidate.exists():
             try:
-                torrent_complete = float(torrent.get("progress", 0)) >= 1
-                file_complete = float(torrent_file.get("progress", 0)) >= 1
                 expected_size = int(torrent_file.get("size"))
             except (TypeError, ValueError):
                 continue
 
             state = str(torrent.get("state") or "").strip()
             if (
-                not torrent_complete
-                or not file_complete
-                or state in QB_ACTIVE_STATES
+                state in QB_ACTIVE_STATES
+                or state == "moving"
                 or candidate.parent != download_root
                 or not is_video_file(candidate)
                 or expected_size < 0
