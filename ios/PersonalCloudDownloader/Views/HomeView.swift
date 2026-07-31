@@ -1139,7 +1139,8 @@ struct HomeView: View {
         Set(items.flatMap { item in
             [
                 "id:\(item.videoId)",
-                "path:\(normalizePath(item.relativePath))"
+                "path:\(normalizePath(item.relativePath))",
+                "artwork:\(item.videoId):\(item.portraitArtworkURL?.absoluteString ?? "")"
             ]
         })
     }
