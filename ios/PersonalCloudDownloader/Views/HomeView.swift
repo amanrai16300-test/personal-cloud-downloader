@@ -56,6 +56,7 @@ struct HomeView: View {
     @State private var selectedVideo: CompletedFile?
     @State private var completedVideosCache: [CompletedFile]?
     @State private var lastProcessedRecentlyAddedSet: Set<String>?
+    @State private var artworkDiagnosticPath: String?
     @State private var isCardMatchInFlight = false
     @State private var showMediaUnavailableAlert = false
 
@@ -779,6 +780,30 @@ struct HomeView: View {
                 mediaArtworkPlaceholder
             }
         }
+        .onAppear {
+            logArtworkDiagnostic(stage: "view-appear", item: item)
+        }
+        .onChange(of: url) { _ in
+            logArtworkDiagnostic(stage: "view-url-change", item: item)
+        }
+    }
+
+    private func logArtworkDiagnostic(
+        stage: String,
+        item: HomeMediaItem,
+        reconciliation: Bool? = nil
+    ) {
+        guard let artworkDiagnosticPath,
+              normalizePath(item.relativePath) == artworkDiagnosticPath else { return }
+        let reconciliationText = reconciliation.map(String.init) ?? "n/a"
+        let effectiveURL = item.portraitArtworkURL?.absoluteString ?? "nil"
+        print(
+            "[HomeArtworkDiag] stage=\(stage) id=\(item.videoId) "
+                + "path=\(item.relativePath) poster=\(item.posterURL ?? "nil") "
+                + "thumbnail=\(item.localThumbnailURL ?? "nil") "
+                + "effective=\(effectiveURL) reconcile=\(reconciliationText) "
+                + "loaderKey=\(effectiveURL) generation=\(refreshGeneration)"
+        )
     }
 
     private var mediaArtworkPlaceholder: some View {
@@ -963,12 +988,24 @@ struct HomeView: View {
 
         guard let response = result?.response else { return }
         let items = response.recentlyAdded ?? []
+        if artworkDiagnosticPath == nil, let firstItem = items.first {
+            artworkDiagnosticPath = normalizePath(firstItem.relativePath)
+        }
         let recentlyAddedSet = recentlyAddedIdentitySet(for: items)
         let shouldReconcileLibrary = await MainActor.run {
             guard generation == refreshGeneration else { return false }
             return forceLibraryReconciliation
                 || completedVideosCache == nil
                 || lastProcessedRecentlyAddedSet != recentlyAddedSet
+        }
+        if let diagnosticItem = items.first(where: {
+            normalizePath($0.relativePath) == artworkDiagnosticPath
+        }) {
+            logArtworkDiagnostic(
+                stage: "refresh-response",
+                item: diagnosticItem,
+                reconciliation: shouldReconcileLibrary
+            )
         }
         guard shouldReconcileLibrary else { return }
 
@@ -992,12 +1029,24 @@ struct HomeView: View {
         }
 
         await MainActor.run {
-            guard generation == refreshGeneration else { return }
+            guard generation == refreshGeneration else {
+                if let diagnosticItem = items.first(where: {
+                    normalizePath($0.relativePath) == artworkDiagnosticPath
+                }) {
+                    logArtworkDiagnostic(stage: "reconcile-rejected", item: diagnosticItem)
+                }
+                return
+            }
             if let fetchedVideos {
                 completedVideosCache = fetchedVideos
                 lastProcessedRecentlyAddedSet = recentlyAddedSet
             }
             dashboard.recentlyAddedEntries = entries
+            if let diagnosticItem = items.first(where: {
+                normalizePath($0.relativePath) == artworkDiagnosticPath
+            }) {
+                logArtworkDiagnostic(stage: "reconcile-applied", item: diagnosticItem)
+            }
         }
     }
 
@@ -1017,6 +1066,10 @@ struct HomeView: View {
         else { return }
 
         let cachedAt = UserDefaults.standard.object(forKey: Self.dashboardCacheTimestampKey) as? Date
+        if let firstItem = cached.recentlyAdded?.first {
+            artworkDiagnosticPath = normalizePath(firstItem.relativePath)
+            logArtworkDiagnostic(stage: "cached-launch", item: firstItem)
+        }
         var state = makeState(
             from: DashboardFetch(response: cached, latencyMs: 0, fetchedAt: cachedAt),
             recentlyAddedEntries: (cached.recentlyAdded ?? [])
