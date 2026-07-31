@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// CloudBox Home: a private-cloud dashboard. The layout follows the locked
 /// reference design — a greeting + wordmark header, a connection panel with a
@@ -56,7 +57,10 @@ struct HomeView: View {
     @State private var selectedVideo: CompletedFile?
     @State private var completedVideosCache: [CompletedFile]?
     @State private var lastProcessedRecentlyAddedSet: Set<String>?
+    // TEMPORARY: in-memory artwork diagnostics. Remove after root cause is proven.
     @State private var artworkDiagnosticPath: String?
+    @State private var artworkDiagnosticLines: [String] = []
+    @State private var showsArtworkDiagnostics = false
     @State private var isCardMatchInFlight = false
     @State private var showMediaUnavailableAlert = false
 
@@ -152,6 +156,9 @@ struct HomeView: View {
                 Text("Refresh Home or check the connection.")
             }
         }
+        .sheet(isPresented: $showsArtworkDiagnostics) {
+            artworkDiagnosticsViewer
+        }
     }
 
     // MARK: Background — subtle deep navy→black, one faint top bloom, no glow.
@@ -183,6 +190,9 @@ struct HomeView: View {
                 .font(.system(size: brandTitleSize, weight: .heavy))
                 .foregroundStyle(Color.white)
                 .lineLimit(2)
+                .onLongPressGesture(minimumDuration: 2) {
+                    showsArtworkDiagnostics = true
+                }
 
             Text("Your private cloud. Always connected.")
                 .font(.subheadline)
@@ -796,14 +806,71 @@ struct HomeView: View {
         guard let artworkDiagnosticPath,
               normalizePath(item.relativePath) == artworkDiagnosticPath else { return }
         let reconciliationText = reconciliation.map(String.init) ?? "n/a"
-        let effectiveURL = item.portraitArtworkURL?.absoluteString ?? "nil"
-        print(
-            "[HomeArtworkDiag] stage=\(stage) id=\(item.videoId) "
-                + "path=\(item.relativePath) poster=\(item.posterURL ?? "nil") "
-                + "thumbnail=\(item.localThumbnailURL ?? "nil") "
-                + "effective=\(effectiveURL) reconcile=\(reconciliationText) "
-                + "loaderKey=\(effectiveURL) generation=\(refreshGeneration)"
-        )
+        let effectiveURL = item.portraitArtworkURL?.absoluteString
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[HomeArtworkDiag] timestamp=\(timestamp) stage=\(stage) id=\(item.videoId) "
+            + "path=\(item.relativePath) poster=\(diagnosticURLReference(item.posterURL)) "
+            + "thumbnail=\(diagnosticURLReference(item.localThumbnailURL)) "
+            + "effective=\(diagnosticURLReference(effectiveURL)) reconcile=\(reconciliationText) "
+            + "loaderKey=\(diagnosticURLReference(effectiveURL)) generation=\(refreshGeneration)"
+
+        print(line)
+        artworkDiagnosticLines.append(line)
+        if artworkDiagnosticLines.count > 200 {
+            artworkDiagnosticLines.removeFirst(artworkDiagnosticLines.count - 200)
+        }
+    }
+
+    /// TEMPORARY: preserves URL equality evidence without exposing URL contents.
+    private func diagnosticURLReference(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "nil" }
+        return "set[key:\(String(raw.hashValue, radix: 16))]"
+    }
+
+    /// TEMPORARY: opened by a two-second long press on the existing Home title.
+    private var artworkDiagnosticsViewer: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView([.horizontal, .vertical]) {
+                    Text(
+                        artworkDiagnosticLines.isEmpty
+                            ? "No artwork diagnostics collected yet."
+                            : artworkDiagnosticLines.joined(separator: "\n")
+                    )
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                }
+
+                Divider()
+
+                HStack {
+                    Button("Clear Logs", role: .destructive) {
+                        artworkDiagnosticLines.removeAll(keepingCapacity: true)
+                    }
+                    .disabled(artworkDiagnosticLines.isEmpty)
+
+                    Spacer()
+
+                    Button("Copy Logs") {
+                        UIPasteboard.general.string = artworkDiagnosticLines.joined(separator: "\n")
+                    }
+                    .disabled(artworkDiagnosticLines.isEmpty)
+                }
+                .padding()
+            }
+            .navigationTitle("Home Artwork Logs")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        showsArtworkDiagnostics = false
+                    }
+                }
+            }
+        }
     }
 
     private var mediaArtworkPlaceholder: some View {
