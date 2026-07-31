@@ -629,7 +629,7 @@ def parse_media_filename(filename: str, parent: str | None = None) -> dict[str, 
     media_type = "movie"
     if tv_match:
         media_type = "tv"
-        subtitle = f"S{int(tv_match.group(1)):02d}E{int(tv_match.group(2)):02d}"
+        subtitle = f"S{int(tv_match.group(1) or 1):02d}E{int(tv_match.group(2)):02d}"
 
     title = clean_home_media_title(cleaned, tv_match, year_match)
 
@@ -654,7 +654,7 @@ def detect_media_year(text: str) -> tuple[int | None, Any]:
 def detect_tv_episode(text: str) -> Any:
     return re.search(r"\bS(\d{1,2})\s?E(\d{1,2})\b", text, re.IGNORECASE) or re.search(
         r"\b(\d{1,2})x(\d{2})\b", text
-    )
+    ) or re.search(r"\b()E(\d{1,3})\b", text, re.IGNORECASE)
 
 
 def clean_home_media_title(cleaned: str, tv_match: Any, year_match: Any) -> str:
