@@ -1121,6 +1121,55 @@ struct HomeView: View {
 
     private static let dashboardCacheKey = "homeDashboardCacheV1"
     private static let dashboardCacheTimestampKey = "homeDashboardCacheTimestampV1"
+    /// Official-artwork memory: normalized relative path → ["poster"/"backdrop"
+    /// → URL string]. The raw dashboard snapshot is the *last* response
+    /// verbatim, which may predate TMDB enrichment; this memory never forgets a
+    /// poster once one has been received, so cache-first launches can prefer it.
+    private static let knownArtworkKey = "homeKnownOfficialArtworkV1"
+
+    /// Record every official poster/backdrop present in a fresh response.
+    /// Existing values are kept when a later response omits them (a response
+    /// can regress to thumbnail-only after a backend restart); entries for
+    /// items no longer on Home are dropped to bound the store.
+    private func rememberOfficialArtwork(from response: HomeDashboardResponse) {
+        let items = (response.recentlyAdded ?? []) + (response.continueWatching.map { [$0] } ?? [])
+        guard !items.isEmpty else { return }
+        let known = UserDefaults.standard.dictionary(forKey: Self.knownArtworkKey) as? [String: [String: String]] ?? [:]
+        var updated: [String: [String: String]] = [:]
+        for item in items {
+            let key = normalizePath(item.relativePath)
+            var entry = updated[key] ?? known[key] ?? [:]
+            if let poster = item.posterURL?.trimmingCharacters(in: .whitespacesAndNewlines), !poster.isEmpty {
+                entry["poster"] = poster
+            }
+            if let backdrop = item.backdropURL?.trimmingCharacters(in: .whitespacesAndNewlines), !backdrop.isEmpty {
+                entry["backdrop"] = backdrop
+            }
+            if !entry.isEmpty { updated[key] = entry }
+        }
+        guard updated != known else { return }
+        UserDefaults.standard.set(updated, forKey: Self.knownArtworkKey)
+    }
+
+    /// Fill missing official artwork on a cached item from the artwork memory.
+    /// The generated thumbnail remains the fallback only when no official
+    /// poster has ever been received for this path.
+    private func mergingRememberedArtwork(_ item: HomeMediaItem) -> HomeMediaItem {
+        let posterMissing = (item.posterURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+        let backdropMissing = (item.backdropURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+        guard posterMissing || backdropMissing,
+              let known = UserDefaults.standard.dictionary(forKey: Self.knownArtworkKey) as? [String: [String: String]],
+              let entry = known[normalizePath(item.relativePath)]
+        else { return item }
+
+        var merged = item
+        if posterMissing, let poster = entry["poster"] { merged.posterURL = poster }
+        if backdropMissing, let backdrop = entry["backdrop"] { merged.backdropURL = backdrop }
+        if merged.posterURL != item.posterURL || merged.backdropURL != item.backdropURL {
+            logArtworkDiagnostic(stage: "artwork-memory-merge", item: merged)
+        }
+        return merged
+    }
 
     /// Render the last-good dashboard snapshot immediately on a cold launch,
     /// before any network round-trip. Connection status and latency always come
@@ -1129,12 +1178,20 @@ struct HomeView: View {
     private func loadCachedDashboardIfNeeded() {
         guard !dashboard.hasLoaded,
               let data = UserDefaults.standard.data(forKey: Self.dashboardCacheKey),
-              let cached = try? JSONDecoder().decode(HomeDashboardResponse.self, from: data)
+              let decodedCache = try? JSONDecoder().decode(HomeDashboardResponse.self, from: data)
         else { return }
+
+        // The snapshot may predate TMDB enrichment; prefer official artwork
+        // already received in past sessions over the generated thumbnail.
+        var cached = decodedCache
+        if let firstItem = cached.recentlyAdded?.first {
+            artworkDiagnosticPath = normalizePath(firstItem.relativePath)
+        }
+        cached.continueWatching = cached.continueWatching.map(mergingRememberedArtwork)
+        cached.recentlyAdded = cached.recentlyAdded?.map(mergingRememberedArtwork)
 
         let cachedAt = UserDefaults.standard.object(forKey: Self.dashboardCacheTimestampKey) as? Date
         if let firstItem = cached.recentlyAdded?.first {
-            artworkDiagnosticPath = normalizePath(firstItem.relativePath)
             logArtworkDiagnostic(stage: "cached-launch", item: firstItem)
         }
         var state = makeState(
@@ -1285,6 +1342,7 @@ struct HomeView: View {
             // snapshot for instant cold-launch rendering.
             UserDefaults.standard.set(data, forKey: Self.dashboardCacheKey)
             UserDefaults.standard.set(fetchedAt, forKey: Self.dashboardCacheTimestampKey)
+            rememberOfficialArtwork(from: decoded)
             return DashboardFetch(
                 response: decoded,
                 latencyMs: Int(elapsedNs / 1_000_000),
@@ -1314,8 +1372,8 @@ private struct HomeDashboardResponse: Decodable {
     let downloads: DownloadsInfo?
     let network: NetworkInfo?
     let rootDisk: RootDiskInfo?
-    let continueWatching: HomeMediaItem?
-    let recentlyAdded: [HomeMediaItem]?
+    var continueWatching: HomeMediaItem?
+    var recentlyAdded: [HomeMediaItem]?
 
     enum CodingKeys: String, CodingKey {
         case server, library, downloads, network
@@ -1406,8 +1464,10 @@ private struct HomeMediaItem: Decodable, Identifiable, Hashable {
     let durationSeconds: Int
     let progress: Double
     let localThumbnailURL: String?
-    let posterURL: String?
-    let backdropURL: String?
+    // Mutable so a cache-first launch can merge official artwork remembered
+    // from earlier sessions into a snapshot that predates TMDB enrichment.
+    var posterURL: String?
+    var backdropURL: String?
     let year: Int?
 
     var id: String { videoId }
