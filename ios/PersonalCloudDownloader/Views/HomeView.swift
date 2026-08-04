@@ -132,7 +132,9 @@ struct HomeView: View {
                 stopRefreshLoop()
             }
             .onChange(of: scenePhase) { phase in
-                if phase != .active {
+                if phase == .active {
+                    restoreRememberedArtworkInRenderedState(stage: "foreground-memory-restore")
+                } else {
                     stopRefreshLoop()
                 }
             }
@@ -782,7 +784,35 @@ struct HomeView: View {
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()
-                    default:
+                            .onAppear {
+                                logArtworkDiagnostic(
+                                    stage: "loader-success",
+                                    item: item,
+                                    selectedURL: url,
+                                    wide: wide
+                                )
+                            }
+                    case .failure:
+                        mediaArtworkPlaceholder
+                            .onAppear {
+                                logArtworkDiagnostic(
+                                    stage: "loader-failure",
+                                    item: item,
+                                    selectedURL: url,
+                                    wide: wide
+                                )
+                            }
+                    case .empty:
+                        mediaArtworkPlaceholder
+                            .onAppear {
+                                logArtworkDiagnostic(
+                                    stage: "loader-empty",
+                                    item: item,
+                                    selectedURL: url,
+                                    wide: wide
+                                )
+                            }
+                    @unknown default:
                         mediaArtworkPlaceholder
                     }
                 }
@@ -791,27 +821,33 @@ struct HomeView: View {
             }
         }
         .onAppear {
-            logArtworkDiagnostic(stage: "view-appear", item: item)
+            logArtworkDiagnostic(stage: "view-appear", item: item, selectedURL: url, wide: wide)
         }
         .onChange(of: url) { _ in
-            logArtworkDiagnostic(stage: "view-url-change", item: item)
+            logArtworkDiagnostic(stage: "view-url-change", item: item, selectedURL: url, wide: wide)
         }
     }
 
     private func logArtworkDiagnostic(
         stage: String,
         item: HomeMediaItem,
-        reconciliation: Bool? = nil
+        reconciliation: Bool? = nil,
+        selectedURL: URL? = nil,
+        wide: Bool = false
     ) {
         guard let artworkDiagnosticPath,
               normalizePath(item.relativePath) == artworkDiagnosticPath else { return }
         let reconciliationText = reconciliation.map(String.init) ?? "n/a"
-        let effectiveURL = item.portraitArtworkURL?.absoluteString
+        let effectiveURL = selectedURL?.absoluteString ?? (wide ? item.wideArtworkURL : item.portraitArtworkURL)?.absoluteString
+        let source = diagnosticArtworkSource(item: item, effectiveURL: effectiveURL, wide: wide)
+        let byteCache = selectedURL.map {
+            URLCache.shared.cachedResponse(for: URLRequest(url: $0)) == nil ? "miss" : "hit"
+        } ?? "n/a"
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let line = "[HomeArtworkDiag] timestamp=\(timestamp) stage=\(stage) id=\(item.videoId) "
-            + "path=\(item.relativePath) poster=\(diagnosticURLReference(item.posterURL)) "
+            + "pathKey=\(diagnosticURLReference(item.relativePath)) poster=\(diagnosticURLReference(item.posterURL)) "
             + "thumbnail=\(diagnosticURLReference(item.localThumbnailURL)) "
-            + "effective=\(diagnosticURLReference(effectiveURL)) reconcile=\(reconciliationText) "
+            + "effective=\(diagnosticURLReference(effectiveURL)) source=\(source) byteCache=\(byteCache) reconcile=\(reconciliationText) "
             + "loaderKey=\(diagnosticURLReference(effectiveURL)) generation=\(refreshGeneration)"
 
         print(line)
@@ -824,7 +860,33 @@ struct HomeView: View {
     /// TEMPORARY: preserves URL equality evidence without exposing URL contents.
     private func diagnosticURLReference(_ raw: String?) -> String {
         guard let raw, !raw.isEmpty else { return "nil" }
-        return "set[key:\(String(raw.hashValue, radix: 16))]"
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in raw.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return "set[key:\(String(hash, radix: 16))]"
+    }
+
+    private func diagnosticArtworkSource(item: HomeMediaItem, effectiveURL: String?, wide: Bool) -> String {
+        guard let effectiveURL else { return "none" }
+        let official = wide ? item.backdropURL : item.posterURL
+        if official?.trimmingCharacters(in: .whitespacesAndNewlines) == effectiveURL { return "official" }
+        if item.localThumbnailURL?.trimmingCharacters(in: .whitespacesAndNewlines) == effectiveURL { return "thumbnail" }
+        return "other"
+    }
+
+    private func logArtworkMemoryDiagnostic(stage: String, outcome: String, before: Int, after: Int) {
+        guard let artworkDiagnosticPath else { return }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[HomeArtworkDiag] timestamp=\(timestamp) stage=\(stage) "
+            + "pathKey=\(diagnosticURLReference(artworkDiagnosticPath)) memory=\(outcome) "
+            + "entriesBefore=\(before) entriesAfter=\(after) generation=\(refreshGeneration)"
+        print(line)
+        artworkDiagnosticLines.append(line)
+        if artworkDiagnosticLines.count > 200 {
+            artworkDiagnosticLines.removeFirst(artworkDiagnosticLines.count - 200)
+        }
     }
 
     /// TEMPORARY: opened by a two-second long press on the existing Home title.
@@ -1147,6 +1209,26 @@ struct HomeView: View {
             }
             if !entry.isEmpty { updated[key] = entry }
         }
+        if let artworkDiagnosticPath {
+            let oldEntry = known[artworkDiagnosticPath]
+            let newEntry = updated[artworkDiagnosticPath]
+            let outcome: String
+            if oldEntry != nil, newEntry == nil {
+                outcome = "pruned"
+            } else if oldEntry == nil, newEntry != nil {
+                outcome = "added"
+            } else if oldEntry != newEntry {
+                outcome = "overwritten"
+            } else {
+                outcome = newEntry == nil ? "absent" : "unchanged"
+            }
+            logArtworkMemoryDiagnostic(
+                stage: "memory-write",
+                outcome: outcome,
+                before: known.count,
+                after: updated.count
+            )
+        }
         guard updated != known else { return }
         UserDefaults.standard.set(updated, forKey: Self.knownArtworkKey)
     }
@@ -1157,9 +1239,18 @@ struct HomeView: View {
     private func mergingRememberedArtwork(_ item: HomeMediaItem) -> HomeMediaItem {
         let posterMissing = (item.posterURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
         let backdropMissing = (item.backdropURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
-        guard posterMissing || backdropMissing,
-              let known = UserDefaults.standard.dictionary(forKey: Self.knownArtworkKey) as? [String: [String: String]],
-              let entry = known[normalizePath(item.relativePath)]
+        let key = normalizePath(item.relativePath)
+        let known = UserDefaults.standard.dictionary(forKey: Self.knownArtworkKey) as? [String: [String: String]]
+        let entry = known?[key]
+        if key == artworkDiagnosticPath {
+            logArtworkMemoryDiagnostic(
+                stage: "memory-lookup",
+                outcome: entry == nil ? (known == nil ? "store-missing" : "key-miss") : "hit",
+                before: known?.count ?? 0,
+                after: known?.count ?? 0
+            )
+        }
+        guard posterMissing || backdropMissing, let entry
         else { return item }
 
         var merged = item
@@ -1171,11 +1262,35 @@ struct HomeView: View {
         return merged
     }
 
+    /// Apply remembered official artwork to state retained while the app was
+    /// backgrounded. The rendered strip owns copies separate from
+    /// `dashboard.recentlyAdded`, so both must be updated before any live fetch.
+    private func restoreRememberedArtworkInRenderedState(stage: String) {
+        dashboard.continueWatching = dashboard.continueWatching.map(mergingRememberedArtwork)
+        dashboard.recentlyAdded = dashboard.recentlyAdded.map(mergingRememberedArtwork)
+        dashboard.recentlyAddedEntries = dashboard.recentlyAddedEntries.map { entry in
+            let kind: RecentlyAddedEntry.Kind
+            switch entry.kind {
+            case .movie(let item):
+                kind = .movie(mergingRememberedArtwork(item))
+            case .series(let folder, let item):
+                kind = .series(folder, mergingRememberedArtwork(item))
+            }
+            return RecentlyAddedEntry(kind: kind, sortDate: entry.sortDate)
+        }
+        if let item = dashboard.recentlyAdded.first(where: {
+            normalizePath($0.relativePath) == artworkDiagnosticPath
+        }) {
+            logArtworkDiagnostic(stage: stage, item: item)
+        }
+    }
+
     /// Render the last-good dashboard snapshot immediately on a cold launch,
     /// before any network round-trip. Connection status and latency always come
     /// from a live fetch, so they stay in the "checking" state; Recently Added
     /// shows ungrouped fallback cards until the live refresh regroups series.
     private func loadCachedDashboardIfNeeded() {
+        restoreRememberedArtworkInRenderedState(stage: "retained-state-memory-restore")
         guard !dashboard.hasLoaded,
               let data = UserDefaults.standard.data(forKey: Self.dashboardCacheKey),
               let decodedCache = try? JSONDecoder().decode(HomeDashboardResponse.self, from: data)
