@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SwiftUI
 import UIKit
@@ -778,42 +779,51 @@ struct HomeView: View {
     @ViewBuilder
     private func mediaArtwork(_ item: HomeMediaItem, wide: Bool) -> some View {
         let url = wide ? item.wideArtworkURL : item.portraitArtworkURL
+        let officialURL = wide ? item.officialBackdropURL : item.officialPosterURL
         Group {
             if let url {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                            .onAppear {
-                                logArtworkDiagnostic(
-                                    stage: "loader-success",
-                                    item: item,
-                                    selectedURL: url,
-                                    wide: wide
-                                )
-                            }
-                    case .failure:
+                if url == officialURL {
+                    HomeOfficialArtworkImage(url: url, isActive: scenePhase == .active) {
                         mediaArtworkPlaceholder
-                            .onAppear {
-                                logArtworkDiagnostic(
-                                    stage: "loader-failure",
-                                    item: item,
-                                    selectedURL: url,
-                                    wide: wide
-                                )
-                            }
-                    case .empty:
-                        mediaArtworkPlaceholder
-                            .onAppear {
-                                logArtworkDiagnostic(
-                                    stage: "loader-empty",
-                                    item: item,
-                                    selectedURL: url,
-                                    wide: wide
-                                )
-                            }
-                    @unknown default:
-                        mediaArtworkPlaceholder
+                    } onEvent: { stage in
+                        logArtworkDiagnostic(stage: stage, item: item, selectedURL: url, wide: wide)
+                    }
+                } else {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                                .onAppear {
+                                    logArtworkDiagnostic(
+                                        stage: "loader-success",
+                                        item: item,
+                                        selectedURL: url,
+                                        wide: wide
+                                    )
+                                }
+                        case .failure:
+                            mediaArtworkPlaceholder
+                                .onAppear {
+                                    logArtworkDiagnostic(
+                                        stage: "loader-failure",
+                                        item: item,
+                                        selectedURL: url,
+                                        wide: wide
+                                    )
+                                }
+                        case .empty:
+                            mediaArtworkPlaceholder
+                                .onAppear {
+                                    logArtworkDiagnostic(
+                                        stage: "loader-empty",
+                                        item: item,
+                                        selectedURL: url,
+                                        wide: wide
+                                    )
+                                }
+                        @unknown default:
+                            mediaArtworkPlaceholder
+                        }
                     }
                 }
             } else {
@@ -1469,6 +1479,181 @@ struct HomeView: View {
     }
 }
 
+/// Official Home artwork only. Generated thumbnails keep using their existing
+/// URL loader and never enter this cache.
+private struct HomeOfficialArtworkImage<Placeholder: View>: View {
+    let url: URL
+    let isActive: Bool
+    @ViewBuilder let placeholder: () -> Placeholder
+    let onEvent: (String) -> Void
+
+    @State private var image: UIImage?
+
+    private var loadID: String {
+        "\(url.absoluteString)|\(isActive)"
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                placeholder()
+            }
+        }
+        .task(id: loadID) {
+            guard isActive else { return }
+            await load()
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        image = nil
+        onEvent("loader-empty")
+
+        if let data = await HomeOfficialArtworkDiskCache.shared.data(for: url) {
+            if let decoded = UIImage(data: data) {
+                guard !Task.isCancelled else { return }
+                image = decoded
+                onEvent("disk-cache-hit")
+                onEvent("loader-success")
+                return
+            }
+            await HomeOfficialArtworkDiskCache.shared.removeEntry(for: url)
+            onEvent("disk-cache-invalid")
+        } else {
+            onEvent("disk-cache-miss")
+        }
+
+        do {
+            var request = URLRequest(url: url)
+            request.cachePolicy = .returnCacheDataElseLoad
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  let decoded = UIImage(data: data) else {
+                throw URLError(.cannotDecodeContentData)
+            }
+            guard !Task.isCancelled else { return }
+            await HomeOfficialArtworkDiskCache.shared.store(data, for: url)
+            image = decoded
+            onEvent("loader-success")
+        } catch is CancellationError {
+            return
+        } catch {
+            onEvent("loader-failure")
+        }
+    }
+}
+
+private actor HomeOfficialArtworkDiskCache {
+    static let shared = HomeOfficialArtworkDiskCache()
+
+    private let directoryName = "CloudBoxHomeOfficialArtworkV1"
+    private let maximumBytes: Int64 = 64 * 1_024 * 1_024
+    private let trimTargetBytes: Int64 = 48 * 1_024 * 1_024
+    private let fileManager = FileManager.default
+
+    func data(for url: URL) -> Data? {
+        guard let fileURL = cacheFileURL(for: url),
+              let data = try? Data(contentsOf: fileURL) else { return nil }
+        try? fileManager.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: fileURL.path
+        )
+        return data
+    }
+
+    func store(_ data: Data, for url: URL) {
+        guard Int64(data.count) <= maximumBytes,
+              let directoryURL = prepareDirectory(),
+              let fileURL = cacheFileURL(for: url, directoryURL: directoryURL) else { return }
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            trimIfNeeded(in: directoryURL)
+        } catch {
+            return
+        }
+    }
+
+    func removeEntry(for url: URL) {
+        guard let fileURL = cacheFileURL(for: url) else { return }
+        try? fileManager.removeItem(at: fileURL)
+    }
+
+    private func cacheFileURL(for url: URL, directoryURL: URL? = nil) -> URL? {
+        let directory = directoryURL ?? existingDirectory()
+        guard let directory else { return nil }
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return directory.appendingPathComponent(digest, isDirectory: false)
+    }
+
+    private func existingDirectory() -> URL? {
+        guard let applicationSupport = try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) else { return nil }
+        let directory = applicationSupport.appendingPathComponent(directoryName, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return directory
+    }
+
+    private func prepareDirectory() -> URL? {
+        guard let applicationSupport = try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else { return nil }
+        var directory = applicationSupport.appendingPathComponent(directoryName, isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? directory.setResourceValues(values)
+            return directory
+        } catch {
+            return nil
+        }
+    }
+
+    private func trimIfNeeded(in directoryURL: URL) {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        let entries = files.compactMap { fileURL -> (URL, Int64, Date)? in
+            guard let values = try? fileURL.resourceValues(forKeys: keys),
+                  values.isRegularFile == true,
+                  let size = values.fileSize else { return nil }
+            return (fileURL, Int64(size), values.contentModificationDate ?? .distantPast)
+        }
+        var totalBytes = entries.reduce(Int64(0)) { $0 + $1.1 }
+        guard totalBytes > maximumBytes else { return }
+
+        for entry in entries.sorted(by: { $0.2 < $1.2 }) where totalBytes > trimTargetBytes {
+            do {
+                try fileManager.removeItem(at: entry.0)
+                totalBytes -= entry.1
+            } catch {
+                continue
+            }
+        }
+    }
+}
+
 /// A successful dashboard fetch plus the measured client round-trip latency.
 private struct DashboardFetch {
     let response: HomeDashboardResponse
@@ -1651,14 +1836,17 @@ private struct HomeMediaItem: Decodable, Identifiable, Hashable {
     /// Wide artwork (Continue Watching): TMDB backdrop preferred, else the local
     /// thumbnail. nil → placeholder.
     var wideArtworkURL: URL? {
-        validURL(backdropURL) ?? validURL(localThumbnailURL)
+        officialBackdropURL ?? validURL(localThumbnailURL)
     }
 
     /// Portrait artwork (Recently Added): TMDB poster preferred, else the local
     /// thumbnail. nil → placeholder.
     var portraitArtworkURL: URL? {
-        validURL(posterURL) ?? validURL(localThumbnailURL)
+        officialPosterURL ?? validURL(localThumbnailURL)
     }
+
+    var officialPosterURL: URL? { validURL(posterURL) }
+    var officialBackdropURL: URL? { validURL(backdropURL) }
 
     private func validURL(_ raw: String?) -> URL? {
         guard let raw else { return nil }
