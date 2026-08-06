@@ -1118,11 +1118,15 @@ struct HomeView: View {
         let result = await fetchDashboard()
 
         // Phase 1: apply the dashboard as soon as it arrives — first paint
-        // never waits for the library fetch. The current Recently Added
-        // entries stay on screen until the regrouped set lands.
+        // never waits for the library fetch. Current Recently Added card
+        // identities stay stable while their artwork is refreshed immediately.
         await MainActor.run {
             guard generation == refreshGeneration else { return }
-            dashboard = makeState(from: result, recentlyAddedEntries: dashboard.recentlyAddedEntries)
+            let renderedEntries = updatingRenderedArtwork(
+                in: dashboard.recentlyAddedEntries,
+                from: result?.response.recentlyAdded ?? []
+            )
+            dashboard = makeState(from: result, recentlyAddedEntries: renderedEntries)
         }
 
         guard let response = result?.response else { return }
@@ -1278,7 +1282,7 @@ struct HomeView: View {
     private func restoreRememberedArtworkInRenderedState(stage: String) {
         dashboard.continueWatching = dashboard.continueWatching.map(mergingRememberedArtwork)
         dashboard.recentlyAdded = dashboard.recentlyAdded.map(mergingRememberedArtwork)
-        dashboard.recentlyAddedEntries = dashboard.recentlyAddedEntries.map { entry in
+        let rememberedEntries = dashboard.recentlyAddedEntries.map { entry in
             let kind: RecentlyAddedEntry.Kind
             switch entry.kind {
             case .movie(let item):
@@ -1288,11 +1292,71 @@ struct HomeView: View {
             }
             return RecentlyAddedEntry(kind: kind, sortDate: entry.sortDate)
         }
+        dashboard.recentlyAddedEntries = updatingRenderedArtwork(
+            in: rememberedEntries,
+            from: dashboard.recentlyAdded
+        )
         if let item = dashboard.recentlyAdded.first(where: {
             normalizePath($0.relativePath) == artworkDiagnosticPath
         }) {
             logArtworkDiagnostic(stage: stage, item: item)
         }
+    }
+
+    /// Refresh only the artwork carried by retained cards. Their identity,
+    /// grouping, ordering, and navigation stay stable until reconciliation.
+    private func updatingRenderedArtwork(
+        in entries: [RecentlyAddedEntry],
+        from items: [HomeMediaItem]
+    ) -> [RecentlyAddedEntry] {
+        guard !entries.isEmpty, !items.isEmpty else { return entries }
+
+        return entries.map { entry in
+            let kind: RecentlyAddedEntry.Kind
+            switch entry.kind {
+            case .movie(let item):
+                guard let source = matchingArtworkItem(for: item, in: items) else { return entry }
+                kind = .movie(applyingOfficialArtwork(from: source, to: item))
+
+            case .series(let folder, let item):
+                let matchingSource = matchingArtworkItem(for: item, in: items)
+                let source = (matchingSource?.officialPosterURL != nil ? matchingSource : nil)
+                    ?? items.first(where: { candidate in
+                        candidate.officialPosterURL != nil
+                            && matchVideo(for: candidate, in: folder.videos) != nil
+                    })
+                guard let source else { return entry }
+                kind = .series(folder, applyingOfficialArtwork(from: source, to: item))
+            }
+            return RecentlyAddedEntry(kind: kind, sortDate: entry.sortDate)
+        }
+    }
+
+    private func matchingArtworkItem(
+        for item: HomeMediaItem,
+        in items: [HomeMediaItem]
+    ) -> HomeMediaItem? {
+        items.first(where: { $0.videoId == item.videoId })
+            ?? items.first(where: {
+                normalizePath($0.relativePath) == normalizePath(item.relativePath)
+            })
+    }
+
+    private func applyingOfficialArtwork(
+        from source: HomeMediaItem,
+        to item: HomeMediaItem
+    ) -> HomeMediaItem {
+        var updated = item
+        if source.officialPosterURL != nil {
+            updated.posterURL = source.posterURL
+        }
+        if source.officialBackdropURL != nil {
+            updated.backdropURL = source.backdropURL
+        }
+        if updated.posterURL != item.posterURL || updated.backdropURL != item.backdropURL {
+            logArtworkDiagnostic(stage: "rendered-entry-artwork-refresh", item: updated)
+        }
+        return updated
     }
 
     /// Render the last-good dashboard snapshot immediately on a cold launch,
