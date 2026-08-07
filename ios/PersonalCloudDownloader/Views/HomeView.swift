@@ -904,11 +904,12 @@ struct HomeView: View {
               normalizePath(raw.relativePath) == artworkDiagnosticPath else { return }
         let known = UserDefaults.standard.dictionary(forKey: Self.knownArtworkKey) as? [String: [String: String]]
         let remembered = known?[artworkDiagnosticPath]
+        let rememberedPoster = remembered?["poster"]
         let effectiveURL = merged.portraitArtworkURL?.absoluteString
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let line = "[HomeArtworkDiag] timestamp=\(timestamp) stage=fresh-memory-merge id=\(merged.videoId) "
             + "pathKey=\(diagnosticURLReference(merged.relativePath)) rawPoster=\(diagnosticURLReference(raw.posterURL)) "
-            + "rememberedPoster=\(diagnosticURLReference(remembered?[\"poster\"])) mergedPoster=\(diagnosticURLReference(merged.posterURL)) "
+            + "rememberedPoster=\(diagnosticURLReference(rememberedPoster)) mergedPoster=\(diagnosticURLReference(merged.posterURL)) "
             + "source=\(diagnosticArtworkSource(item: merged, effectiveURL: effectiveURL, wide: false)) generation=\(refreshGeneration)"
         print(line)
         artworkDiagnosticLines.append(line)
