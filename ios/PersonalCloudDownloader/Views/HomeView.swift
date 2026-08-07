@@ -1295,28 +1295,6 @@ struct HomeView: View {
         return merged
     }
 
-    private func forcingMissingPosterForArtworkTest(in response: HomeDashboardResponse) -> HomeDashboardResponse { // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        guard let artworkDiagnosticPath, // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-              let known = UserDefaults.standard.dictionary(forKey: Self.knownArtworkKey) as? [String: [String: String]], // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-              let rememberedPoster = known[artworkDiagnosticPath]?["poster"], // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-              !rememberedPoster.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-              var items = response.recentlyAdded, // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-              let index = items.firstIndex(where: { normalizePath($0.relativePath) == artworkDiagnosticPath }), // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-              items[index].officialPosterURL != nil // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        else { return response } // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        var forced = response // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        items[index].posterURL = nil // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        forced.recentlyAdded = items // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        let timestamp = ISO8601DateFormatter().string(from: Date()) // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        let line = "[HomeArtworkDiag] timestamp=\(timestamp) stage=forced-missing-poster-test posterBefore=set forcedPoster=nil rememberedPoster=set generation=\(refreshGeneration)" // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        print(line) // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        artworkDiagnosticLines.append(line) // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        if artworkDiagnosticLines.count > 200 { // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-            artworkDiagnosticLines.removeFirst(artworkDiagnosticLines.count - 200) // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        } // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-        return forced // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-    } // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
-
     /// Fresh dashboard payloads can arrive before TMDB enrichment completes.
     /// Preserve only remembered official artwork; every other fresh field stays
     /// authoritative and unchanged.
@@ -1591,9 +1569,8 @@ struct HomeView: View {
             // snapshot for instant cold-launch rendering.
             UserDefaults.standard.set(data, forKey: Self.dashboardCacheKey)
             UserDefaults.standard.set(fetchedAt, forKey: Self.dashboardCacheTimestampKey)
-            let forcedTestResponse = forcingMissingPosterForArtworkTest(in: decoded) // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
             rememberOfficialArtwork(from: decoded)
-            let merged = mergingRememberedArtwork(into: forcedTestResponse) // TEMP ARTWORK FORCED TEST — REMOVE AFTER VERIFICATION
+            let merged = mergingRememberedArtwork(into: decoded)
             return DashboardFetch(
                 response: merged,
                 latencyMs: Int(elapsedNs / 1_000_000),
