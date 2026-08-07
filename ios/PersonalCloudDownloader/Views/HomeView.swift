@@ -899,6 +899,24 @@ struct HomeView: View {
         }
     }
 
+    private func logFreshArtworkMemoryMerge(raw: HomeMediaItem, merged: HomeMediaItem) {
+        guard let artworkDiagnosticPath,
+              normalizePath(raw.relativePath) == artworkDiagnosticPath else { return }
+        let known = UserDefaults.standard.dictionary(forKey: Self.knownArtworkKey) as? [String: [String: String]]
+        let remembered = known?[artworkDiagnosticPath]
+        let effectiveURL = merged.portraitArtworkURL?.absoluteString
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[HomeArtworkDiag] timestamp=\(timestamp) stage=fresh-memory-merge id=\(merged.videoId) "
+            + "pathKey=\(diagnosticURLReference(merged.relativePath)) rawPoster=\(diagnosticURLReference(raw.posterURL)) "
+            + "rememberedPoster=\(diagnosticURLReference(remembered?[\"poster\"])) mergedPoster=\(diagnosticURLReference(merged.posterURL)) "
+            + "source=\(diagnosticArtworkSource(item: merged, effectiveURL: effectiveURL, wide: false)) generation=\(refreshGeneration)"
+        print(line)
+        artworkDiagnosticLines.append(line)
+        if artworkDiagnosticLines.count > 200 {
+            artworkDiagnosticLines.removeFirst(artworkDiagnosticLines.count - 200)
+        }
+    }
+
     /// TEMPORARY: opened by a two-second long press on the existing Home title.
     private var artworkDiagnosticsViewer: some View {
         NavigationStack {
@@ -1276,6 +1294,25 @@ struct HomeView: View {
         return merged
     }
 
+    /// Fresh dashboard payloads can arrive before TMDB enrichment completes.
+    /// Preserve only remembered official artwork; every other fresh field stays
+    /// authoritative and unchanged.
+    private func mergingRememberedArtwork(into response: HomeDashboardResponse) -> HomeDashboardResponse {
+        let rawDiagnosticItem = response.recentlyAdded?.first(where: {
+            normalizePath($0.relativePath) == artworkDiagnosticPath
+        })
+        var merged = response
+        merged.continueWatching = merged.continueWatching.map(mergingRememberedArtwork)
+        merged.recentlyAdded = merged.recentlyAdded?.map(mergingRememberedArtwork)
+        if let rawDiagnosticItem,
+           let mergedDiagnosticItem = merged.recentlyAdded?.first(where: {
+               normalizePath($0.relativePath) == artworkDiagnosticPath
+           }) {
+            logFreshArtworkMemoryMerge(raw: rawDiagnosticItem, merged: mergedDiagnosticItem)
+        }
+        return merged
+    }
+
     /// Apply remembered official artwork to state retained while the app was
     /// backgrounded. The rendered strip owns copies separate from
     /// `dashboard.recentlyAdded`, so both must be updated before any live fetch.
@@ -1532,8 +1569,9 @@ struct HomeView: View {
             UserDefaults.standard.set(data, forKey: Self.dashboardCacheKey)
             UserDefaults.standard.set(fetchedAt, forKey: Self.dashboardCacheTimestampKey)
             rememberOfficialArtwork(from: decoded)
+            let merged = mergingRememberedArtwork(into: decoded)
             return DashboardFetch(
-                response: decoded,
+                response: merged,
                 latencyMs: Int(elapsedNs / 1_000_000),
                 fetchedAt: fetchedAt
             )
