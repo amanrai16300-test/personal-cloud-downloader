@@ -296,25 +296,55 @@ Remaining web follow-ups are lower priority: production browser verification of 
 
 TMDB artwork remains server-side metadata enrichment. Missing keys, network failures, non-200 responses, parse failures, and no matches return safely without failing the dashboard; the key is never returned to iOS.
 
-### Home poster-artwork investigation and backend fix — August 2026
+### Home official-poster regression resolution — August 2026
 
-- Home movie/series cards sometimes showed a generated video-frame screenshot instead of official TMDB poster artwork after the app remained unused for several hours or overnight. Force-closing and reopening previously made the official artwork appear, initially suggesting stale iOS reconciliation or image-cache state.
-- The first iOS attempt added the effective portrait artwork URL to the Home reconciliation signature in `ios/PersonalCloudDownloader/Views/HomeView.swift` (`6810443`). This allows artwork-source changes to participate in reconciliation, but it did not fix the newly downloaded episode because the backend response itself still contained no poster.
-- Narrow `[HomeArtworkDiag]` logging was added in `0b64067`. Because Xcode/device-console access was unavailable, `4edb511` added a temporary in-app viewer opened by pressing and holding the `CloudBox` Home title for approximately two seconds.
-- The temporary viewer stores only the latest 200 timestamped lines in memory and provides Copy Logs and Clear Logs. URL values are represented by credential-safe hashes rather than full potentially sensitive URLs.
-- Diagnostics proved that both cache-first launch and every fresh `GET /api/home-dashboard` response contained no official poster, a generated `local_thumbnail_url`, and that thumbnail selected as effective artwork. iOS successfully received and reconciled the refreshed data, proving the primary failure was not `AsyncImage`, browser/image caching, or stale SwiftUI view state.
-- Proven backend root cause: bare episode markers such as `E06` were not recognized as TV episodes. Normal `SxxExx` names were recognized, but bare `Exx` names were classified as movies and retained the episode marker in the metadata query title. TMDB movie lookup therefore returned no valid poster, `poster_url` remained null, and Home correctly fell back to the generated video-frame thumbnail.
-- The local fix is in `backend/main.py`, commit `d2c3f48`, on `ui/cloudbox-responsive-redesign`. Bare `Exx` markers are now recognized as TV episodes; absent explicit seasons safely default to season 1; the clean series title and year drive TMDB TV lookup; and series-level TMDB metadata/cache can be reused across episodes.
-- Existing `SxxExx` parsing, movie metadata, generated thumbnails, Home response shape, downloader behavior, and iOS compatibility remain unchanged. Official `poster_url` remains preferred; `local_thumbnail_url` remains available only as fallback.
+- Root cause: a fresh `GET /api/home-dashboard` response could temporarily arrive before TMDB enrichment completed, with `poster_url = nil`. During reconciliation, iOS treated that nil as authoritative and downgraded a previously known official poster to `local_thumbnail_url`. The generated video-frame screenshot then appeared until a later enriched refresh restored the official poster.
+- Production fix: `ios/PersonalCloudDownloader/Views/HomeView.swift` remembers previously confirmed official artwork. After decoding a fresh dashboard response and before reconciliation, it independently merges the remembered poster and backdrop into only the corresponding missing fresh artwork fields. Fresh non-nil official artwork always wins. A generated thumbnail remains fallback only when neither fresh nor remembered official artwork exists.
+- This is an iOS reconciliation fix, not a backend workaround. No Oracle deployment was required for it.
+- Existing supporting behavior remains intact: `homeKnownOfficialArtworkV1` official-artwork memory, foreground artwork restoration, the persistent official-artwork disk cache, and the existing Home artwork diagnostics and in-app diagnostic viewer. Generated thumbnails remain outside the official-artwork cache.
+- Relevant commit history:
+  - `d2c3f48` — earlier backend bare-`Exx` episode parser fix; already deployed to Oracle and remains valid independently of the final iOS fix.
+  - `4eca932` — Preserve official Home artwork during refresh.
+  - `a28c6a4` — Fix Home artwork diagnostic compile error.
+  - `abe4277` — Add temporary Home artwork forced test.
+  - `aae841a` — Remove temporary Home artwork forced test.
 
-### Oracle deployment and current verification state
+### Deterministic verification evidence
 
-- `backend/main.py` was manually deployed to `/home/ubuntu/personal-cloud-downloader/backend/main.py`. Oracle is not a Git repository, so deployment used `scp`, backup, compile check, replacement, and service restart rather than Git operations.
-- `python3 -m py_compile` passed for both the uploaded temporary file and the live backend. `personal-downloader-api.service` restarted successfully and remained active. `GET /api/health` returned `{"status":"ok"}`.
-- Repeated `GET /api/home-dashboard` requests confirmed formerly affected bare-episode items now return a normalized subtitle such as `S01E06`, `media_type: "tv"`, a valid TMDB TV ID, non-null `poster_url`, non-null `backdrop_url`, and the generated `local_thumbnail_url` still present as fallback.
-- The installed iOS app refreshed and replaced the generated screenshot with the official series poster. No new IPA was required because the installed diagnostic IPA already contained the artwork-URL reconciliation change.
-- The immediate affected-episode device test passed, and the backend now supplies official TV poster metadata for bare `Exx` filenames. The original several-hours/overnight scenario is not yet fully verified, so the issue must not yet be described as fully closed or permanently device-verified.
-- Keep the diagnostic IPA and temporary logs until one real overnight or several-hours-background test confirms official posters remain correct or upgrade automatically after normal Home refresh.
+- The temporary forced test applied only to the existing diagnostic Recently Added item and activated only when remembered official artwork already existed.
+- After dashboard decode and before `mergingRememberedArtwork`, the test deliberately forced only the fresh poster to nil. It did not change the thumbnail, backdrop, title, IDs, grouping, progress, navigation, ordering, backend data, or any other media item.
+- The test repeatedly exercised the failure condition from approximately refresh generation 2 through generation 25.
+- The repeated diagnostic sequence was:
+
+```text
+forced-missing-poster-test
+posterBefore=set
+forcedPoster=nil
+rememberedPoster=set
+
+→ fresh-memory-merge
+rawPoster=nil
+rememberedPoster=set
+mergedPoster=set
+source=official
+
+→ refresh-response
+poster=set
+source=official
+```
+
+- The first applicable reconciliation showed `reconcile-applied poster=set source=official`.
+- Subsequent refreshes correctly showed `reconcile=false` because the effective official artwork no longer changed.
+- No tested forced cycle downgraded to `source=thumbnail`. The production merge therefore prevented the exact known failure condition.
+- Commit `aae841a` completely removed the temporary forced-test helper and all `TEMP ARTWORK FORCED TEST` code.
+
+### Production and real-device verification
+
+- The earlier backend parser fix in `d2c3f48` remains manually deployed and production-verified on Oracle. It is separate from the final iOS reconciliation fix.
+- The final normal IPA was built from commit `aae841a` on branch `ui/cloudbox-responsive-redesign` and installed on the iPhone.
+- Home worked correctly immediately. Verification passed again after more than six hours of inactivity/background time.
+- On reopen, the correct official poster appeared immediately; the generated movie-scene screenshot did not appear first.
+- Final status: the original long-duration Home official-poster regression is device-verified fixed.
 
 ## 9. Current Markdown Converter
 
@@ -430,15 +460,20 @@ Authoritative branches:
 - Branch is pushed and tracks `origin/fix/cloudbox-audit-reliability`.
 - Working tree was clean after the main push.
 - `ui/cloudbox-responsive-redesign` is the current production-deployed Web Downloader redesign branch. Confirmed pushed commits include `8316905` and `3764b05`; later Phase 5, Phase 6, toast-polish, and cache-busting commits exist on the same branch without hashes recorded here.
-- The latest Home poster-artwork investigation and deployed backend parser fix were also completed on `ui/cloudbox-responsive-redesign`, which is pushed to GitHub. Relevant commits are:
+- The Home poster-artwork investigation and fixes were completed on `ui/cloudbox-responsive-redesign`, which is pushed to GitHub. Relevant earlier commits include:
   - `6810443` — artwork URL added to the Home reconciliation signature.
   - `0b64067` — temporary Home artwork diagnostics.
   - `4edb511` — temporary in-app artwork log viewer.
-  - `d2c3f48` — bare-episode poster metadata lookup fix.
-- Backend commit `d2c3f48` is manually deployed and production-verified on Oracle. This newer work does not replace the authoritative `fix/cloudbox-audit-reliability` history above.
+  - `d2c3f48` — earlier bare-episode poster metadata lookup fix, manually deployed and production-verified on Oracle.
+  - `4eca932` — Preserve official Home artwork during refresh.
+  - `a28c6a4` — Fix Home artwork diagnostic compile error.
+  - `abe4277` — Add temporary Home artwork forced test.
+  - `aae841a` — Remove temporary Home artwork forced test.
+- The final normal, device-verified IPA was built from `aae841a` on `ui/cloudbox-responsive-redesign`. This branch is not documented as merged into `main`.
+- The final reconciliation fix was iOS-only and required no Oracle/backend update. Backend commit `d2c3f48` remains separately deployed and valid.
 - Oracle deploys are manual because the Oracle directory is not a Git repository.
 - IPA workflow is manual-only.
-- Current consolidated IPA builds must use `fix/cloudbox-audit-reliability`.
+- The consolidated audit IPA history remains on `fix/cloudbox-audit-reliability`; the final verified Home-poster IPA was built from `aae841a` on `ui/cloudbox-responsive-redesign`.
 - Do not use `feature/series-progress-fix-current-ui`, `feature/subtitle-gesture-controls`, or `feature/video-thumbnails-v2` for current builds. They may remain historical milestones.
 - Neither current branch is documented as merged into `main`; do not claim either is merged unless that is later verified.
 
@@ -455,6 +490,7 @@ Authoritative branches:
 - Backend storage separation is deployed and production-verified.
 - The consolidated IPA from `fix/cloudbox-audit-reliability` built successfully, was installed, and is working.
 - The latest Home foreground reconnect fix is built, installed, and iPhone-verified.
+- The August 2026 long-duration Home official-poster regression is fixed in iOS and device-verified, including after more than six hours of inactivity/background time.
 - Backend, Downloader, Home, Videos, folders, Player, Network, Trends, Markdown Converter, qBittorrent WebView, Files WebView, TMDB artwork, subtitles, AVPlayer/VLC progress, and reconnect infrastructure are operational.
 - Everything remains private through Tailscale.
 - 10GB is guidance only; legal-files-only, Tailscale-private, and quick-delete rules remain mandatory.
@@ -462,15 +498,11 @@ Authoritative branches:
 
 ## 16. Remaining follow-ups
 
-### Home poster overnight verification and temporary diagnostic removal
+### Home artwork diagnostic cleanup
 
-1. Open the app after it has remained unused or backgrounded for several hours or overnight.
-2. Confirm cached official posters remain visible or upgrade after the normal Home refresh without force-closing.
-3. Confirm diagnostic output shows the official poster selected as effective artwork.
-4. After that verification, remove only the temporary `[HomeArtworkDiag]` logging, in-memory log storage, 200-line buffer, long-press diagnostic viewer, Copy Logs, and Clear Logs UI from `HomeView.swift`.
-5. Keep the effective portrait artwork URL in the reconciliation signature unless code evidence proves it is unnecessary.
-6. Build and install one clean IPA after diagnostic removal.
-7. Do not remove or regress cache-first launch, generation guards, forced reconnect refresh, 12-second Home polling, offline cached data, poster-first precedence, generated-thumbnail fallback, navigation, card layout, or Continue Watching behavior.
+- Low priority only: later remove `[HomeArtworkDiag]` logging and the in-app artwork diagnostic viewer if they are no longer useful.
+- Diagnostic cleanup is not a blocker and does not reopen the device-verified fixed poster issue.
+- Any cleanup must preserve `homeKnownOfficialArtworkV1`, foreground artwork restoration, the persistent official-artwork disk cache, fresh-over-remembered official-artwork precedence, generated-thumbnail fallback, cache-first launch, generation guards, forced reconnect refresh, 12-second Home polling, offline cached data, navigation, card layout, and Continue Watching behavior.
 
 ### Runtime/configuration checks
 
