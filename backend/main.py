@@ -174,6 +174,7 @@ MARKDOWN_URL_MAX_REDIRECTS = 5
 DIRECT_DOWNLOAD_TIMEOUT_SECONDS = 15
 DIRECT_DOWNLOAD_MAX_REDIRECTS = 5
 DIRECT_DOWNLOAD_GOOGLE_CONFIRMATION_MAX_BYTES = 512 * 1024
+DIRECT_DOWNLOAD_DIRECT_CLOUD_MAX_BYTES = 512 * 1024
 DIRECT_DOWNLOAD_STAGING_DIR_NAME = ".cloudbox-direct-downloads"
 DIRECT_DOWNLOAD_HTML_PREFIX_RE = re.compile(
     rb"^\s*(?:\xef\xbb\xbf)?(?:<!--.*?-->\s*)*"
@@ -1510,6 +1511,127 @@ def google_drive_public_download_url(url: str) -> str:
     return download_url
 
 
+def direct_cloud_storage_landing_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or hostname not in {"dl.direct-cloud.top", "storage.direct-cloud.org"}
+        or not parsed.path.startswith("/d/")
+        or parsed.path == "/d/"
+    ):
+        return None
+    return parsed._replace(
+        scheme="https",
+        netloc="storage.direct-cloud.org",
+        fragment="",
+    ).geturl()
+
+
+class _DirectCloudLandingParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.credentials: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if attributes.get("id") == "generate_url":
+            self.credentials.append(
+                (
+                    attributes.get("data-uid", ""),
+                    attributes.get("data-token", ""),
+                )
+            )
+
+
+def direct_cloud_download_url(
+    session: requests.Session,
+    response: requests.Response,
+    response_url: str,
+) -> str | None:
+    landing_url = direct_cloud_storage_landing_url(response_url)
+    response_host = (urlparse(response_url).hostname or "").lower().rstrip(".")
+    if landing_url is None or response_host != "storage.direct-cloud.org":
+        return None
+
+    with suppress(TypeError, ValueError):
+        if int(response.headers.get("content-length", "")) > DIRECT_DOWNLOAD_DIRECT_CLOUD_MAX_BYTES:
+            return None
+
+    body = bytearray()
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        body.extend(chunk)
+        if len(body) > DIRECT_DOWNLOAD_DIRECT_CLOUD_MAX_BYTES:
+            return None
+
+    parser = _DirectCloudLandingParser()
+    parser.feed(body.decode("utf-8", errors="replace"))
+    parser.close()
+    if len(parser.credentials) != 1:
+        return None
+    raw_uid, raw_access_token = parser.credentials[0]
+    if not isinstance(raw_uid, str) or not isinstance(raw_access_token, str):
+        return None
+    uid, access_token = raw_uid.strip(), raw_access_token.strip()
+    if not uid or not access_token or len(uid) > 4096 or len(access_token) > 4096:
+        return None
+
+    action_url = "https://storage.direct-cloud.org/action"
+    try:
+        action_response = session.post(
+            normalize_direct_download_url(action_url),
+            timeout=DIRECT_DOWNLOAD_TIMEOUT_SECONDS,
+            stream=True,
+            allow_redirects=False,
+            headers={
+                "Accept": "application/json",
+                "Accept-Encoding": "identity",
+                "Origin": "https://storage.direct-cloud.org",
+                "Referer": response_url,
+                "User-Agent": "CloudBox Direct Download/1.0",
+                "X-Requested-With": "xmlhttprequest",
+            },
+            json={
+                "type": "DOWNLOAD_GENERATE",
+                "payload": {
+                    "uid": uid,
+                    "access_token": access_token,
+                },
+            },
+        )
+    except requests.Timeout as exc:
+        raise HTTPException(status_code=504, detail="Direct Cloud link timed out.") from exc
+    except RequestException as exc:
+        raise HTTPException(status_code=502, detail="Direct Cloud link is unreachable.") from exc
+
+    try:
+        reject_non_global_direct_download_peer(action_response)
+        if action_response.status_code != 200:
+            raise HTTPException(status_code=422, detail="Direct Cloud link could not be resolved.")
+
+        action_body = bytearray()
+        for chunk in action_response.iter_content(chunk_size=64 * 1024):
+            action_body.extend(chunk)
+            if len(action_body) > DIRECT_DOWNLOAD_DIRECT_CLOUD_MAX_BYTES:
+                raise HTTPException(status_code=422, detail="Direct Cloud link could not be resolved.")
+        try:
+            action_data = json.loads(action_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail="Direct Cloud link could not be resolved.") from exc
+
+        if not isinstance(action_data, dict):
+            raise HTTPException(status_code=422, detail="Direct Cloud link could not be resolved.")
+        download_url = action_data.get("download_url")
+        if action_data.get("status") is not True or not isinstance(download_url, str):
+            raise HTTPException(status_code=422, detail="Direct Cloud link could not be resolved.")
+        normalized_download_url = normalize_direct_download_url(download_url)
+        if urlparse(normalized_download_url).scheme != "https":
+            raise HTTPException(status_code=422, detail="Direct Cloud link could not be resolved.")
+        return normalized_download_url
+    finally:
+        action_response.close()
+
+
 class _GoogleDriveConfirmationParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -1614,6 +1736,9 @@ def open_validated_direct_download(
     session.mount("http://", _DirectDownloadHTTPAdapter())
     session.mount("https://", _DirectDownloadHTTPAdapter())
     current_url = normalize_direct_download_url(url)
+    direct_cloud_landing_url = direct_cloud_storage_landing_url(current_url)
+    if direct_cloud_landing_url is not None:
+        current_url = normalize_direct_download_url(direct_cloud_landing_url)
     initial_url = urlparse(current_url)
     google_drive_file_id = (
         (parse_qs(initial_url.query).get("id") or [None])[0]
@@ -1621,6 +1746,7 @@ def open_validated_direct_download(
         else None
     )
     google_confirmation_followed = False
+    direct_cloud_resolver_followed = False
     try:
         for _ in range(DIRECT_DOWNLOAD_MAX_REDIRECTS + 1):
             try:
@@ -1652,6 +1778,7 @@ def open_validated_direct_download(
                 if response.status_code != 200:
                     raise HTTPException(status_code=422, detail="URL is not publicly downloadable.")
                 if direct_download_response_is_html(response):
+                    direct_cloud_url = None
                     confirmation_url = (
                         google_drive_confirmation_url(
                             response,
@@ -1661,9 +1788,19 @@ def open_validated_direct_download(
                         if not google_confirmation_followed
                         else None
                     )
+                    if confirmation_url is None and not direct_cloud_resolver_followed:
+                        direct_cloud_url = direct_cloud_download_url(
+                            session,
+                            response,
+                            current_url,
+                        )
+                        confirmation_url = direct_cloud_url
                     if confirmation_url is None:
                         raise HTTPException(status_code=415, detail="HTML landing pages cannot be downloaded.")
-                    google_confirmation_followed = True
+                    if direct_cloud_url is not None:
+                        direct_cloud_resolver_followed = True
+                    else:
+                        google_confirmation_followed = True
                     current_url = confirmation_url
                     continue
                 keep_response_open = True
