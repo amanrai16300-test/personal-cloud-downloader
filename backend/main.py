@@ -28,6 +28,10 @@ from markitdown import MarkItDown
 from pydantic import BaseModel
 import requests
 from requests import RequestException
+from requests.adapters import HTTPAdapter
+from urllib3 import PoolManager
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from qb_client import QBittorrentClient
 from settings import settings
@@ -1411,19 +1415,73 @@ def reject_non_global_direct_download_url(parsed_url: Any) -> None:
         raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
 
 
+class _DirectDownloadPeerConnectionMixin:
+    def getresponse(self) -> Any:
+        peer_socket = getattr(self, "sock", None)
+        try:
+            peer = peer_socket.getpeername()
+        except (AttributeError, OSError):
+            peer = None
+        response = super().getresponse()
+        response._cloudbox_peer = peer
+        return response
+
+
+class _DirectDownloadHTTPConnection(_DirectDownloadPeerConnectionMixin, HTTPConnection):
+    pass
+
+
+class _DirectDownloadHTTPSConnection(_DirectDownloadPeerConnectionMixin, HTTPSConnection):
+    pass
+
+
+class _DirectDownloadHTTPConnectionPool(HTTPConnectionPool):
+    ConnectionCls = _DirectDownloadHTTPConnection
+
+
+class _DirectDownloadHTTPSConnectionPool(HTTPSConnectionPool):
+    ConnectionCls = _DirectDownloadHTTPSConnection
+
+
+class _DirectDownloadHTTPAdapter(HTTPAdapter):
+    def init_poolmanager(
+        self,
+        connections: int,
+        maxsize: int,
+        block: bool = False,
+        **pool_kwargs: Any,
+    ) -> None:
+        self.poolmanager = PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            **pool_kwargs,
+        )
+        self.poolmanager.pool_classes_by_scheme = dict(self.poolmanager.pool_classes_by_scheme)
+        self.poolmanager.pool_classes_by_scheme.update(
+            http=_DirectDownloadHTTPConnectionPool,
+            https=_DirectDownloadHTTPSConnectionPool,
+        )
+
+
 def reject_non_global_direct_download_peer(response: requests.Response) -> None:
-    connection = getattr(response.raw, "connection", None)
-    peer_socket = getattr(connection, "sock", None)
-    if peer_socket is None:
-        original_response = getattr(response.raw, "_fp", None)
-        buffered_reader = getattr(original_response, "fp", None)
-        socket_io = getattr(buffered_reader, "raw", None)
-        peer_socket = getattr(socket_io, "_sock", None)
+    peer = getattr(response.raw, "_cloudbox_peer", None)
+    if peer is None:
+        connection = getattr(response.raw, "connection", None)
+        peer_socket = getattr(connection, "sock", None)
+        if peer_socket is None:
+            original_response = getattr(response.raw, "_fp", None)
+            buffered_reader = getattr(original_response, "fp", None)
+            socket_io = getattr(buffered_reader, "raw", None)
+            peer_socket = getattr(socket_io, "_sock", None)
+        try:
+            peer = peer_socket.getpeername()
+        except (AttributeError, OSError) as exc:
+            raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.") from exc
 
     try:
-        peer = peer_socket.getpeername()
         peer_address = ipaddress.ip_address(peer[0])
-    except (AttributeError, IndexError, OSError, TypeError, ValueError) as exc:
+    except (IndexError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.") from exc
     if not peer_address.is_global:
         raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
@@ -1455,6 +1513,8 @@ def open_validated_direct_download(
 ) -> tuple[requests.Session, requests.Response, str]:
     session = requests.Session()
     session.trust_env = False
+    session.mount("http://", _DirectDownloadHTTPAdapter())
+    session.mount("https://", _DirectDownloadHTTPAdapter())
     current_url = normalize_direct_download_url(url)
     try:
         for _ in range(DIRECT_DOWNLOAD_MAX_REDIRECTS + 1):
