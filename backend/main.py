@@ -661,6 +661,13 @@ def pick_tmdb_match(
 
 def parse_media_filename(filename: str, parent: str | None = None) -> dict[str, Any]:
     stem = Path(filename).stem
+    stem = re.sub(
+        r"^\s*[\[(]?(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+"
+        r"(?:com|net|org|in|co|io|me|tv|to|cc|xyz|mx)[\])]?[\s]*[-–—|:]\s*",
+        "",
+        stem,
+        flags=re.IGNORECASE,
+    )
     cleaned = re.sub(r"[._]+", " ", stem)
 
     year, year_match = detect_media_year(cleaned)
