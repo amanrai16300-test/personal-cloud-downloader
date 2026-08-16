@@ -37,6 +37,7 @@ let incompleteTorrentHashes = new Set();
 let pendingRefreshMode = "";
 let pendingDeleteHash = "";
 let pendingCompletedDelete = null;
+let pendingDirectDeleteId = "";
 let isCompletedDeleteActive = false;
 let completedDeleteModalOpener = null;
 let completedDeleteModalKeydownHandler = null;
@@ -1884,12 +1885,33 @@ function showDeleteConfirmation(hash) {
   const name = torrentDisplayName(torrent || { hash }, "this download");
   pendingDeleteHash = hash;
   pendingCompletedDelete = null;
+  pendingDirectDeleteId = "";
 
   const modal = getDeleteConfirmationModal();
   modal.querySelector("#deleteConfirmTitle").textContent = "Delete download?";
   modal.querySelector("#deleteConfirmName").textContent = `${name} and its files will be deleted.`;
   setDeleteConfirmationBusy(false);
   modal.hidden = false;
+}
+
+function showDirectDeleteConfirmation(id, opener) {
+  if (isCompletedDeleteActive) return;
+
+  const job = cachedDirectDownloads.find((item) => directDownloadId(item) === id);
+  const filename = String(job?.filename ?? job?.name ?? "").trim();
+  pendingDeleteHash = "";
+  pendingCompletedDelete = null;
+  pendingDirectDeleteId = id;
+
+  const modal = getDeleteConfirmationModal();
+  modal.querySelector("#deleteConfirmTitle").textContent = "Remove direct download?";
+  modal.querySelector("#deleteConfirmName").textContent = filename
+    ? `${filename} and its downloaded file will be permanently deleted.`
+    : "This Direct Download entry and its downloaded file, if present, will be permanently deleted.";
+  setDeleteConfirmationBusy(false);
+  modal.querySelector("[data-delete-confirm]").textContent = "Remove";
+  modal.hidden = false;
+  activateCompletedDeleteModal(modal, opener);
 }
 
 function showCompletedDeleteConfirmation(index, opener) {
@@ -1905,6 +1927,7 @@ function showCompletedDeleteConfirmation(index, opener) {
   const folder = isCompletedFolder(item);
   const name = fileName(item);
   pendingDeleteHash = "";
+  pendingDirectDeleteId = "";
   pendingCompletedDelete = {
     relativePath,
     folder,
@@ -1930,6 +1953,7 @@ function hideDeleteConfirmation() {
   deactivateCompletedDeleteModal();
   pendingDeleteHash = "";
   pendingCompletedDelete = null;
+  pendingDirectDeleteId = "";
 }
 
 function activateCompletedDeleteModal(modal, opener) {
@@ -2102,6 +2126,13 @@ function handleDeleteConfirmationClick(event) {
       return;
     }
 
+    if (pendingDirectDeleteId) {
+      const id = pendingDirectDeleteId;
+      hideDeleteConfirmation();
+      handleDirectDownloadAction(id, "remove").catch((error) => setStatus(error.message, true));
+      return;
+    }
+
     const hash = pendingDeleteHash;
     hideDeleteConfirmation();
     deleteTorrent(hash).catch((error) => setStatus(error.message, true));
@@ -2261,10 +2292,14 @@ magnetLinkInput.addEventListener("keydown", (event) => {
 torrentList.addEventListener("click", (event) => {
   const directButton = event.target.closest("[data-direct-action][data-direct-id]");
   if (directButton) {
-    handleDirectDownloadAction(
-      directButton.dataset.directId,
-      directButton.dataset.directAction,
-    ).catch((error) => setStatus(error.message, true));
+    if (directButton.dataset.directAction === "remove") {
+      showDirectDeleteConfirmation(directButton.dataset.directId, directButton);
+    } else {
+      handleDirectDownloadAction(
+        directButton.dataset.directId,
+        directButton.dataset.directAction,
+      ).catch((error) => setStatus(error.message, true));
+    }
     return;
   }
 
