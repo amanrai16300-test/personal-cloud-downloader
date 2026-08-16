@@ -14,13 +14,14 @@ import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
+from html.parser import HTMLParser
 from io import BytesIO
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
 from typing import Any
-from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urljoin, urlparse
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -172,6 +173,7 @@ MARKDOWN_URL_TIMEOUT_SECONDS = 10
 MARKDOWN_URL_MAX_REDIRECTS = 5
 DIRECT_DOWNLOAD_TIMEOUT_SECONDS = 15
 DIRECT_DOWNLOAD_MAX_REDIRECTS = 5
+DIRECT_DOWNLOAD_GOOGLE_CONFIRMATION_MAX_BYTES = 512 * 1024
 DIRECT_DOWNLOAD_STAGING_DIR_NAME = ".cloudbox-direct-downloads"
 DIRECT_DOWNLOAD_HTML_PREFIX_RE = re.compile(
     rb"^\s*(?:\xef\xbb\xbf)?(?:<!--.*?-->\s*)*"
@@ -1508,6 +1510,102 @@ def google_drive_public_download_url(url: str) -> str:
     return download_url
 
 
+class _GoogleDriveConfirmationParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._in_title = False
+        self._current_form: dict[str, Any] | None = None
+        self.title_parts: list[str] = []
+        self.forms: list[dict[str, Any]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if tag == "title":
+            self._in_title = True
+        elif tag == "form" and self._current_form is None:
+            self._current_form = {
+                "id": attributes.get("id", ""),
+                "action": attributes.get("action", ""),
+                "method": attributes.get("method", "get"),
+                "fields": [],
+            }
+        elif tag == "input" and self._current_form is not None:
+            if attributes.get("type", "").lower() == "hidden" and attributes.get("name"):
+                self._current_form["fields"].append(
+                    (attributes["name"], attributes.get("value", ""))
+                )
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self._in_title = False
+        elif tag == "form" and self._current_form is not None:
+            self.forms.append(self._current_form)
+            self._current_form = None
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.title_parts.append(data)
+
+
+def google_drive_confirmation_url(
+    response: requests.Response,
+    response_url: str,
+    expected_file_id: str | None,
+) -> str | None:
+    response_host = (urlparse(response_url).hostname or "").lower().rstrip(".")
+    if response_host not in {"drive.google.com", "drive.usercontent.google.com"}:
+        return None
+
+    with suppress(TypeError, ValueError):
+        if int(response.headers.get("content-length", "")) > DIRECT_DOWNLOAD_GOOGLE_CONFIRMATION_MAX_BYTES:
+            return None
+
+    body = bytearray()
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        body.extend(chunk)
+        if len(body) > DIRECT_DOWNLOAD_GOOGLE_CONFIRMATION_MAX_BYTES:
+            return None
+
+    parser = _GoogleDriveConfirmationParser()
+    parser.feed(body.decode("utf-8", errors="replace"))
+    title = " ".join("".join(parser.title_parts).split())
+    forms = [form for form in parser.forms if form["id"] == "download-form"]
+    if title != "Google Drive - Virus scan warning" or len(forms) != 1:
+        return None
+
+    form = forms[0]
+    if str(form["method"]).lower() != "get" or not form["action"]:
+        return None
+    action_url = urljoin(response_url, str(form["action"]))
+    parsed_action = urlparse(action_url)
+    action_host = (parsed_action.hostname or "").lower().rstrip(".")
+    allowed_action = (
+        (action_host == "drive.google.com" and parsed_action.path == "/uc")
+        or (action_host == "drive.usercontent.google.com" and parsed_action.path == "/download")
+    )
+    if parsed_action.scheme != "https" or not allowed_action:
+        return None
+
+    parameters = parse_qsl(parsed_action.query, keep_blank_values=True) + list(form["fields"])
+    values: dict[str, list[str]] = {}
+    for name, value in parameters:
+        values.setdefault(name, []).append(value)
+    if (
+        expected_file_id is None
+        or values.get("id") != [expected_file_id]
+        or values.get("export") != ["download"]
+        or len(values.get("confirm", [])) != 1
+        or not values["confirm"][0]
+    ):
+        return None
+
+    confirmation_url = parsed_action._replace(
+        query=urlencode(parameters, doseq=True),
+        fragment="",
+    ).geturl()
+    return normalize_direct_download_url(confirmation_url)
+
+
 def open_validated_direct_download(
     url: str,
 ) -> tuple[requests.Session, requests.Response, str]:
@@ -1516,6 +1614,13 @@ def open_validated_direct_download(
     session.mount("http://", _DirectDownloadHTTPAdapter())
     session.mount("https://", _DirectDownloadHTTPAdapter())
     current_url = normalize_direct_download_url(url)
+    initial_url = urlparse(current_url)
+    google_drive_file_id = (
+        (parse_qs(initial_url.query).get("id") or [None])[0]
+        if (initial_url.hostname or "").lower().rstrip(".") == "drive.google.com"
+        else None
+    )
+    google_confirmation_followed = False
     try:
         for _ in range(DIRECT_DOWNLOAD_MAX_REDIRECTS + 1):
             try:
@@ -1547,7 +1652,20 @@ def open_validated_direct_download(
                 if response.status_code != 200:
                     raise HTTPException(status_code=422, detail="URL is not publicly downloadable.")
                 if direct_download_response_is_html(response):
-                    raise HTTPException(status_code=415, detail="HTML landing pages cannot be downloaded.")
+                    confirmation_url = (
+                        google_drive_confirmation_url(
+                            response,
+                            current_url,
+                            google_drive_file_id,
+                        )
+                        if not google_confirmation_followed
+                        else None
+                    )
+                    if confirmation_url is None:
+                        raise HTTPException(status_code=415, detail="HTML landing pages cannot be downloaded.")
+                    google_confirmation_followed = True
+                    current_url = confirmation_url
+                    continue
                 keep_response_open = True
                 return session, response, current_url
             finally:
