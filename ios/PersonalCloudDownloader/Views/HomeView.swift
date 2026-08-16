@@ -64,6 +64,7 @@ struct HomeView: View {
     @State private var showsArtworkDiagnostics = false
     @State private var isCardMatchInFlight = false
     @State private var showMediaUnavailableAlert = false
+    @State private var provisioningExpirationDate: Date?
 
     /// Drives the player push (iOS 16-compatible). Clearing on pop releases the
     /// matched file so a later tap re-matches fresh.
@@ -82,6 +83,7 @@ struct HomeView: View {
                     connectionPanel
                     continueWatchingSection
                     statStrip
+                    appRefreshCard
                     statusRow
                     recentlyAddedSection
                     tailscaleAction
@@ -125,6 +127,7 @@ struct HomeView: View {
             }
             .onAppear {
                 isVisible = true
+                refreshProvisioningExpiration()
                 loadCachedDashboardIfNeeded()
                 startRefreshLoop()
             }
@@ -134,6 +137,7 @@ struct HomeView: View {
             }
             .onChange(of: scenePhase) { phase in
                 if phase == .active {
+                    refreshProvisioningExpiration()
                     restoreRememberedArtworkInRenderedState(stage: "foreground-memory-restore")
                 } else {
                     stopRefreshLoop()
@@ -503,6 +507,148 @@ struct HomeView: View {
         }
         .padding(.horizontal, 4)
         .frame(minWidth: 0, maxWidth: .infinity)
+    }
+
+    // MARK: Installed provisioning profile expiry.
+
+    private var appRefreshCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(appRefreshTint)
+                    .frame(width: 28, height: 28)
+                    .background(appRefreshTint.opacity(0.13), in: Circle())
+                    .overlay { Circle().stroke(appRefreshTint.opacity(0.22), lineWidth: 1) }
+
+                Text("APP REFRESH")
+                    .font(.caption.weight(.bold))
+                    .tracking(dynamicTypeSize.isAccessibilitySize ? 0 : 1.3)
+                    .foregroundStyle(appRefreshTint)
+
+                Spacer(minLength: 0)
+            }
+
+            if let expirationDate = provisioningExpirationDate {
+                HStack(alignment: .center, spacing: 15) {
+                    ZStack {
+                        Circle()
+                            .stroke(appRefreshTint.opacity(0.13), lineWidth: 6)
+                        Circle()
+                            .trim(from: 0.06, to: 0.82)
+                            .stroke(appRefreshTint, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .shadow(color: appRefreshTint.opacity(0.18), radius: 7)
+
+                        Text("\(remainingProvisioningDays(until: expirationDate))")
+                            .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                            .foregroundStyle(Color.white)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.55)
+                            .padding(10)
+                    }
+                    .frame(width: 74, height: 74)
+                    .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("DAYS LEFT")
+                            .font(.caption.weight(.bold))
+                            .tracking(dynamicTypeSize.isAccessibilitySize ? 0 : 1.2)
+                            .foregroundStyle(Color.white.opacity(0.92))
+
+                        Text("Expires \(expirationDate.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    Image(systemName: "minus.circle")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(mutedText)
+                        .accessibilityHidden(true)
+
+                    Text("Refresh status unavailable")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(appRefreshSurface)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("App Refresh")
+        .accessibilityValue(appRefreshAccessibilityValue)
+    }
+
+    private var appRefreshSurface: some View {
+        ZStack(alignment: .topTrailing) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(surface)
+
+            RadialGradient(
+                colors: [
+                    appRefreshTint.opacity(provisioningExpirationDate == nil ? 0.04 : 0.11),
+                    Color.clear
+                ],
+                center: .topTrailing,
+                startRadius: 0,
+                endRadius: 170
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(appRefreshTint.opacity(provisioningExpirationDate == nil ? 0.08 : 0.20), lineWidth: 1)
+        }
+    }
+
+    private var appRefreshAccessibilityValue: String {
+        guard let expirationDate = provisioningExpirationDate else {
+            return "Refresh status unavailable"
+        }
+        return "\(remainingProvisioningDays(until: expirationDate)) days remaining. Expires \(expirationDate.formatted(date: .long, time: .shortened))."
+    }
+
+    private var appRefreshTint: Color {
+        guard let expirationDate = provisioningExpirationDate else { return mutedText }
+        switch remainingProvisioningDays(until: expirationDate) {
+        case 0...1:
+            return Color(red: 1.0, green: 0.30, blue: 0.32)
+        case 2...3:
+            return downloadAmber
+        default:
+            return premiumBlue
+        }
+    }
+
+    private func remainingProvisioningDays(until expirationDate: Date) -> Int {
+        max(0, Int(ceil(expirationDate.timeIntervalSinceNow / 86_400)))
+    }
+
+    private func refreshProvisioningExpiration() {
+        guard
+            let profileURL = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+            let profileData = try? Data(contentsOf: profileURL),
+            let plistStart = profileData.range(of: Data("<?xml".utf8))?.lowerBound,
+            let plistEnd = profileData.range(
+                of: Data("</plist>".utf8),
+                in: plistStart..<profileData.endIndex
+            )?.upperBound
+        else {
+            provisioningExpirationDate = nil
+            return
+        }
+
+        let plistData = profileData.subdata(in: plistStart..<plistEnd)
+        let profile = try? PropertyListSerialization.propertyList(from: plistData, format: nil)
+        provisioningExpirationDate = (profile as? [String: Any])?["ExpirationDate"] as? Date
     }
 
     // MARK: Network Activity + System Status pair.
