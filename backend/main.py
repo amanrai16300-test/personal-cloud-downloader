@@ -1336,17 +1336,51 @@ def cancel_direct_download(download_id: str) -> dict[str, Any]:
 @app.delete("/api/direct-downloads/{download_id}")
 def remove_direct_download(download_id: str) -> dict[str, str]:
     with _direct_download_lock:
-        job = _direct_download_jobs.pop(download_id, None)
+        job = _direct_download_jobs.get(download_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Direct download not found.")
+        if job.get("_remove_in_progress"):
+            raise HTTPException(status_code=409, detail="Direct download removal is already in progress.")
+        job["_remove_in_progress"] = True
         job["_cancel_requested"] = True
+        state = job.get("state")
         destination = job.get("_destination")
+        file_identity = job.get("_file_identity")
         staging_dir = job.get("_staging_dir")
 
-    if isinstance(destination, Path):
-        remove_direct_download_file(destination)
-    if isinstance(staging_dir, Path):
-        shutil.rmtree(staging_dir, ignore_errors=True)
+    try:
+        if state == "completed":
+            if not isinstance(destination, Path):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Completed direct download file location is unavailable; entry was not removed.",
+                )
+            if (
+                not isinstance(file_identity, tuple)
+                or len(file_identity) != 3
+                or not all(isinstance(value, int) for value in file_identity)
+            ):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Completed direct download file identity is unavailable; entry was not removed.",
+                )
+            remove_direct_download_file(destination, file_identity)
+        if isinstance(staging_dir, Path):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+    except Exception as exc:
+        with _direct_download_lock:
+            if _direct_download_jobs.get(download_id) is job:
+                job.pop("_remove_in_progress", None)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=500,
+            detail="Direct download file could not be deleted; entry was not removed.",
+        ) from exc
+
+    with _direct_download_lock:
+        if _direct_download_jobs.get(download_id) is job:
+            _direct_download_jobs.pop(download_id, None)
     return {"id": download_id, "status": "removed"}
 
 
@@ -2014,6 +2048,7 @@ def publish_direct_download(
             if job is None or job.get("_cancel_requested"):
                 return None
             try:
+                published_stat = staging_path.stat()
                 os.link(staging_path, destination)
             except FileExistsError:
                 destination = unique_direct_download_destination(
@@ -2035,6 +2070,11 @@ def publish_direct_download(
                 speed=0,
                 error=None,
                 updated_at=utc_now_iso(),
+                _file_identity=(
+                    published_stat.st_dev,
+                    published_stat.st_ino,
+                    published_stat.st_size,
+                ),
             )
             return destination
 
@@ -2091,24 +2131,83 @@ def downloaded_file_looks_like_html(path: Path) -> bool:
         return True
 
 
-def remove_direct_download_file(destination: Path) -> None:
+def remove_direct_download_file(destination: Path, file_identity: tuple[int, int, int]) -> None:
     completed_root = settings.download_complete_dir.resolve()
+    organized_destination: Path | None = None
     try:
         safe_destination = resolve_safe_download_target(destination, completed_root)
-    except ValueError:
-        return
-    if not safe_destination.is_file():
-        try:
-            safe_destination = resolve_safe_download_target(
+        candidates = [safe_destination]
+        if safe_destination.parent == completed_root:
+            organized_destination = resolve_safe_download_target(
                 completed_root / safe_destination.stem / safe_destination.name,
                 completed_root,
             )
-        except ValueError:
-            return
-    if not safe_destination.is_file():
-        return
+            if organized_destination != safe_destination:
+                candidates.append(organized_destination)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Direct download file path is unsafe; entry was not removed.",
+        ) from exc
+
+    def candidate_identity(candidate: Path) -> tuple[int, int, int] | None:
+        try:
+            candidate_stat = candidate.stat()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Direct download file could not be inspected; entry was not removed.",
+            ) from exc
+        if not candidate.is_file():
+            raise HTTPException(
+                status_code=500,
+                detail="Direct download file path is not a file; entry was not removed.",
+            )
+        return (candidate_stat.st_dev, candidate_stat.st_ino, candidate_stat.st_size)
+
+    organized_destination = candidates[1] if len(candidates) > 1 else None
     result: dict[str, Any] = {"deleted_file_paths": [], "warnings": []}
-    remove_video_progress(delete_file_with_sidecars(safe_destination, result))
+    owned_destination: Path | None = None
+    for _ in range(3):
+        matching_candidates: list[Path] = []
+        for candidate in candidates:
+            identity = candidate_identity(candidate)
+            if identity is None:
+                continue
+            if identity != file_identity:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Direct download file ownership does not match; entry was not removed.",
+                )
+            matching_candidates.append(candidate)
+
+        if not matching_candidates:
+            break
+        if len(matching_candidates) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Direct download file location is ambiguous; entry was not removed.",
+            )
+
+        next_destination = matching_candidates[0]
+        if next_destination == owned_destination:
+            raise HTTPException(
+                status_code=500,
+                detail="Direct download file could not be deleted; entry was not removed.",
+            )
+        owned_destination = next_destination
+        remove_video_progress(delete_file_with_sidecars(owned_destination, result))
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Direct download file deletion could not be verified; entry was not removed.",
+        )
+
+    if owned_destination == organized_destination and organized_destination is not None:
+        with suppress(OSError):
+            organized_destination.parent.rmdir()
 
 
 def utc_now_iso() -> str:
