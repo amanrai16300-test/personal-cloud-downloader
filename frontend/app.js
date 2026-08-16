@@ -1,6 +1,8 @@
 const API_BASE_URL = `http://${window.location.hostname}:8000`;
 const POLL_MS = 5000;
 const COMPLETED_FILES_POLL_MS = 30000;
+const DIRECT_ACTIVE_POLL_MS = 3000;
+const DIRECT_IDLE_POLL_MS = 15000;
 const TORRENT_STALE_MS = 60 * 1000;
 const STATUS_SUCCESS_MS = 4000;
 const STATUS_WARNING_MS = 8000;
@@ -20,6 +22,7 @@ const statusText = document.querySelector("#status");
 const lastUpdated = document.querySelector("#lastUpdated");
 
 let cachedTorrents = [];
+let cachedDirectDownloads = [];
 let completedFileSnapshot = [];
 let isSubmitting = false;
 let isRefreshing = false;
@@ -37,6 +40,18 @@ let pendingCompletedDelete = null;
 let isCompletedDeleteActive = false;
 let completedDeleteModalOpener = null;
 let completedDeleteModalKeydownHandler = null;
+let directLinkInput = null;
+let composerMode = "magnet";
+let originalComposerLabelHtml = "";
+let isDirectSubmitting = false;
+let isDirectRefreshing = false;
+let directRefreshPending = false;
+let directDownloadsLoaded = false;
+let directPollingError = "";
+let directDataGeneration = 0;
+let directPollTimer = 0;
+let incompleteDirectDownloadIds = new Set();
+const activeDirectActionIds = new Set();
 let trendsState = {
   loaded: false,
   loading: false,
@@ -429,6 +444,62 @@ function installCloudBoxTheme() {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(77, 150, 255, .22);
     }
+    .download-mode-tabs {
+      display: inline-flex;
+      gap: .25rem;
+      align-self: flex-start;
+      padding: .25rem;
+      margin-bottom: .75rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #060D1C;
+    }
+    .download-mode-tab {
+      min-height: 2.75rem;
+      padding: .5rem .85rem;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-weight: 750;
+      cursor: pointer;
+    }
+    .download-mode-tab[aria-pressed="true"] {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .download-mode-tab:focus-visible {
+      outline: 3px solid rgba(77, 150, 255, .45);
+      outline-offset: 2px;
+    }
+    .dl-card--direct {
+      border-left: 3px solid rgba(77, 150, 255, .65);
+    }
+    .dl-card__title-row {
+      display: flex;
+      align-items: center;
+      gap: .55rem;
+      min-width: 0;
+    }
+    .dl-source-badge {
+      flex: none;
+      padding: .16rem .42rem;
+      border: 1px solid rgba(77, 150, 255, .30);
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: .68rem;
+      font-weight: 800;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .dl-card__stats {
+      margin: .55rem 0 0;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .82rem;
+    }
 
     /* ---- Buttons ---- */
     .primary-button {
@@ -545,6 +616,70 @@ function installCloudBoxTheme() {
     }
   `;
   document.head.appendChild(styles);
+}
+
+function installDirectDownloadComposer() {
+  if (document.querySelector("#downloadModeTabs")) return;
+
+  const label = document.querySelector('label[for="magnetLink"]');
+  originalComposerLabelHtml = label?.innerHTML || "";
+
+  const tabs = document.createElement("div");
+  tabs.id = "downloadModeTabs";
+  tabs.className = "download-mode-tabs";
+  tabs.setAttribute("role", "group");
+  tabs.setAttribute("aria-label", "Download type");
+  tabs.innerHTML = `
+    <button class="download-mode-tab" type="button" data-download-mode="magnet" aria-pressed="true">Magnet</button>
+    <button class="download-mode-tab" type="button" data-download-mode="direct" aria-pressed="false">Direct Link</button>
+  `;
+
+  const anchor = label || magnetLinkInput;
+  anchor.parentNode.insertBefore(tabs, anchor);
+
+  directLinkInput = magnetLinkInput.cloneNode(false);
+  directLinkInput.id = "directLink";
+  directLinkInput.name = "directLink";
+  directLinkInput.value = "";
+  directLinkInput.placeholder = "https://example.com/file";
+  directLinkInput.setAttribute("aria-label", "Direct download URL");
+  directLinkInput.setAttribute("autocomplete", "url");
+  directLinkInput.setAttribute("inputmode", "url");
+  directLinkInput.hidden = true;
+  magnetLinkInput.insertAdjacentElement("afterend", directLinkInput);
+
+  tabs.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-download-mode]");
+    if (tab) setComposerMode(tab.dataset.downloadMode);
+  });
+
+  directLinkInput.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      addDirectDownload().catch((error) => setStatus(error.message, true));
+    }
+  });
+}
+
+function setComposerMode(mode) {
+  if (mode !== "magnet" && mode !== "direct") return;
+  composerMode = mode;
+  const isDirect = mode === "direct";
+  magnetLinkInput.hidden = isDirect;
+  directLinkInput.hidden = !isDirect;
+
+  document.querySelectorAll("#downloadModeTabs [data-download-mode]").forEach((tab) => {
+    const selected = tab.dataset.downloadMode === mode;
+    tab.setAttribute("aria-pressed", String(selected));
+  });
+
+  const label = document.querySelector('label[for="magnetLink"], label[for="directLink"]');
+  if (label) {
+    label.setAttribute("for", isDirect ? "directLink" : "magnetLink");
+    label.innerHTML = isDirect ? "Direct download URL" : originalComposerLabelHtml;
+  }
+  if (!isSubmitting && !isDirectSubmitting) {
+    addMagnetButton.textContent = isDirect ? "Start direct download" : "Start download";
+  }
 }
 
 function installTrendsHomeEntry() {
@@ -1057,6 +1192,197 @@ function reconcileRenderedRows(container, rows, emptyHtml) {
   }
 }
 
+function directDownloadId(job) {
+  return String(job?.id ?? job?.job_id ?? "").trim();
+}
+
+function directDownloadState(job) {
+  const raw = String(job?.state ?? job?.status ?? "queued").trim().toLowerCase();
+  if (["complete", "completed", "finished", "success"].includes(raw)) return "completed";
+  if (["error", "failed", "failure"].includes(raw)) return "error";
+  if (["cancelled", "canceled"].includes(raw)) return "cancelled";
+  if (["downloading", "running", "active", "in_progress"].includes(raw)) return "downloading";
+  return "queued";
+}
+
+function directDownloadProgress(job) {
+  const downloaded = finiteNonNegative(job?.downloaded_bytes ?? job?.bytes_downloaded ?? job?.downloaded);
+  const total = finiteNonNegative(job?.total_bytes ?? job?.bytes_total ?? job?.total_size);
+  if (total > 0) return Math.max(0, Math.min(100, Math.round((downloaded / total) * 100)));
+
+  const percentValue = Number(job?.progress_percent);
+  if (Number.isFinite(percentValue)) return Math.max(0, Math.min(100, Math.round(percentValue)));
+
+  const progressValue = Number(job?.progress);
+  if (!Number.isFinite(progressValue)) return 0;
+  const percent = progressValue >= 0 && progressValue <= 1 ? progressValue * 100 : progressValue;
+  return Math.max(0, Math.min(100, Math.round(percent)));
+}
+
+function finiteNonNegative(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+function formatByteCount(value) {
+  const bytes = finiteNonNegative(value);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let amount = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
+    amount /= 1024;
+    unit = units[index];
+  }
+  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${unit}`;
+}
+
+function directDownloadName(job) {
+  const provided = String(job?.filename ?? job?.name ?? "").trim();
+  if (provided) return provided;
+  return "Preparing direct download";
+}
+
+function directDownloadError(job) {
+  const raw = String(job?.error_message ?? job?.error ?? job?.message ?? "").trim();
+  if (!raw) return "Download failed";
+  const normalized = normalizeApiError(500, JSON.stringify({ message: raw })).message;
+  return normalized === "CloudBox server error" ? "Download failed" : normalized;
+}
+
+function directDownloadTimeText(job, state) {
+  const value = state === "completed"
+    ? job?.completed_at ?? job?.updated_at
+    : job?.created_at ?? job?.added_at ?? job?.updated_at;
+  if (!value) return "Time unavailable.";
+  return `${state === "completed" ? "Completed" : "Added"} ${formatDateTime(value)}`;
+}
+
+function directDownloadStats(job, state) {
+  const downloaded = finiteNonNegative(job?.downloaded_bytes ?? job?.bytes_downloaded ?? job?.downloaded);
+  const total = finiteNonNegative(job?.total_bytes ?? job?.bytes_total ?? job?.total_size);
+  const speed = finiteNonNegative(job?.speed_bytes_per_second ?? job?.speed_bps ?? job?.download_speed);
+  const sizeText = total > 0
+    ? `${formatByteCount(downloaded)} / ${formatByteCount(total)}`
+    : downloaded > 0
+      ? `${formatByteCount(downloaded)} downloaded`
+      : "Size unknown";
+  return state === "downloading"
+    ? `${sizeText} · ${formatByteCount(speed)}/s`
+    : sizeText;
+}
+
+function directDownloadStateLabel(state) {
+  return {
+    queued: "Queued",
+    downloading: "Downloading",
+    completed: "Completed",
+    error: "Error",
+    cancelled: "Cancelled",
+  }[state];
+}
+
+function buildDirectDownloadRows() {
+  const jobs = cachedDirectDownloads
+    .map((job, index) => ({ job, index }))
+    .filter(({ job }) => directDownloadId(job))
+    .sort((left, right) => {
+      const leftActive = ["queued", "downloading"].includes(directDownloadState(left.job));
+      const rightActive = ["queued", "downloading"].includes(directDownloadState(right.job));
+      if (leftActive !== rightActive) return leftActive ? -1 : 1;
+      const leftTime = Date.parse(left.job?.created_at ?? left.job?.updated_at ?? "") || 0;
+      const rightTime = Date.parse(right.job?.created_at ?? right.job?.updated_at ?? "") || 0;
+      return rightTime - leftTime || right.index - left.index;
+    });
+
+  const rows = jobs.map(({ job }) => {
+    const id = directDownloadId(job);
+    const state = directDownloadState(job);
+    const name = directDownloadName(job);
+    const progress = directDownloadProgress(job);
+    const titleId = `direct-title-${id.replace(/[^a-z0-9_-]/gi, "-")}`;
+    const active = state === "queued" || state === "downloading";
+    const action = active ? "cancel" : "remove";
+    const actionLabel = active ? "Cancel" : "Remove";
+    const stateClass = state === "queued" ? "waiting" : state === "error" || state === "cancelled" ? "failed" : state;
+    const errorText = state === "error" ? directDownloadError(job) : "";
+    const signature = JSON.stringify([id, name, state, action, errorText]);
+
+    let stateContent;
+    if (active) {
+      stateContent = `
+        <p class="dl-card__state" data-direct-state>${escapeHtml(directDownloadStateLabel(state))}</p>
+        <div class="dl-progress" role="progressbar" aria-labelledby="${escapeHtml(titleId)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}" data-direct-progress>
+          <div class="dl-bar${state === "queued" ? " dl-bar--waiting" : ""}">
+            ${state === "downloading" ? `<div class="dl-bar__fill" style="--progress: ${progress}%" data-direct-progress-fill></div>` : ""}
+          </div>
+        </div>
+        <p class="dl-card__stats" data-direct-stats>${escapeHtml(directDownloadStats(job, state))}</p>
+      `;
+    } else if (state === "completed") {
+      stateContent = `
+        <p class="dl-card__state dl-card__state--completed">✓ Completed — see Completed files</p>
+        <p class="dl-card__stats" data-direct-stats>${escapeHtml(directDownloadStats(job, state))}</p>
+      `;
+    } else if (state === "cancelled") {
+      stateContent = `<p class="dl-card__state dl-card__state--failed">Cancelled</p>`;
+    } else {
+      stateContent = `<p class="dl-card__state dl-card__state--failed">✗ Error — ${escapeHtml(errorText)}</p>`;
+    }
+
+    const content = `
+      <header class="dl-card__header">
+        <div class="dl-card__title-row">
+          <span class="dl-source-badge">Direct</span>
+          <h3 id="${escapeHtml(titleId)}" class="dl-card__title">${escapeHtml(name)}</h3>
+        </div>
+        ${active ? `<span class="dl-card__percent" data-direct-percent>${progress}%</span>` : ""}
+      </header>
+      ${stateContent}
+      <footer class="dl-card__footer">
+        <p class="dl-card__time">${escapeHtml(directDownloadTimeText(job, state))}</p>
+        <button class="dl-delete" type="button" data-direct-action="${action}" data-direct-id="${escapeHtml(id)}" aria-label="${actionLabel} ${escapeHtml(name)}">
+          ${actionLabel}
+        </button>
+      </footer>
+    `;
+
+    return {
+      key: `direct:${id}`,
+      signature,
+      html: `<article class="dl-card dl-card--${stateClass} dl-card--direct">${content}</article>`,
+      update: (element) => {
+        const percent = element.querySelector("[data-direct-percent]");
+        const progressElement = element.querySelector("[data-direct-progress]");
+        const progressFill = element.querySelector("[data-direct-progress-fill]");
+        const stats = element.querySelector("[data-direct-stats]");
+        const actionButton = element.querySelector("[data-direct-action]");
+        if (percent) percent.textContent = `${progress}%`;
+        if (progressElement) progressElement.setAttribute("aria-valuenow", String(progress));
+        if (progressFill) progressFill.style.setProperty("--progress", `${progress}%`);
+        if (stats) stats.textContent = directDownloadStats(job, state);
+        if (actionButton) actionButton.disabled = activeDirectActionIds.has(id);
+      },
+    };
+  });
+
+  if (!directDownloadsLoaded) {
+    rows.push({
+      key: "direct:loading",
+      signature: "direct-loading",
+      html: emptyCard("Checking direct downloads", "Direct Link jobs will appear here."),
+    });
+  } else if (directPollingError) {
+    rows.push({
+      key: "direct:offline",
+      signature: directPollingError,
+      html: emptyCard("Direct downloads offline", `${directPollingError}. Existing downloads remain visible.`),
+    });
+  }
+
+  return rows;
+}
+
 function renderTorrents(torrents) {
   const summaryCounts = {
     active: 0,
@@ -1069,6 +1395,13 @@ function renderTorrents(torrents) {
     if (status === "Downloading") summaryCounts.active += 1;
     else if (status === "Completed") summaryCounts.ready += 1;
     else if (status === "Failed") summaryCounts.failed += 1;
+    else summaryCounts.waiting += 1;
+  });
+  cachedDirectDownloads.forEach((job) => {
+    const state = directDownloadState(job);
+    if (state === "downloading") summaryCounts.active += 1;
+    else if (state === "completed") summaryCounts.ready += 1;
+    else if (state === "error" || state === "cancelled") summaryCounts.failed += 1;
     else summaryCounts.waiting += 1;
   });
   const summaryItems = Object.entries(summaryCounts).filter(([, count]) => count > 0);
@@ -1086,11 +1419,12 @@ function renderTorrents(torrents) {
     queueSummary._cloudboxSummarySignature = summarySignature;
   }
 
-  if (!torrents.length) {
+  const directRows = buildDirectDownloadRows();
+  if (!torrents.length && !directRows.length) {
     reconcileRenderedRows(
       torrentList,
       [],
-      emptyCard("Queue is clear", "Paste a magnet link when you want the server to do the waiting."),
+      emptyCard("Queue is clear", "Start a Magnet or Direct Link download when you want the server to do the waiting."),
     );
     cachedTorrents = torrents;
     return;
@@ -1099,7 +1433,7 @@ function renderTorrents(torrents) {
   const sortedTorrents = sortTorrentsForDisplay(torrents);
 
   torrentList.style.flexDirection = "column";
-  const rows = sortedTorrents.map((torrent, index) => {
+  const torrentRows = sortedTorrents.map((torrent, index) => {
     const status = normalizeStatus(torrent);
     const progress = normalizeProgress(torrent);
     const name = torrentDisplayName(torrent);
@@ -1156,7 +1490,7 @@ function renderTorrents(torrents) {
       },
     };
   });
-  reconcileRenderedRows(torrentList, rows, "");
+  reconcileRenderedRows(torrentList, [...torrentRows, ...directRows], "");
 
   cachedTorrents = sortedTorrents;
 }
@@ -1277,7 +1611,7 @@ function renderCompletedFiles(files) {
 }
 
 async function addMagnet() {
-  if (isSubmitting) return;
+  if (isSubmitting || isDirectSubmitting) return;
 
   const magnet = magnetLinkInput.value.trim();
   if (!magnet) {
@@ -1302,10 +1636,141 @@ async function addMagnet() {
   } finally {
     isSubmitting = false;
     addMagnetButton.disabled = false;
-    addMagnetButton.textContent = "Start download";
+    addMagnetButton.textContent = composerMode === "direct" ? "Start direct download" : "Start download";
   }
 
   await refreshAll({ quiet: true, fullReconciliation: false });
+}
+
+async function addDirectDownload() {
+  if (isSubmitting || isDirectSubmitting) return;
+
+  const url = directLinkInput.value.trim();
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    parsedUrl = null;
+  }
+  if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
+    setStatus("Paste one valid HTTP or HTTPS link first.", true);
+    directLinkInput.focus();
+    return;
+  }
+
+  isDirectSubmitting = true;
+  addMagnetButton.disabled = true;
+  addMagnetButton.textContent = "Starting...";
+  setStatus("Sending direct link to private backend...");
+
+  try {
+    await apiFetch("/api/direct-downloads", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    directDataGeneration += 1;
+    directLinkInput.value = "";
+    setStatus("Direct download started. Status updates automatically.");
+  } finally {
+    isDirectSubmitting = false;
+    addMagnetButton.disabled = false;
+    addMagnetButton.textContent = composerMode === "direct" ? "Start direct download" : "Start download";
+  }
+
+  await refreshDirectDownloads();
+}
+
+async function handleDirectDownloadAction(id, action) {
+  if (!id || activeDirectActionIds.has(id)) return;
+  activeDirectActionIds.add(id);
+  renderTorrents(cachedTorrents);
+  setStatus(action === "cancel" ? "Cancelling direct download..." : "Removing direct download...");
+
+  try {
+    await apiFetch(
+      action === "cancel"
+        ? `/api/direct-downloads/${encodeURIComponent(id)}/cancel`
+        : `/api/direct-downloads/${encodeURIComponent(id)}`,
+      { method: action === "cancel" ? "POST" : "DELETE" },
+    );
+    directDataGeneration += 1;
+    if (action === "remove") {
+      cachedDirectDownloads = cachedDirectDownloads.filter((job) => directDownloadId(job) !== id);
+      renderTorrents(cachedTorrents);
+    }
+    setStatus(action === "cancel" ? "Direct download cancelled." : "Direct download removed.");
+    await refreshDirectDownloads();
+  } finally {
+    activeDirectActionIds.delete(id);
+    renderTorrents(cachedTorrents);
+  }
+}
+
+function hasDirectCompletionTransition(jobs) {
+  return jobs.some((job) => {
+    const id = directDownloadId(job);
+    return id && incompleteDirectDownloadIds.has(id) && directDownloadState(job) === "completed";
+  });
+}
+
+function rememberIncompleteDirectDownloads(jobs) {
+  incompleteDirectDownloadIds = new Set(
+    jobs
+      .filter((job) => ["queued", "downloading"].includes(directDownloadState(job)))
+      .map(directDownloadId)
+      .filter(Boolean),
+  );
+}
+
+async function refreshDirectDownloads() {
+  if (isDirectRefreshing) {
+    directRefreshPending = true;
+    return;
+  }
+
+  const refreshGeneration = directDataGeneration;
+  isDirectRefreshing = true;
+  try {
+    const jobs = await apiFetch("/api/direct-downloads");
+    if (refreshGeneration !== directDataGeneration) return;
+
+    const directData = Array.isArray(jobs) ? jobs : [];
+    const completed = hasDirectCompletionTransition(directData);
+    cachedDirectDownloads = directData;
+    directDownloadsLoaded = true;
+    directPollingError = "";
+    rememberIncompleteDirectDownloads(directData);
+    renderTorrents(cachedTorrents);
+
+    if (completed) {
+      refreshCompletedFiles().catch((error) => setStatus(error.message, true));
+    }
+  } catch (error) {
+    if (refreshGeneration === directDataGeneration) {
+      directDownloadsLoaded = true;
+      directPollingError = error.message;
+      renderTorrents(cachedTorrents);
+    }
+  } finally {
+    isDirectRefreshing = false;
+  }
+
+  if (directRefreshPending) {
+    directRefreshPending = false;
+    await refreshDirectDownloads();
+  }
+}
+
+async function pollDirectDownloads() {
+  window.clearTimeout(directPollTimer);
+  await refreshDirectDownloads();
+  const hasActiveJobs = cachedDirectDownloads.some(
+    (job) => ["queued", "downloading"].includes(directDownloadState(job)),
+  );
+  directPollTimer = window.setTimeout(
+    pollDirectDownloads,
+    hasActiveJobs ? DIRECT_ACTIVE_POLL_MS : DIRECT_IDLE_POLL_MS,
+  );
 }
 
 async function deleteTorrent(hash) {
@@ -1776,9 +2241,13 @@ async function refreshAll({ quiet = false, fullReconciliation = true } = {}) {
   }
 }
 
-addMagnetButton.addEventListener("click", () => addMagnet().catch((error) => setStatus(error.message, true)));
+addMagnetButton.addEventListener("click", () => {
+  const submit = composerMode === "direct" ? addDirectDownload : addMagnet;
+  submit().catch((error) => setStatus(error.message, true));
+});
 refreshButton.addEventListener("click", () => {
   refreshAll();
+  refreshDirectDownloads();
   const trendsView = document.querySelector("#trendsView");
   if (trendsView && !trendsView.hidden) loadTrends({ force: true });
 });
@@ -1790,6 +2259,15 @@ magnetLinkInput.addEventListener("keydown", (event) => {
 });
 
 torrentList.addEventListener("click", (event) => {
+  const directButton = event.target.closest("[data-direct-action][data-direct-id]");
+  if (directButton) {
+    handleDirectDownloadAction(
+      directButton.dataset.directId,
+      directButton.dataset.directAction,
+    ).catch((error) => setStatus(error.message, true));
+    return;
+  }
+
   const button = event.target.closest("[data-delete-hash]");
   if (!button) return;
   showDeleteConfirmation(button.dataset.deleteHash);
@@ -1808,7 +2286,8 @@ completedFiles.addEventListener("click", (event) => {
 });
 
 installCloudBoxTheme();
+installDirectDownloadComposer();
 installTrendsHomeEntry();
 renderInitialTorrentSkeletons();
-refreshAll();
+refreshAll().finally(pollDirectDownloads);
 window.setInterval(() => refreshAll({ quiet: true, fullReconciliation: false }), POLL_MS);
