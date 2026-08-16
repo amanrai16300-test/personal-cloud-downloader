@@ -11,15 +11,16 @@ import subprocess
 import time
 import tempfile
 import unicodedata
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from io import BytesIO
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 from typing import Any
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +36,13 @@ app = FastAPI(title="Personal Cloud Downloader")
 qb = QBittorrentClient()
 monitor_task: asyncio.Task[None] | None = None
 markdown_conversion_tasks: set[asyncio.Task[Any]] = set()
+_direct_download_jobs: dict[str, dict[str, Any]] = {}
+_direct_download_lock = Lock()
+_direct_download_slots = BoundedSemaphore(value=8)
+_direct_download_executor = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="cloudbox-direct-download",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,6 +71,10 @@ class VideoProgressRequest(BaseModel):
 
 
 class ConvertMarkdownURLRequest(BaseModel):
+    url: str
+
+
+class DirectDownloadRequest(BaseModel):
     url: str
 
 
@@ -154,6 +166,14 @@ MARKDOWN_TEMP_PREFIX = "cloudbox-markdown-"
 MARKDOWN_URL_MAX_BYTES = 5 * 1024 * 1024
 MARKDOWN_URL_TIMEOUT_SECONDS = 10
 MARKDOWN_URL_MAX_REDIRECTS = 5
+DIRECT_DOWNLOAD_TIMEOUT_SECONDS = 15
+DIRECT_DOWNLOAD_MAX_REDIRECTS = 5
+DIRECT_DOWNLOAD_STAGING_DIR_NAME = ".cloudbox-direct-downloads"
+DIRECT_DOWNLOAD_HTML_PREFIX_RE = re.compile(
+    rb"^\s*(?:\xef\xbb\xbf)?(?:<!--.*?-->\s*)*"
+    rb"(?:<!doctype\s+html|<html(?:\s|>)|<head(?:\s|>)|<body(?:\s|>))",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def run_qb_action(action: str, *args: Any, **kwargs: Any) -> Any:
@@ -177,6 +197,19 @@ async def start_auto_pause_monitor() -> None:
 async def stop_auto_pause_monitor() -> None:
     if monitor_task:
         monitor_task.cancel()
+    queued_staging_dirs: list[Path] = []
+    with _direct_download_lock:
+        for job in _direct_download_jobs.values():
+            if job.get("state") in {"queued", "downloading"}:
+                job["_cancel_requested"] = True
+                if job.get("state") == "queued" and isinstance(job.get("_staging_dir"), Path):
+                    queued_staging_dirs.append(job["_staging_dir"])
+                job["state"] = "cancelled"
+                job["speed"] = 0
+                job["updated_at"] = utc_now_iso()
+    for staging_dir in queued_staging_dirs:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    _direct_download_executor.shutdown(wait=False, cancel_futures=True)
     _thumbnail_executor.shutdown(wait=False, cancel_futures=True)
     _tmdb_executor.shutdown(wait=False, cancel_futures=True)
 
@@ -1195,6 +1228,569 @@ def clean_markdown_output(markdown: str) -> str:
         return re.sub(r"([.!?])(\d+)(?=[A-Z][a-z])", r"\1 \2 ", cleaned)
     except Exception:
         return markdown
+
+
+@app.post("/api/direct-downloads")
+def create_direct_download(payload: DirectDownloadRequest) -> dict[str, Any]:
+    if not _direct_download_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Too many direct downloads are queued.")
+
+    try:
+        completed_root, staging_root = direct_download_roots()
+        source_url = google_drive_public_download_url(normalize_direct_download_url(payload.url))
+
+        download_id = uuid.uuid4().hex
+        staging_dir = staging_root / download_id
+        staging_dir.mkdir(mode=0o700)
+        now = utc_now_iso()
+
+        with _direct_download_lock:
+            job: dict[str, Any] = {
+                "id": download_id,
+                "filename": initial_direct_download_filename(source_url),
+                "state": "queued",
+                "bytes_downloaded": 0,
+                "total_bytes": None,
+                "progress": 0.0,
+                "speed": 0,
+                "error": None,
+                "created_at": now,
+                "updated_at": now,
+                "_cancel_requested": False,
+                "_destination": None,
+                "_staging_dir": staging_dir,
+            }
+            _direct_download_jobs[download_id] = job
+            status = direct_download_status(job)
+
+        try:
+            _direct_download_executor.submit(
+                run_direct_download,
+                download_id,
+                source_url,
+                completed_root,
+                staging_root,
+            )
+        except RuntimeError as exc:
+            with _direct_download_lock:
+                _direct_download_jobs.pop(download_id, None)
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise HTTPException(status_code=503, detail="Direct downloads are unavailable.") from exc
+    except Exception:
+        _direct_download_slots.release()
+        raise
+
+    return status
+
+
+@app.get("/api/direct-downloads")
+def list_direct_downloads() -> list[dict[str, Any]]:
+    with _direct_download_lock:
+        jobs = sorted(
+            _direct_download_jobs.values(),
+            key=lambda item: str(item.get("created_at", "")),
+            reverse=True,
+        )
+        return [direct_download_status(job) for job in jobs]
+
+
+@app.get("/api/direct-downloads/{download_id}")
+def get_direct_download(download_id: str) -> dict[str, Any]:
+    with _direct_download_lock:
+        job = _direct_download_jobs.get(download_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Direct download not found.")
+        return direct_download_status(job)
+
+
+@app.post("/api/direct-downloads/{download_id}/cancel")
+def cancel_direct_download(download_id: str) -> dict[str, Any]:
+    with _direct_download_lock:
+        job = _direct_download_jobs.get(download_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Direct download not found.")
+        if job["state"] in {"queued", "downloading"}:
+            job["_cancel_requested"] = True
+            job["state"] = "cancelled"
+            job["speed"] = 0
+            job["updated_at"] = utc_now_iso()
+        status = direct_download_status(job)
+
+    return status
+
+
+@app.delete("/api/direct-downloads/{download_id}")
+def remove_direct_download(download_id: str) -> dict[str, str]:
+    with _direct_download_lock:
+        job = _direct_download_jobs.pop(download_id, None)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Direct download not found.")
+        job["_cancel_requested"] = True
+        destination = job.get("_destination")
+        staging_dir = job.get("_staging_dir")
+
+    if isinstance(destination, Path):
+        remove_direct_download_file(destination)
+    if isinstance(staging_dir, Path):
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    return {"id": download_id, "status": "removed"}
+
+
+def direct_download_roots() -> tuple[Path, Path]:
+    cloud_root = Path(STORAGE_PATHS[0])
+    try:
+        resolved_cloud_root = cloud_root.resolve(strict=True)
+        completed_root = settings.download_complete_dir.resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="CloudBox storage is unavailable.") from exc
+
+    if (
+        not completed_root.is_dir()
+        or not completed_root.is_relative_to(resolved_cloud_root)
+        or mounted_filesystem_id(resolved_cloud_root) is None
+    ):
+        raise HTTPException(status_code=503, detail="CloudBox storage is unavailable.")
+
+    staging_root = completed_root.parent / DIRECT_DOWNLOAD_STAGING_DIR_NAME
+    try:
+        staging_root.mkdir(mode=0o700, exist_ok=True)
+        resolved_staging_root = staging_root.resolve(strict=True)
+        if (
+            not resolved_staging_root.is_relative_to(resolved_cloud_root)
+            or resolved_staging_root.stat().st_dev != completed_root.stat().st_dev
+        ):
+            raise OSError("Unsafe direct-download staging storage.")
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="Direct downloads are unavailable.") from exc
+    return completed_root, resolved_staging_root
+
+
+def normalize_direct_download_url(raw_url: str) -> str:
+    url = raw_url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required.")
+    if len(url) > 8192 or any(ord(character) < 32 or ord(character) == 127 for character in url):
+        raise HTTPException(status_code=400, detail="URL contains invalid characters.")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Only valid http:// and https:// URLs are accepted.")
+    if parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail="URLs containing credentials are not allowed.")
+    reject_non_global_direct_download_url(parsed)
+    return url
+
+
+def reject_non_global_direct_download_url(parsed_url: Any) -> None:
+    hostname = (parsed_url.hostname or "").strip().lower().rstrip(".")
+    if not hostname:
+        raise HTTPException(status_code=400, detail="URL host is required.")
+    if hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal")):
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
+    if "." not in hostname and not hostname.replace(":", "").replace("[", "").replace("]", "").isdigit():
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
+
+    try:
+        port = parsed_url.port or default_port(parsed_url.scheme)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="URL port is invalid.") from exc
+
+    try:
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            addr_info = socket.getaddrinfo(
+                hostname,
+                port,
+                type=socket.SOCK_STREAM,
+            )
+        except socket.gaierror as exc:
+            raise HTTPException(status_code=400, detail="URL host could not be resolved.") from exc
+        addresses = list({ipaddress.ip_address(item[4][0]) for item in addr_info})
+
+    if not addresses or any(not address.is_global for address in addresses):
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
+
+
+def reject_non_global_direct_download_peer(response: requests.Response) -> None:
+    connection = getattr(response.raw, "connection", None)
+    peer_socket = getattr(connection, "sock", None)
+    if peer_socket is None:
+        original_response = getattr(response.raw, "_fp", None)
+        buffered_reader = getattr(original_response, "fp", None)
+        socket_io = getattr(buffered_reader, "raw", None)
+        peer_socket = getattr(socket_io, "_sock", None)
+
+    try:
+        peer = peer_socket.getpeername()
+        peer_address = ipaddress.ip_address(peer[0])
+    except (AttributeError, IndexError, OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.") from exc
+    if not peer_address.is_global:
+        raise HTTPException(status_code=400, detail="Private or internal URLs are not allowed.")
+
+
+def google_drive_public_download_url(url: str) -> str:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname not in {"drive.google.com", "docs.google.com"}:
+        return url
+
+    query = parse_qs(parsed.query)
+    file_id = (query.get("id") or [""])[0]
+    path_match = re.search(r"/file/d/([A-Za-z0-9_-]+)", parsed.path)
+    if path_match:
+        file_id = path_match.group(1)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{10,}", file_id):
+        raise HTTPException(status_code=400, detail="Unsupported Google Drive file link.")
+
+    download_url = f"https://drive.google.com/uc?export=download&id={quote(file_id, safe='')}"
+    resource_key = (query.get("resourcekey") or [""])[0]
+    if re.fullmatch(r"[A-Za-z0-9_-]{6,}", resource_key):
+        download_url += f"&resourcekey={quote(resource_key, safe='')}"
+    return download_url
+
+
+def open_validated_direct_download(
+    url: str,
+) -> tuple[requests.Session, requests.Response, str]:
+    session = requests.Session()
+    session.trust_env = False
+    current_url = normalize_direct_download_url(url)
+    try:
+        for _ in range(DIRECT_DOWNLOAD_MAX_REDIRECTS + 1):
+            try:
+                response = session.get(
+                    current_url,
+                    timeout=DIRECT_DOWNLOAD_TIMEOUT_SECONDS,
+                    stream=True,
+                    allow_redirects=False,
+                    headers={
+                        "Accept-Encoding": "identity",
+                        "User-Agent": "CloudBox Direct Download/1.0",
+                    },
+                )
+            except requests.Timeout as exc:
+                raise HTTPException(status_code=504, detail="Direct download URL timed out.") from exc
+            except RequestException as exc:
+                raise HTTPException(status_code=502, detail="Direct download URL is unreachable.") from exc
+
+            keep_response_open = False
+            try:
+                reject_non_global_direct_download_peer(response)
+                if response.is_redirect:
+                    location = response.headers.get("Location")
+                    if not location:
+                        raise HTTPException(status_code=502, detail="Direct download redirect is invalid.")
+                    current_url = normalize_direct_download_url(urljoin(current_url, location))
+                    continue
+
+                if response.status_code != 200:
+                    raise HTTPException(status_code=422, detail="URL is not publicly downloadable.")
+                if direct_download_response_is_html(response):
+                    raise HTTPException(status_code=415, detail="HTML landing pages cannot be downloaded.")
+                keep_response_open = True
+                return session, response, current_url
+            finally:
+                if not keep_response_open:
+                    response.close()
+    except Exception:
+        session.close()
+        raise
+
+    session.close()
+    raise HTTPException(status_code=502, detail="Direct download URL has too many redirects.")
+
+
+def direct_download_response_is_html(response: requests.Response) -> bool:
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    return content_type in {"text/html", "application/xhtml+xml"}
+
+
+def direct_download_filename(response: requests.Response, url: str) -> str:
+    disposition = response.headers.get("content-disposition", "")
+    encoded_match = re.search(r"filename\*\s*=\s*(?:UTF-8'')?([^;]+)", disposition, re.IGNORECASE)
+    plain_match = re.search(r'filename\s*=\s*"?([^";]+)', disposition, re.IGNORECASE)
+    raw_name = unquote(encoded_match.group(1).strip(" \t\"'")) if encoded_match else ""
+    if not raw_name and plain_match:
+        raw_name = plain_match.group(1).strip()
+    if not raw_name:
+        raw_name = unquote(Path(urlparse(url).path).name)
+    return sanitize_direct_download_filename(raw_name)
+
+
+def initial_direct_download_filename(url: str) -> str:
+    raw_name = unquote(Path(urlparse(url).path).name)
+    try:
+        return sanitize_direct_download_filename(raw_name)
+    except HTTPException:
+        return "download"
+
+
+def sanitize_direct_download_filename(raw_name: str) -> str:
+    name = unicodedata.normalize("NFKC", Path(raw_name.replace("\\", "/")).name)
+    name = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", name).strip(" .")
+    if not name:
+        raise HTTPException(status_code=422, detail="Download filename is unavailable.")
+    suffix = Path(name).suffix[:20]
+    stem_limit = max(1, 180 - len(suffix))
+    return f"{Path(name).stem[:stem_limit]}{suffix}"
+
+
+def direct_download_total_bytes(response: requests.Response) -> int | None:
+    content_encoding = response.headers.get("content-encoding", "").strip().lower()
+    if content_encoding not in {"", "identity"}:
+        return None
+    with suppress(TypeError, ValueError):
+        size = int(response.headers.get("content-length", ""))
+        return size if size >= 0 else None
+    return None
+
+
+def unique_direct_download_destination(filename: str, completed_root: Path) -> Path:
+    reserved = {
+        job.get("_destination")
+        for job in _direct_download_jobs.values()
+        if isinstance(job.get("_destination"), Path)
+    }
+    candidate = resolve_safe_download_target(completed_root / filename, completed_root)
+    counter = 2
+    while candidate.exists() or candidate in reserved:
+        source = Path(filename)
+        candidate = resolve_safe_download_target(
+            completed_root / f"{source.stem} ({counter}){source.suffix}",
+            completed_root,
+        )
+        counter += 1
+    return candidate
+
+
+def run_direct_download(
+    download_id: str,
+    url: str,
+    completed_root: Path,
+    staging_root: Path,
+) -> None:
+    session: requests.Session | None = None
+    response: requests.Response | None = None
+    staging_dir = staging_root / download_id
+    downloaded = 0
+    try:
+        if direct_download_cancel_requested(download_id):
+            update_direct_download_job(download_id, state="cancelled", speed=0)
+            return
+
+        session, response, final_url = open_validated_direct_download(url)
+        if direct_download_cancel_requested(download_id):
+            update_direct_download_job(download_id, state="cancelled", speed=0)
+            return
+
+        filename = direct_download_filename(response, final_url)
+        total_bytes = direct_download_total_bytes(response)
+        with _direct_download_lock:
+            job = _direct_download_jobs.get(download_id)
+            if job is None or job.get("_cancel_requested"):
+                return
+            destination = unique_direct_download_destination(filename, completed_root)
+            job["filename"] = destination.name
+            job["total_bytes"] = total_bytes
+            job["state"] = "downloading"
+            job["_destination"] = destination
+            job["updated_at"] = utc_now_iso()
+
+        staging_path = resolve_safe_download_target(staging_dir / filename, staging_root)
+        sampled_bytes = 0
+        sampled_at = time.monotonic()
+        prefix = bytearray()
+        with staging_path.open("xb") as output:
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                if direct_download_cancel_requested(download_id):
+                    update_direct_download_progress(download_id, downloaded, 0)
+                    update_direct_download_job(download_id, state="cancelled", speed=0)
+                    return
+                if not chunk:
+                    continue
+                if len(prefix) < 4096:
+                    prefix.extend(chunk[: 4096 - len(prefix)])
+                    if DIRECT_DOWNLOAD_HTML_PREFIX_RE.search(prefix):
+                        raise HTTPException(status_code=415, detail="HTML landing pages cannot be downloaded.")
+                output.write(chunk)
+                downloaded += len(chunk)
+
+                now = time.monotonic()
+                elapsed = now - sampled_at
+                if elapsed >= 0.5:
+                    update_direct_download_progress(
+                        download_id,
+                        downloaded,
+                        max(0, int((downloaded - sampled_bytes) / elapsed)),
+                    )
+                    sampled_bytes = downloaded
+                    sampled_at = now
+
+        if downloaded == 0:
+            raise HTTPException(status_code=422, detail="Direct download produced no content.")
+        if total_bytes is not None and downloaded != total_bytes:
+            raise HTTPException(status_code=502, detail="Direct download was interrupted.")
+        if DIRECT_DOWNLOAD_HTML_PREFIX_RE.search(prefix) or downloaded_file_looks_like_html(staging_path):
+            raise HTTPException(status_code=415, detail="HTML landing pages cannot be downloaded.")
+
+        published_destination = publish_direct_download(
+            download_id,
+            staging_path,
+            destination,
+            downloaded,
+        )
+        if published_destination is None:
+            update_direct_download_job(download_id, state="cancelled", speed=0)
+            return
+    except HTTPException as exc:
+        update_direct_download_progress(download_id, downloaded, 0)
+        if direct_download_cancel_requested(download_id):
+            update_direct_download_job(download_id, state="cancelled", speed=0)
+        else:
+            update_direct_download_job(download_id, state="error", speed=0, error=str(exc.detail))
+    except (OSError, RequestException):
+        update_direct_download_progress(download_id, downloaded, 0)
+        if direct_download_cancel_requested(download_id):
+            update_direct_download_job(download_id, state="cancelled", speed=0)
+        else:
+            update_direct_download_job(
+                download_id,
+                state="error",
+                speed=0,
+                error="Direct download failed.",
+            )
+    except Exception:
+        update_direct_download_progress(download_id, downloaded, 0)
+        if direct_download_cancel_requested(download_id):
+            update_direct_download_job(download_id, state="cancelled", speed=0)
+        else:
+            update_direct_download_job(
+                download_id,
+                state="error",
+                speed=0,
+                error="Direct download failed.",
+            )
+    finally:
+        if response is not None:
+            response.close()
+        if session is not None:
+            session.close()
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        _direct_download_slots.release()
+
+
+def publish_direct_download(
+    download_id: str,
+    staging_path: Path,
+    destination: Path,
+    downloaded: int,
+) -> Path | None:
+    while True:
+        with _direct_download_lock:
+            job = _direct_download_jobs.get(download_id)
+            if job is None or job.get("_cancel_requested"):
+                return None
+            try:
+                os.link(staging_path, destination)
+            except FileExistsError:
+                destination = unique_direct_download_destination(
+                    str(job["filename"]),
+                    settings.download_complete_dir.resolve(),
+                )
+                job["_destination"] = destination
+                job["filename"] = destination.name
+                continue
+
+            with suppress(OSError):
+                staging_path.unlink()
+            job.update(
+                filename=destination.name,
+                state="completed",
+                bytes_downloaded=downloaded,
+                total_bytes=downloaded,
+                progress=100.0,
+                speed=0,
+                error=None,
+                updated_at=utc_now_iso(),
+            )
+            return destination
+
+
+def update_direct_download_progress(download_id: str, downloaded: int, speed: int) -> None:
+    with _direct_download_lock:
+        job = _direct_download_jobs.get(download_id)
+        if job is None:
+            return
+        total = job.get("total_bytes")
+        progress = min(100.0, downloaded * 100 / total) if isinstance(total, int) and total > 0 else 0.0
+        job.update(
+            bytes_downloaded=downloaded,
+            progress=round(progress, 2),
+            speed=speed,
+            updated_at=utc_now_iso(),
+        )
+
+
+def update_direct_download_job(download_id: str, **updates: Any) -> None:
+    with _direct_download_lock:
+        job = _direct_download_jobs.get(download_id)
+        if job is not None:
+            job.update(updates)
+            job["updated_at"] = utc_now_iso()
+
+
+def direct_download_cancel_requested(download_id: str) -> bool:
+    with _direct_download_lock:
+        job = _direct_download_jobs.get(download_id)
+        return job is None or bool(job.get("_cancel_requested"))
+
+
+def direct_download_status(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": job["id"],
+        "filename": job["filename"],
+        "state": job["state"],
+        "bytes_downloaded": job["bytes_downloaded"],
+        "total_bytes": job["total_bytes"],
+        "progress": job["progress"],
+        "speed": job["speed"],
+        "error": job["error"],
+        "created_at": job["created_at"],
+        "updated_at": job["updated_at"],
+    }
+
+
+def downloaded_file_looks_like_html(path: Path) -> bool:
+    try:
+        with path.open("rb") as file:
+            return DIRECT_DOWNLOAD_HTML_PREFIX_RE.search(file.read(4096)) is not None
+    except OSError:
+        return True
+
+
+def remove_direct_download_file(destination: Path) -> None:
+    completed_root = settings.download_complete_dir.resolve()
+    try:
+        safe_destination = resolve_safe_download_target(destination, completed_root)
+    except ValueError:
+        return
+    if not safe_destination.is_file():
+        try:
+            safe_destination = resolve_safe_download_target(
+                completed_root / safe_destination.stem / safe_destination.name,
+                completed_root,
+            )
+        except ValueError:
+            return
+    if not safe_destination.is_file():
+        return
+    result: dict[str, Any] = {"deleted_file_paths": [], "warnings": []}
+    remove_video_progress(delete_file_with_sidecars(safe_destination, result))
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @app.post("/api/add-magnet")
