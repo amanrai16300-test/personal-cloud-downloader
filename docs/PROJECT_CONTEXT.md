@@ -296,6 +296,17 @@ Remaining web follow-ups are lower priority: production browser verification of 
 
 TMDB artwork remains server-side metadata enrichment. Missing keys, network failures, non-200 responses, parse failures, and no matches return safely without failing the dashboard; the key is never returned to iOS.
 
+### Home App Refresh / sideload expiry checkpoint — August 16, 2026
+
+- Changed code file: `ios/PersonalCloudDownloader/Views/HomeView.swift` on branch `ui/cloudbox-responsive-redesign`.
+- Commit `e925c55` (`feat: add Home app refresh expiry status`) is pushed to GitHub.
+- Home reads the installed `embedded.mobileprovision` locally, uses its real `ExpirationDate`, and displays the calculated remaining signing days plus the exact expiry date. The card refreshes when Home appears and when the app becomes active, allowing a newly re-signed installation to pick up its new expiry.
+- The compact card matches the existing CloudBox Home surface, bloom, hairline, spacing, and status-color language: blue normally, amber at 2–3 days, urgent red at 0–1 day, and a quiet neutral unavailable state. Dynamic Type and VoiceOver handling are included.
+- If the provisioning profile cannot be read, the card safely shows `Refresh status unavailable`.
+- This is local iOS functionality. No Apple ID, credentials, secrets, network calls, backend API changes, Oracle changes, or deployment were added or required. Existing Home artwork/cache, reconnect, dashboard polling, navigation, and other Home behavior were not intentionally changed.
+- `git diff --cached --check` passed before commit. Build/tests were not run during the Windows code-edit step.
+- Status: code is committed and pushed, but a new IPA has not been built, installed, or device-verified. IPA build and device verification remain pending. Do not mark App Refresh device-verified. The earlier Home poster IPA verification remains valid historical status and is not replaced by this checkpoint.
+
 ### Home official-poster regression resolution — August 2026
 
 - Root cause: a fresh `GET /api/home-dashboard` response could temporarily arrive before TMDB enrichment completed, with `poster_url = nil`. During reconciliation, iOS treated that nil as authoritative and downgraded a previously known official poster to `local_thumbnail_url`. The generated video-frame screenshot then appeared until a later enriched refresh restored the official poster.
@@ -470,6 +481,8 @@ Authoritative branches:
   - `abe4277` — Add temporary Home artwork forced test.
   - `aae841a` — Remove temporary Home artwork forced test.
 - The final normal, device-verified IPA was built from `aae841a` on `ui/cloudbox-responsive-redesign`. This branch is not documented as merged into `main`.
+- App Refresh / sideload expiry status was committed as `e925c55` (`feat: add Home app refresh expiry status`) on `ui/cloudbox-responsive-redesign` and pushed to GitHub.
+- Commit `e925c55` is a code checkpoint only: its IPA build, installation, and device verification remain pending. The last documented device-verified Home poster IPA remains the build from `aae841a`.
 - The final reconciliation fix was iOS-only and required no Oracle/backend update. Backend commit `d2c3f48` remains separately deployed and valid.
 - Oracle deploys are manual because the Oracle directory is not a Git repository.
 - IPA workflow is manual-only.
@@ -491,6 +504,7 @@ Authoritative branches:
 - The consolidated IPA from `fix/cloudbox-audit-reliability` built successfully, was installed, and is working.
 - The latest Home foreground reconnect fix is built, installed, and iPhone-verified.
 - The August 2026 long-duration Home official-poster regression is fixed in iOS and device-verified, including after more than six hours of inactivity/background time.
+- App Refresh / sideload expiry status is committed and pushed in `e925c55`, but its IPA build, installation, and device verification are still pending; no Oracle/backend/web deployment is required.
 - Backend, Downloader, Home, Videos, folders, Player, Network, Trends, Markdown Converter, qBittorrent WebView, Files WebView, TMDB artwork, subtitles, AVPlayer/VLC progress, and reconnect infrastructure are operational.
 - Everything remains private through Tailscale.
 - 10GB is guidance only; legal-files-only, Tailscale-private, and quick-delete rules remain mandatory.
