@@ -160,6 +160,35 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - `/srv/personal-cloud` was verified as `/dev/sdb`, ext4, and a real mount. `GET /api/home-dashboard` returned storage service available, separate CloudBox storage totals, `root_disk.status: ok`, and `same_filesystem_as_cloudbox: false`.
 - No rollback was required.
 
+### Secure Direct Downloads — August 2026
+
+- Development branch: `feature/direct-downloads`. Initial backend commit: `547ecad` (`feat: add secure direct download backend`). The branch is pushed to GitHub and is not documented as merged into `main`.
+- Main backend file: `backend/main.py`.
+- Direct Downloads are separate from qBittorrent and use this API family:
+  - `POST /api/direct-downloads`
+  - `GET /api/direct-downloads`
+  - `GET /api/direct-downloads/{id}`
+  - `POST /api/direct-downloads/{id}/cancel`
+  - `DELETE /api/direct-downloads/{id}`
+- The backend supports generic publicly downloadable HTTP/HTTPS URLs, public Google Drive share links, and large public Google Drive files that require the virus-scan-warning confirmation flow.
+- Downloads use backend-managed `requests` streaming; aria2 was intentionally not used. `requests.Session.trust_env` remains disabled for this path, and files are streamed without buffering the full file.
+- DNS is validated for every URL and redirect, and the actual connected peer is validated as well. Only globally routable peer addresses are accepted. Loopback, private, internal, link-local, metadata/special-use addresses, and Tailscale CGNAT `100.64.0.0/10` are rejected.
+- Redirect handling remains bounded. HTML landing pages remain rejected unless a narrowly supported resolver handles them.
+- Direct-download admission/concurrency is bounded. Downloads enter a staging area and publish atomically only after success. Active jobs can be cancelled; cancelled or failed jobs do not publish partial completed files. Terminal jobs can be removed.
+- No hard 10GB enforcement was added.
+- Production verification passed for a generic HTTPS file, a small public Google Drive file, and a large Google Drive virus-warning file. Filename, total bytes, progress, and speed updated correctly.
+- Production SSRF checks passed for loopback, metadata/internal addresses, and the current Tailscale address. Active cancellation, staging cleanup, no-partial-publish behavior, terminal removal, and existing backend health also passed.
+- Intermediate Google Drive peer-capture and large-file confirmation fixes were completed; their exact commit hashes are not recorded here.
+
+### Direct Cloud resolver — August 2026
+
+- Commit: `752291e` (`feat: resolve Direct Cloud download links`). Changed file: `backend/main.py`.
+- Resolver scope is intentionally limited to `https://dl.direct-cloud.top/d/...` and `https://storage.direct-cloud.org/d/...`.
+- Flow: Direct Cloud landing URL → corresponding `storage.direct-cloud.org/d/...` page → parse exactly one `#generate_url` → read its `data-uid` and `data-token` → send the proven `DOWNLOAD_GENERATE` JSON only to `https://storage.direct-cloud.org/action` → require valid JSON with `status == true` and an HTTPS `download_url` → treat that URL as untrusted and pass it through the existing DNS, actual-connected-peer, redirect, and secure streaming path.
+- This is a host-specific resolver, not a generic HTML/JavaScript resolver. The access token is neither logged nor exposed; landing and action bodies are size-bounded; the action endpoint is fixed; the action request's connected peer is validated; and the returned URL receives normal SSRF checks again.
+- Unsupported HTML landing pages remain rejected. Google Drive handling, redirect protection, cancellation, staging, atomic publishing, concurrency limits, and qBittorrent behavior remain unchanged.
+- The resolver was manually deployed to Oracle and production-verified with a real `dl.direct-cloud.top/d/...` link. CloudBox streamed and completed a 2.52 GB download, with final downloaded bytes equal to total bytes.
+
 ## 6. Current iOS app and reconnect architecture
 
 - App: CloudBox, in `ios/PersonalCloudDownloader/`.
@@ -177,10 +206,10 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 
 - The iOS Downloader tab previously loaded the unversioned `http://100.95.39.107:8090/app/`. `DownloaderView.swift` passes `CloudBoxEndpoints.downloaderWebAppURL` through `WebScreen` to the shared `WebView`.
 - The shared WebView creates `URLRequest(url:)` with the default `.useProtocolCachePolicy`. Because the HTML URL retained the same cache key after the Phase 6 web deployment, WKWebView could reuse stale `/app/` HTML and never discover the versioned CSS and JavaScript references.
-- The minimal native fix changed only `ios/PersonalCloudDownloader/CloudBoxEndpoints.swift`. The Downloader URL is now `http://100.95.39.107:8090/app/?v=phase6-20260728`; no commit hash is recorded here.
+- The earlier Phase 6 native fix changed only `ios/PersonalCloudDownloader/CloudBoxEndpoints.swift` and used `/app/?v=phase6-20260728`. That Phase 6 cache-bust was built, installed, and verified on iPhone.
+- The current Direct Downloads cache-bust is `/app/?v=direct-downloads-20260816`. It is included in commit `b33082a` (`fix: bust Direct Downloads web cache`), committed and pushed on `feature/direct-downloads`.
 - No shared WebView cache policy changed. `WKWebsiteDataStore.default()`, cookies, sessions, Retry behavior, navigation, popup handling, and every other WebView remain unchanged.
-- This native endpoint change required no backend or Oracle deployment. A new IPA was built, installed, and verified on iPhone.
-- The iOS Downloader tab now shows the current Phase 6 interface, including the compact `Start a download` composer, redesigned torrent cards, Delete buttons, and queue summary chips when applicable. The fix is confirmed working.
+- The new Direct Downloads iOS URL version has not yet been verified through a newly built and installed IPA. Do not mark this cache version as device-verified.
 
 ### Root reconnect
 
@@ -225,7 +254,7 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - Status feedback uses fixed success, warning, error, and offline toasts with timer ownership protection. Identical persistent offline errors are not rewritten on later five-second polls, preventing repeated live-region announcements.
 - Initial queue loading shows exactly two reduced-motion-aware skeleton cards once. A torrent connectivity failure preserves and subtly dims existing cards; successful recovery restores their normal presentation.
 - Existing API contracts, hostname-derived API URL, five-second torrent polling, thirty-second completed-file polling, generation guards, keyed reconciliation, focus preservation, delete-modal behavior, Completed Files, and Trends behavior remain unchanged.
-- Cache-busting asset URLs are `style.css?v=phase6-20260728` and `app.js?v=phase6-20260728`.
+- Current cache-busting asset URLs are `style.css?v=phase6-20260728` and `app.js?v=direct-downloads-20260816`. The CSS version intentionally remains unchanged.
 
 - API base URL derives from `window.location.hostname`; the historical hardcoded Oracle IP is gone.
 - API requests use a 15-second `AbortController` timeout with stale-controller cleanup.
@@ -247,6 +276,20 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 - Static verification passed: `node --check frontend/app.js` and `git diff --check`.
 - The updated frontend was committed, pushed, deployed to Oracle, and browser-verified.
 
+### Direct Downloads web UI and permanent cache bust — August 2026
+
+- Commit `d3e9847` (`feat: add direct downloads to web downloader`) implements the web UI in `frontend/app.js` on `feature/direct-downloads`.
+- The existing single-page CloudBox Downloader design remains. The `Start a download` composer now offers `Magnet` and `Direct Link` modes.
+- Magnet mode continues to use the unchanged `POST /api/add-magnet` endpoint and payload. Direct Link mode uses the `/api/direct-downloads` API family.
+- Direct cards show filename, state, progress, downloaded/total bytes, current speed, and a Direct badge. Active jobs provide Cancel; terminal jobs provide Remove. Torrent and Direct jobs have distinct identities and state.
+- Active Direct polling is approximately 3 seconds and idle Direct polling approximately 15 seconds. Existing torrent polling remains approximately 5 seconds, and Completed Files polling remains approximately 30 seconds.
+- Existing torrent behavior, Completed Files, Trends, modal behavior, focus preservation, generation guards, and accessibility behavior were not intentionally changed. No hard 10GB rule was added.
+- `frontend/app.js` was deployed to `/var/www/personal-cloud/app/app.js`. `node --check` passed, live-file grep confirmed the Direct Downloads code, Nginx served the updated JavaScript, and `/app/` returned HTTP 200.
+- Browser testing completed a real public Google Drive download through Direct Link mode. Magnet mode and existing torrent cards remained operational.
+- Commit `b33082a` (`fix: bust Direct Downloads web cache`) changes `frontend/index.html` and `ios/PersonalCloudDownloader/CloudBoxEndpoints.swift`. The current JavaScript reference is `app.js?v=direct-downloads-20260816`, and the current iOS Downloader URL suffix is `/app/?v=direct-downloads-20260816`.
+- `/var/www/personal-cloud/app/index.html` was updated on Oracle. Nginx served the new JavaScript version, `/app/` returned HTTP 200, and closing/reopening the browser normally—without a hard refresh—showed `Magnet | Direct Link` immediately. The permanent web cache-bust is deployed and browser-verified.
+- The iOS cache-version change is committed and pushed but still awaits the next IPA build, installation, and device verification.
+
 ### Web Trends refresh and staleness
 
 - The fix is implemented in `frontend/app.js`. `trendsState.loaded` previously prevented later `/api/trends` requests, manual Refresh did not refresh Trends, and refresh/error rendering replaced valid cached content.
@@ -261,7 +304,7 @@ Verified live backend file: `/home/ubuntu/personal-cloud-downloader/backend/main
 ### Oracle production verification
 
 - Live URL remains `http://100.95.39.107:8090/app/`.
-- The live files served by `/app/` are `/var/www/personal-cloud/app/app.js`, `/var/www/personal-cloud/app/index.html`, and `/var/www/personal-cloud/app/style.css`; Oracle served-file checksums matched the uploaded Phase 6 files.
+- The live files served by `/app/` remain `/var/www/personal-cloud/app/app.js`, `/var/www/personal-cloud/app/index.html`, and `/var/www/personal-cloud/app/style.css`. The current JavaScript cache version is `direct-downloads-20260816`; the unchanged CSS cache version remains `phase6-20260728`.
 - Browser verification confirmed that the versioned `app.js` loaded, `.dl-card` rows rendered, old `Delete torrent/files` text was absent, the queue summary displayed (for example, `5 ready`), and the compact `Start a download` composer appeared.
 - The backend/API remained healthy and returned live torrent data.
 - The redesign remains Tailscale-private and preserves the legal-files-only, quick-delete, and 10GB-guidance rules.
@@ -465,12 +508,18 @@ Verified live script: `/home/ubuntu/personal-cloud-downloader/scripts/fetch_tren
 
 Authoritative branches:
 
+- `feature/direct-downloads` is the latest branch containing the secure Direct Downloads backend, web UI, permanent cache-busting changes, and Direct Cloud resolver. It is pushed to GitHub and is not documented as merged into `main`.
+- Direct Downloads commits:
+  - `547ecad` — `feat: add secure direct download backend`.
+  - `d3e9847` — `feat: add direct downloads to web downloader`.
+  - `b33082a` — `fix: bust Direct Downloads web cache`.
+  - `752291e` — `feat: resolve Direct Cloud download links`.
 - `fix/cloudbox-audit-reliability` remains the consolidated backend/iOS reliability branch.
 - Main audit commit: `17fe898`.
 - Later iOS archive compatibility commit exists on the same branch; its hash is not recorded here.
 - Branch is pushed and tracks `origin/fix/cloudbox-audit-reliability`.
 - Working tree was clean after the main push.
-- `ui/cloudbox-responsive-redesign` is the current production-deployed Web Downloader redesign branch. Confirmed pushed commits include `8316905` and `3764b05`; later Phase 5, Phase 6, toast-polish, and cache-busting commits exist on the same branch without hashes recorded here.
+- `ui/cloudbox-responsive-redesign` contains the earlier production-deployed Web Downloader redesign. Confirmed pushed commits include `8316905` and `3764b05`; later Phase 5, Phase 6, toast-polish, and cache-busting commits exist on the same branch without hashes recorded here.
 - The Home poster-artwork investigation and fixes were completed on `ui/cloudbox-responsive-redesign`, which is pushed to GitHub. Relevant earlier commits include:
   - `6810443` — artwork URL added to the Home reconciliation signature.
   - `0b64067` — temporary Home artwork diagnostics.
@@ -488,7 +537,7 @@ Authoritative branches:
 - IPA workflow is manual-only.
 - The consolidated audit IPA history remains on `fix/cloudbox-audit-reliability`; the final verified Home-poster IPA was built from `aae841a` on `ui/cloudbox-responsive-redesign`.
 - Do not use `feature/series-progress-fix-current-ui`, `feature/subtitle-gesture-controls`, or `feature/video-thumbnails-v2` for current builds. They may remain historical milestones.
-- Neither current branch is documented as merged into `main`; do not claim either is merged unless that is later verified.
+- None of these current branches is documented as merged into `main`; do not claim a merge unless it is later verified.
 
 ## 14. Historical and superseded experiments
 
@@ -500,6 +549,10 @@ Authoritative branches:
 ## 15. Final status
 
 - Oracle backend, web frontend, and Trends script are deployed and production-verified.
+- The secure Direct Downloads backend is deployed and production-verified. Generic HTTPS public-file downloads, small public Google Drive downloads, and the large Google Drive virus-warning flow work.
+- The Direct Cloud resolver is deployed and production-verified with a completed 2.52 GB download.
+- The web `Magnet | Direct Link` interface and permanent Direct Downloads web cache-bust are deployed and browser-verified. Existing qBittorrent Downloader behavior remains operational.
+- The new iOS Direct Downloads URL/cache version is committed and pushed but still awaits the next IPA build, installation, and device verification.
 - Backend storage separation is deployed and production-verified.
 - The consolidated IPA from `fix/cloudbox-audit-reliability` built successfully, was installed, and is working.
 - The latest Home foreground reconnect fix is built, installed, and iPhone-verified.
@@ -520,6 +573,7 @@ Authoritative branches:
 
 ### Runtime/configuration checks
 
+- Build, install, and device-verify the new iOS `/app/?v=direct-downloads-20260816` cache version. This remains separate from the already device-verified historical Phase 6 cache-bust.
 - On the next genuine active or paused-incomplete download, confirm the loose media file remains unmoved until qBittorrent reports full torrent and file completion plus a safe terminal state (`pausedUP` or `stoppedUP`). This is runtime verification, not an implementation blocker.
 - Test VLC phone calls and audio interruptions.
 - Test real VLC network stalls and `.stopped` versus `.failed` reporting.
